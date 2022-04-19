@@ -1,9 +1,10 @@
 use super::elf::Elf64Parser;
-use super::tools::search_address_key;
+use super::tools::{search_address_key, extract_string};
 
 use std::io::{Error, ErrorKind};
 use std::mem;
 use std::rc::Rc;
+use std::slice;
 
 #[cfg(test)]
 use std::env;
@@ -73,7 +74,7 @@ fn decode_udword(data: &[u8]) -> u64 {
 
 #[allow(dead_code)]
 #[inline(always)]
-fn decode_swdord(data: &[u8]) -> i64 {
+fn decode_sdword(data: &[u8]) -> i64 {
     let udw = decode_udword(data);
     if udw >= 0x8000000000000000 {
         ((udw as i128) - 0x10000000000000000) as i64
@@ -858,6 +859,280 @@ fn parse_debug_line_elf(filename: &str) -> Result<Vec<DebugLineCU>, Error> {
     parse_debug_line_elf_parser(&parser, &[])
 }
 
+struct CallFrameState {
+    code_align_factor: u64,
+    data_align_factor: i64,
+    cfa_reg: usize,
+    cfa_offset: usize,
+    ra_reg: usize,
+    regs: Vec<usize>,
+}
+
+struct CFCIE<'a> {
+    offset: usize,
+    version: u32,
+    augumentation: &'a str,
+    eh_data: u64,
+    code_align_factor: u64,
+    data_align_factor: i64,
+    return_address_register: u8,
+    augumentation_data: &'a [u8],
+    instructions: &'a [u8],
+    raw: Vec<u8>,
+}
+
+struct CFFDE<'a> {
+    offset: usize,
+    cie_pointer: u32,
+    initialial_location: u64,
+    address_range: u64,
+    instructions: &'a [u8],
+    raw: Vec<u8>,
+}
+
+fn parse_call_frame_cie(raw: Vec<u8>, cie: &mut CFCIE) -> Result<(), Error> {
+    let mut offset: usize = 4;	// skip CIE_id
+
+    let ensure = |offset, x| {
+	if x + offset <= raw.len() {
+	    Ok(())
+	} else {
+	    Err(Error::new(ErrorKind::InvalidData, "the call frame data is broken"))
+	}
+    };
+
+    ensure(0, 4)?;
+    cie.version = decode_uword(&raw[offset..]);
+    offset += 4;
+
+    cie.augumentation = unsafe {
+	let aug = &*(extract_string(&raw, offset).ok_or(
+	    Error::new(ErrorKind::InvalidData, "can not extract augumentation"))? as *const str);
+	offset += aug.len() + 1;
+	aug
+    };
+
+    if cie.augumentation == "eh" {
+	ensure(offset, 8)?;
+	cie.eh_data = decode_udword(&raw[offset..]);
+	offset += 8;		// for 64 bit arch
+    }
+
+    cie.code_align_factor = {
+	let (code_align_factor, bytes) =
+	    decode_leb128(&raw[offset..]).
+	    ok_or(Error::new(ErrorKind::InvalidData, "failed to decode code alignment factor"))?;
+	offset += bytes as usize;
+	code_align_factor
+    };
+
+    cie.data_align_factor = {
+	let (data_align_factor, bytes) =
+	    decode_leb128_s(&raw[offset..]).
+	    ok_or(Error::new(ErrorKind::InvalidData, "failed to decode data alignment factor"))?;
+	offset += bytes as usize;
+	data_align_factor
+    };
+
+    ensure(offset, 1)?;
+    cie.return_address_register = raw[offset];
+    offset += 1;
+
+    cie.augumentation_data =
+	if &cie.augumentation[0..1] == "z" {
+	    let (aug_data_len, bytes) =
+		decode_leb128(&raw[offset..]).
+		ok_or(Error::new(ErrorKind::InvalidData, "failed to decode augumentation data length factor"))?;
+	    offset += bytes as usize;
+
+	    ensure(offset, aug_data_len as usize)?;
+	    let aug_data = unsafe { &*(&raw[offset..] as *const [u8]) };
+	    offset += aug_data_len as usize;
+
+	    aug_data
+	} else {
+	    &[]
+	};
+
+    cie.instructions = unsafe { &*(&raw[offset..] as *const [u8]) };
+
+    cie.raw = raw;
+
+    Ok(())
+}
+
+fn parse_call_frame_fde(raw: Vec<u8>, fde: &mut CFFDE) -> Result<(), Error> {
+    let mut offset: usize = 0;
+
+    let ensure = |offset, x| {
+	if x + offset <= raw.len() {
+	    Ok(())
+	} else {
+	    Err(Error::new(ErrorKind::InvalidData, "the call frame data is broken"))
+	}
+    };
+
+    ensure(offset, 4)?;
+    fde.cie_pointer = decode_uword(&raw);
+    offset += 4;
+
+    ensure(offset, 8)?;
+    fde.initialial_location = decode_udword(&raw);
+    offset += 8;
+
+    ensure(offset, 8)?;
+    fde.address_range = decode_udword(&raw);
+    offset += 8;
+
+    fde.instructions = unsafe { &*(&raw[offset..] as *const [u8]) };
+
+    Ok(())
+}
+
+type RangeExtractor = FnOnce(&[u8], u64) -> Result<(u64, u64, usize), Error>;
+
+fn get_range_extractor(cie: &CFCIE) -> Result<Box<dyn FnOnce(&[u8], u64) -> Result<(u64, u64, usize), Error>>, Error> {
+    let cie_aug = cie.augumentation;
+    let mut eh_encoding: u8 = 0;
+    if cie_aug.len() > 0 && &cie_aug[0..1] == "z" {
+	for c in cie_aug[1..].chars() {
+	    match c {
+		'R' => {
+		    eh_encoding = cie.augumentation_data[0];
+		},
+		_ => {
+		    return Err(Error::new(ErrorKind::Unsupported, "unsupported CIE augumentation"));
+		}
+	    }
+	}
+    }
+    if eh_encoding == 0 {
+	let ensure = |raw: &[u8], sz: u64| {
+	    if sz <= raw.len() as u64 { Ok(()) }
+	    else { Err(Error::new(ErrorKind::InvalidData, "failed to extract data (too small)")) }
+	};
+	return Ok(Box::new(move |raw: &[u8], offset: u64| {
+	    ensure(raw, 16)?;
+	    Ok((decode_uword(raw) as u64, decode_udword(&raw[8..]) as u64, 16))
+	}));
+    } else {
+	let ensure = |raw: &[u8], sz: u64| {
+	    if sz <= raw.len() as u64 { Some(()) }
+	    else { None }
+	};
+	let reader: Box<dyn FnOnce(&[u8]) -> Option<(u64, u8)>> =
+	    match eh_encoding & 0xf {
+		0x00 => Box::new(|raw| { ensure(raw, 8)?; Some((decode_udword(raw), 8)) }),
+		0x01 => Box::new(decode_leb128),
+		0x02 => Box::new(|raw| { ensure(raw, 2)?; Some((decode_uhalf(raw) as u64, 2)) }),
+		0x03 => Box::new(|raw| { ensure(raw, 4)?; Some((decode_uword(raw) as u64, 4)) }),
+		0x04 => Box::new(|raw| { ensure(raw, 8)?; Some((decode_udword(raw) as u64, 8)) }),
+		0x09 => Box::new(|raw| { match decode_leb128_s(raw) {
+		    Some((v, sz)) => Some((v as u64, sz)),
+		    None => None,
+		}}),
+		0x0a => Box::new(|raw| { ensure(raw, 2)?; Some((decode_shalf(raw) as u64, 2)) }),
+		0x0b => Box::new(|raw| { ensure(raw, 4)?; Some((decode_sword(raw) as u64, 4)) }),
+		0x0c => Box::new(|raw| { ensure(raw, 8)?; Some((decode_sdword(raw) as u64, 8)) }),
+		_ => { return Err(Error::new(ErrorKind::InvalidData, "don't know how to handle PC range of a CIE")); },
+	    };
+    }
+    return Err(Error::new(ErrorKind::InvalidData, "don't know how to handle PC range of a CIE"));
+}
+
+fn parse_call_frame(is_debug_frame: bool, raw: Vec<u8>, offset: usize,
+		    cies: &mut Vec<CFCIE>, fdes: &mut Vec<CFFDE>) -> Result<(), Error> {
+    let cie_id_or_cie_ptr = decode_uword(&raw);
+    let cie_id = if is_debug_frame { 0xffffffff } else { 0x0 };
+    if cie_id_or_cie_ptr == cie_id {
+	let i = cies.len();
+	unsafe {
+	    // Append an element without initialization.  Should be
+	    // very careful to make sure that parse_call_frame_cie()
+	    // has initialized the element fully.
+	    cies.set_len(i + 1);
+
+	    let cie = &mut cies[i];
+	    cie.offset = offset;
+	    parse_call_frame_cie(raw, cie)
+	}
+    } else {
+	let cie_offset =
+	    if is_debug_frame {
+		offset + 4 - (0x100000000 - cie_id_or_cie_ptr as usize)
+	    } else {
+		cie_id_or_cie_ptr as usize
+	    };
+	let cie = {
+	    'outer: loop {
+		for i in (0..cies.len()).rev() {
+		    // It is ususally the last one in cies.
+		    if cies[i].offset == cie_offset {
+			break 'outer  &cies[i];
+		    }
+		}
+		return Err(Error::new(ErrorKind::InvalidData, "invalid CIE pointer"));
+	    }
+	};
+	let range_extractor: Box<dyn FnOnce(&[u8], u64) -> Result<(u64, u64, usize), Error>> =
+	    get_range_extractor(cie)?;
+
+	let idx = fdes.len();
+	unsafe {
+	    // Append an element without initialization.  Should be
+	    // very carful to make sure that parse_call_frame_fde()
+	    // has initialized the element fully.
+	    fdes.set_len(idx + 1);
+	    let fde = &mut fdes[idx];
+	    fde.offset = offset;
+	    parse_call_frame_fde(raw, fde)
+	}
+    }
+}
+
+fn parse_call_frames(parser: &Elf64Parser) -> Result<(Vec<CFCIE>, Vec<CFFDE>), Error> {
+    let mut is_debug_frame = true;
+    let debug_frame_idx =
+	if let Ok(idx) = parser.find_section(".debug_frame") {
+	    idx
+	} else {
+	    let idx = parser.find_section(".eh_frame")?;
+	    is_debug_frame = false;
+	    idx
+	};
+    let sect_sz = parser.get_section_size(debug_frame_idx)?;
+    parser.section_seek(debug_frame_idx)?;
+
+    let mut offset: usize = 0;
+
+    let mut cies = Vec::<CFCIE>::new();
+    let mut fdes = Vec::<CFFDE>::new();
+
+    while offset < sect_sz {
+	// Parse the length of the entry. (4 bytes or 12 bytes)
+	let mut len_bytes = 4;
+	let mut buf: [u8; 4] = [0; 4];
+	unsafe { parser.read_raw(&mut buf)? };
+	let mut ent_size = decode_uword(&buf) as u64;
+	if ent_size == 0xffffffff {
+	    let mut buf: [u8; 8] = [0; 8];
+	    unsafe { parser.read_raw(&mut buf)? };
+	    ent_size = decode_udword(&buf);
+	    len_bytes = 12;
+	}
+
+	let mut raw = Vec::<u8>::with_capacity(ent_size as usize);
+	unsafe { raw.set_len(ent_size as usize) };
+	unsafe { parser.read_raw(&mut raw)? };
+
+	parse_call_frame(is_debug_frame, raw, offset, &mut cies, &mut fdes)?;
+
+	offset += len_bytes + ent_size as usize;
+    }
+
+    Ok((cies, fdes))
+}
+
 /// DwarfResolver provide abilities to query DWARF information of binaries.
 pub struct DwarfResolver {
     parser: Rc<Elf64Parser>,
@@ -1150,5 +1425,19 @@ mod tests {
         assert_eq!(dir, dir_ret);
         assert_eq!(file, file_ret);
         assert_eq!(line, line_ret);
+    }
+
+    #[test]
+    fn test_parse_call_frames() {
+	let args: Vec<String> = env::args().collect();
+	let bin_name = &args[0];
+	let parser_r = Elf64Parser::open(bin_name);
+	assert!(parser_r.is_ok());
+	let parser = parser_r.unwrap();
+
+	let cies_fdes = parse_call_frames(&parser);
+	//assert!(cies_fdes.is_ok());
+	let (cies, fdes) = cies_fdes.unwrap();
+	println!("cies len={}, fdes len={}", cies.len(), fdes.len());
     }
 }
