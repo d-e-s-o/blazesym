@@ -561,6 +561,15 @@ impl Elf64Parser {
         Ok(sect.sh_size as usize)
     }
 
+    pub fn get_section_addr(&self, sect_idx: usize) -> Result<u64, Error> {
+	self.check_section_index(sect_idx)?;
+	self.ensure_shdrs()?;
+
+	let me = self.backobj.borrow();
+	let sect = &me.shdrs.as_ref().unwrap()[sect_idx];
+	Ok(sect.sh_addr)
+    }
+
     pub fn get_num_sections(&self) -> Result<usize, Error> {
         self.ensure_ehdr()?;
         let me = self.backobj.borrow();

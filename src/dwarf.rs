@@ -1,6 +1,9 @@
 use super::elf::Elf64Parser;
 use super::tools::{search_address_key, extract_string};
 
+use std::cell::RefCell;
+use std::clone::Clone;
+use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::mem;
 use std::rc::Rc;
@@ -868,269 +871,1218 @@ struct CallFrameState {
     regs: Vec<usize>,
 }
 
-struct CFCIE<'a> {
+pub struct CFCIE<'a> {
     offset: usize,
+    /// from a .debug_frame or .eh_frame section.
     version: u32,
-    augumentation: &'a str,
+    augmentation: &'a str,
+    pointer_encoding: u8,
     eh_data: u64,
+    address_size: u8,
+    segment_selector_size: u8,
     code_align_factor: u64,
     data_align_factor: i64,
     return_address_register: u8,
-    augumentation_data: &'a [u8],
-    instructions: &'a [u8],
+    augmentation_data: &'a [u8],
+    init_instructions: &'a [u8],
     raw: Vec<u8>,
 }
 
-struct CFFDE<'a> {
+pub struct CFFDE<'a> {
     offset: usize,
     cie_pointer: u32,
-    initialial_location: u64,
+    initial_location: u64,
     address_range: u64,
+    augmentation_data: &'a [u8],
     instructions: &'a [u8],
     raw: Vec<u8>,
 }
 
-fn parse_call_frame_cie(raw: Vec<u8>, cie: &mut CFCIE) -> Result<(), Error> {
-    let mut offset: usize = 4;	// skip CIE_id
+/// Exception Header pointer encoding applier.
+///
+/// The implementations apply base addresses to pointers.  The pointer
+/// may relate to pc, text section, data section, or function
+/// beginning.
+trait EHPointerApplier {
+    fn apply_pcrel(&self, ptr: u64, off: u64) -> u64;
+    fn apply_textrel(&self, ptr: u64) -> u64;
+    fn apply_datarel(&self, ptr: u64) -> u64;
+    fn apply_funcrel(&self, ptr: u64) -> u64;
+    fn apply_aligned(&self, ptr: u64) -> u64;
+}
 
-    let ensure = |offset, x| {
-	if x + offset <= raw.len() {
-	    Ok(())
-	} else {
-	    Err(Error::new(ErrorKind::InvalidData, "the call frame data is broken"))
+/// Decode pointers for Exception Header.
+///
+/// See https://refspecs.linuxfoundation.org/LSB_3.0.0/LSB-PDA/LSB-PDA.junk/dwarfext.html
+/// https://refspecs.linuxfoundation.org/LSB_4.1.0/LSB-Core-generic/LSB-Core-generic/ehframechpt.html
+/// and https://refspecs.linuxfoundation.org/LSB_3.0.0/LSB-Core-generic/LSB-Core-generic/ehframechpt.html
+struct EHPointerDecoder {
+    type_value: u8,		// The value of 'L', 'P', and 'R' letters in Augmentation String
+    pointer_sz: usize,
+    applier: Rc<Box<dyn EHPointerApplier>>,
+}
+
+impl EHPointerDecoder {
+    fn apply(&self, v: u64, off: u64) -> u64 {
+	let applier = &self.applier;
+
+	match self.type_value >> 4 {
+	    0x0 => v,
+	    0x1 => applier.apply_pcrel(v, off),
+	    0x2 => applier.apply_textrel(v),
+	    0x3 => applier.apply_datarel(v),
+	    0x4 => applier.apply_funcrel(v),
+	    0x5 => applier.apply_aligned(v),
+	    _ => {
+		panic!("unknown pointer type ({})", self.type_value);
+	    },
 	}
-    };
-
-    ensure(0, 4)?;
-    cie.version = decode_uword(&raw[offset..]);
-    offset += 4;
-
-    cie.augumentation = unsafe {
-	let aug = &*(extract_string(&raw, offset).ok_or(
-	    Error::new(ErrorKind::InvalidData, "can not extract augumentation"))? as *const str);
-	offset += aug.len() + 1;
-	aug
-    };
-
-    if cie.augumentation == "eh" {
-	ensure(offset, 8)?;
-	cie.eh_data = decode_udword(&raw[offset..]);
-	offset += 8;		// for 64 bit arch
     }
 
-    cie.code_align_factor = {
-	let (code_align_factor, bytes) =
-	    decode_leb128(&raw[offset..]).
-	    ok_or(Error::new(ErrorKind::InvalidData, "failed to decode code alignment factor"))?;
-	offset += bytes as usize;
-	code_align_factor
-    };
+    fn apply_s(&self, v: i64, off: u64) -> u64 {
+	self.apply(v as u64, off)
+    }
 
-    cie.data_align_factor = {
-	let (data_align_factor, bytes) =
-	    decode_leb128_s(&raw[offset..]).
-	    ok_or(Error::new(ErrorKind::InvalidData, "failed to decode data alignment factor"))?;
-	offset += bytes as usize;
-	data_align_factor
-    };
-
-    ensure(offset, 1)?;
-    cie.return_address_register = raw[offset];
-    offset += 1;
-
-    cie.augumentation_data =
-	if &cie.augumentation[0..1] == "z" {
-	    let (aug_data_len, bytes) =
-		decode_leb128(&raw[offset..]).
-		ok_or(Error::new(ErrorKind::InvalidData, "failed to decode augumentation data length factor"))?;
-	    offset += bytes as usize;
-
-	    ensure(offset, aug_data_len as usize)?;
-	    let aug_data = unsafe { &*(&raw[offset..] as *const [u8]) };
-	    offset += aug_data_len as usize;
-
-	    aug_data
-	} else {
-	    &[]
-	};
-
-    cie.instructions = unsafe { &*(&raw[offset..] as *const [u8]) };
-
-    cie.raw = raw;
-
-    Ok(())
-}
-
-fn parse_call_frame_fde(raw: Vec<u8>, fde: &mut CFFDE) -> Result<(), Error> {
-    let mut offset: usize = 0;
-
-    let ensure = |offset, x| {
-	if x + offset <= raw.len() {
-	    Ok(())
-	} else {
-	    Err(Error::new(ErrorKind::InvalidData, "the call frame data is broken"))
+    fn decode(&self, data: &[u8], off: u64) -> Option<(u64, usize)> {
+	// see https://refspecs.linuxfoundation.org/LSB_3.0.0/LSB-PDA/LSB-PDA.junk/dwarfext.html
+	match self.type_value & 0xf {
+	    0x00 => {
+		let v = decode_uN(self.pointer_sz, data);
+		let v = self.apply(v, off);
+		Some((v, self.pointer_sz))
+	    },
+	    0x01 => {
+		let (v, bytes) = decode_leb128(data).unwrap();
+		let v = self.apply(v, off);
+		Some((v, bytes as usize))
+	    },
+	    0x02 => {
+		let v = decode_uN(2, data);
+		let v = self.apply(v, off);
+		Some((v, 2))
+	    },
+	    0x03 => {
+		let v = decode_uN(4, data);
+		let v = self.apply(v, off);
+		Some((v, 4))
+	    },
+	    0x04 => {
+		let v = decode_uN(4, data);
+		let v = self.apply(v, off);
+		Some((v, 4))
+	    },
+	    0x09 => {
+		let (v, bytes) = decode_leb128_s(data).unwrap();
+		let v = self.apply_s(v, off);
+		Some((v, bytes as usize))
+	    },
+	    0x0a => {
+		let v = decode_iN(2, data);
+		let v = self.apply_s(v, off);
+		Some((v, 2))
+	    },
+	    0x0b => {
+		let v = decode_iN(4, data);
+		let v = self.apply_s(v, off);
+		Some((v, 4))
+	    },
+	    0x0c => {
+		let v = decode_iN(8, data);
+		let v = self.apply_s(v, off);
+		Some((v, 8))
+	    },
+	    _ => None,
 	}
-    };
-
-    ensure(offset, 4)?;
-    fde.cie_pointer = decode_uword(&raw);
-    offset += 4;
-
-    ensure(offset, 8)?;
-    fde.initialial_location = decode_udword(&raw);
-    offset += 8;
-
-    ensure(offset, 8)?;
-    fde.address_range = decode_udword(&raw);
-    offset += 8;
-
-    fde.instructions = unsafe { &*(&raw[offset..] as *const [u8]) };
-
-    Ok(())
+    }
 }
 
-type RangeExtractor = FnOnce(&[u8], u64) -> Result<(u64, u64, usize), Error>;
+struct EHPDBuilder {
+    decoders: RefCell<HashMap<u8, Rc<EHPointerDecoder>>>,
+    applier: Rc<Box<dyn EHPointerApplier>>,
+    pointer_sz: usize,
+}
 
-fn get_range_extractor(cie: &CFCIE) -> Result<Box<dyn FnOnce(&[u8], u64) -> Result<(u64, u64, usize), Error>>, Error> {
-    let cie_aug = cie.augumentation;
-    let mut eh_encoding: u8 = 0;
-    if cie_aug.len() > 0 && &cie_aug[0..1] == "z" {
-	for c in cie_aug[1..].chars() {
+impl EHPDBuilder {
+    fn new(applier: Rc<Box<dyn EHPointerApplier>>) -> EHPDBuilder {
+	EHPDBuilder {
+	    decoders: RefCell::new(HashMap::new()),
+	    applier: applier,
+	    pointer_sz: mem::size_of::<*const u8>(),
+	}
+    }
+
+    fn build(&self, type_value: u8) -> Rc<EHPointerDecoder> {
+	let mut decoders = self.decoders.borrow_mut();
+	if let Some(decoder) = decoders.get(&type_value) {
+	    (*decoder).clone()
+	} else {
+	    let decoder = Rc::new(
+		EHPointerDecoder {
+		    type_value,
+		    pointer_sz: self.pointer_sz,
+		    applier: self.applier.clone(),
+		});
+	    decoders.insert(type_value, decoder.clone());
+	    decoder
+	}
+    }
+}
+
+pub struct CallFrameSession {
+    pd_builder: EHPDBuilder,
+    is_debug_frame: bool,
+    pointer_sz: usize,
+}
+
+impl CallFrameSession {
+    fn new(pd_builder: EHPDBuilder, is_debug_frame: bool) -> CallFrameSession {
+	CallFrameSession {
+	    pd_builder,
+	    is_debug_frame,
+	    pointer_sz: mem::size_of::<*const u8>(),
+	}
+    }
+
+    pub fn from_parser(parser: &Elf64Parser, is_debug_frame: bool) -> CallFrameSession {
+	let applier = EHPointerApplierElf::new(parser, is_debug_frame);
+	let applier_box = Box::new(applier) as Box<dyn EHPointerApplier>;
+	let pd_builder = EHPDBuilder::new(Rc::<Box<dyn EHPointerApplier>>::new(applier_box));
+	CallFrameSession::new(pd_builder, is_debug_frame)
+    }
+
+    /// Find pointer encoding of a CIE.
+    fn get_pointer_encoding(&self, cie: &CFCIE) -> u8 {
+	let mut aug = cie.augmentation.chars();
+	if aug.next() != Some('z') {
+	    return 0;
+	}
+	let mut aug_data_off = 0;
+	for c in aug {
 	    match c {
-		'R' => {
-		    eh_encoding = cie.augumentation_data[0];
+		'e' | 'h' => {
+		    // skip eh
 		},
-		_ => {
-		    return Err(Error::new(ErrorKind::Unsupported, "unsupported CIE augumentation"));
-		}
+		'L' => {
+		    aug_data_off += 1;
+		},
+		'P' => {
+		    match cie.augmentation_data[aug_data_off] & 0xf {
+			0 => {
+			    aug_data_off += 1 + self.pointer_sz;
+			},
+			0x1 | 0x9 => {
+			    let opt_v = decode_leb128(&cie.augmentation_data[(aug_data_off + 1)..]);
+			    if opt_v.is_none() {
+				return 0;
+			    }
+			    let (_, bytes) = opt_v.unwrap();
+			    aug_data_off += 1 + bytes as usize;
+			},
+			0x2 | 0xa => {
+			    aug_data_off += 3;
+			},
+			0x3 | 0xb => {
+			    aug_data_off += 5;
+			},
+			0x4 | 0xc => {
+			    aug_data_off += 9;
+			},
+			_ => {
+			    panic!("invalid encoding in augmentation");
+			}
+		    }
+		},
+		'R' => {
+		    return cie.augmentation_data[aug_data_off];
+		},
+		_ => todo!(),
 	    }
 	}
-    }
-    if eh_encoding == 0 {
-	let ensure = |raw: &[u8], sz: u64| {
-	    if sz <= raw.len() as u64 { Ok(()) }
-	    else { Err(Error::new(ErrorKind::InvalidData, "failed to extract data (too small)")) }
-	};
-	return Ok(Box::new(move |raw: &[u8], offset: u64| {
-	    ensure(raw, 16)?;
-	    Ok((decode_uword(raw) as u64, decode_udword(&raw[8..]) as u64, 16))
-	}));
-    } else {
-	let ensure = |raw: &[u8], sz: u64| {
-	    if sz <= raw.len() as u64 { Some(()) }
-	    else { None }
-	};
-	let reader: Box<dyn FnOnce(&[u8]) -> Option<(u64, u8)>> =
-	    match eh_encoding & 0xf {
-		0x00 => Box::new(|raw| { ensure(raw, 8)?; Some((decode_udword(raw), 8)) }),
-		0x01 => Box::new(decode_leb128),
-		0x02 => Box::new(|raw| { ensure(raw, 2)?; Some((decode_uhalf(raw) as u64, 2)) }),
-		0x03 => Box::new(|raw| { ensure(raw, 4)?; Some((decode_uword(raw) as u64, 4)) }),
-		0x04 => Box::new(|raw| { ensure(raw, 8)?; Some((decode_udword(raw) as u64, 8)) }),
-		0x09 => Box::new(|raw| { match decode_leb128_s(raw) {
-		    Some((v, sz)) => Some((v as u64, sz)),
-		    None => None,
-		}}),
-		0x0a => Box::new(|raw| { ensure(raw, 2)?; Some((decode_shalf(raw) as u64, 2)) }),
-		0x0b => Box::new(|raw| { ensure(raw, 4)?; Some((decode_sword(raw) as u64, 4)) }),
-		0x0c => Box::new(|raw| { ensure(raw, 8)?; Some((decode_sdword(raw) as u64, 8)) }),
-		_ => { return Err(Error::new(ErrorKind::InvalidData, "don't know how to handle PC range of a CIE")); },
-	    };
-    }
-    return Err(Error::new(ErrorKind::InvalidData, "don't know how to handle PC range of a CIE"));
-}
 
-fn parse_call_frame(is_debug_frame: bool, raw: Vec<u8>, offset: usize,
-		    cies: &mut Vec<CFCIE>, fdes: &mut Vec<CFFDE>) -> Result<(), Error> {
-    let cie_id_or_cie_ptr = decode_uword(&raw);
-    let cie_id = if is_debug_frame { 0xffffffff } else { 0x0 };
-    if cie_id_or_cie_ptr == cie_id {
-	let i = cies.len();
-	unsafe {
-	    // Append an element without initialization.  Should be
-	    // very careful to make sure that parse_call_frame_cie()
-	    // has initialized the element fully.
-	    cies.set_len(i + 1);
+	0
+    }
 
-	    let cie = &mut cies[i];
-	    cie.offset = offset;
-	    parse_call_frame_cie(raw, cie)
-	}
-    } else {
-	let cie_offset =
-	    if is_debug_frame {
-		offset + 4 - (0x100000000 - cie_id_or_cie_ptr as usize)
+    fn parse_call_frame_cie(&self, raw: Vec<u8>, offset: usize, cie: &mut CFCIE) -> Result<(), Error> {
+	let mut offset: usize = 4;	// skip CIE_id
+
+	let ensure = |offset, x| {
+	    if x + offset <= raw.len() {
+		Ok(())
 	    } else {
-		cie_id_or_cie_ptr as usize
+		Err(Error::new(ErrorKind::InvalidData, "the call frame data is broken"))
+	    }
+	};
+
+	ensure(offset, 1)?;
+	cie.version = raw[offset] as u32;
+	offset += 1;
+
+	cie.augmentation = unsafe {
+	    let aug = &*(extract_string(&raw, offset).ok_or(
+		Error::new(ErrorKind::InvalidData, "can not extract augmentation"))? as *const str);
+	    offset += aug.len() + 1;
+	    aug
+	};
+
+	if !self.is_debug_frame && cie.augmentation == "eh" {
+	    // see https://refspecs.linuxfoundation.org/LSB_3.0.0/LSB-Core-generic/LSB-Core-generic/ehframechpt.html
+	    ensure(offset, 8)?;
+	    cie.eh_data = decode_udword(&raw[offset..]);
+	    offset += 8;		// for 64 bit arch
+	} else {
+	    cie.eh_data = 0;
+	}
+
+	if self.is_debug_frame {
+	    ensure(offset, 2)?;
+	    cie.address_size = raw[offset];
+	    cie.segment_selector_size = raw[offset + 1];
+	    offset += 2;
+	} else {
+	    cie.address_size = 8;
+	    cie.segment_selector_size = 0;
+	}
+
+	cie.code_align_factor = {
+	    let (code_align_factor, bytes) =
+		decode_leb128(&raw[offset..]).
+		ok_or(Error::new(ErrorKind::InvalidData, "failed to decode code alignment factor"))?;
+	    offset += bytes as usize;
+	    code_align_factor
+	};
+
+	cie.data_align_factor = {
+	    let (data_align_factor, bytes) =
+		decode_leb128_s(&raw[offset..]).
+		ok_or(Error::new(ErrorKind::InvalidData, "failed to decode data alignment factor"))?;
+	    offset += bytes as usize;
+	    data_align_factor
+	};
+
+	ensure(offset, 1)?;
+	cie.return_address_register = raw[offset];
+	offset += 1;
+
+	cie.augmentation_data =
+	    if cie.augmentation.len() >= 1 && &cie.augmentation[0..1] == "z" {
+		let (aug_data_len, bytes) =
+		    decode_leb128(&raw[offset..]).
+		    ok_or(Error::new(ErrorKind::InvalidData, "failed to decode augmentation data length factor"))?;
+		offset += bytes as usize;
+
+		ensure(offset, aug_data_len as usize)?;
+		let aug_data = unsafe { &*(&raw[offset..] as *const [u8]) };
+		offset += aug_data_len as usize;
+
+		aug_data
+	    } else {
+		&[]
+	};
+	
+	cie.init_instructions = unsafe { &*(&raw[offset..] as *const [u8]) };
+
+	// Keep a reference to raw to make sure it's life-time is
+	// logner than or equal to the fields refering it.
+	cie.raw = raw;
+
+	if !self.is_debug_frame {
+	    cie.pointer_encoding = self.get_pointer_encoding(cie);
+	} else {
+	    cie.pointer_encoding = 0;
+	}
+
+	Ok(())
+    }
+
+    fn parse_call_frame_fde(&self, raw: Vec<u8>, off: usize, fde: &mut CFFDE, cie: &CFCIE) -> Result<(), Error> {
+	let mut offset: usize = 0;
+
+	let ensure = |offset, x| {
+	    if x + offset <= raw.len() {
+		Ok(())
+	    } else {
+		Err(Error::new(ErrorKind::InvalidData, "the call frame data is broken"))
+	    }
+	};
+
+	fde.cie_pointer = cie.offset as u32;
+	offset += 4;
+
+	if self.is_debug_frame {
+	    ensure(offset, 8)?;
+	    fde.initial_location = decode_udword(&raw);
+	    offset += 8;
+
+	    ensure(offset, 8)?;
+	    fde.address_range = decode_udword(&raw);
+	    offset += 8;
+	} else {
+	    let decoder = self.pd_builder.build(cie.pointer_encoding);
+	    let (v, bytes) = decoder.decode(&raw[offset..], off as u64)
+		.ok_or(Error::new(ErrorKind::InvalidData, "fail to decode initial_location"))?;
+	    fde.initial_location = v;
+	    offset += bytes;
+	    let (v, bytes) = decoder.decode(&raw[offset..], off as u64)
+		.ok_or(Error::new(ErrorKind::InvalidData, "fail to decode address)rabge"))?;
+	    fde.address_range = v;
+	    offset += bytes;
+
+	    fde.augmentation_data = if cie.augmentation.starts_with("z") {
+		let (sz, bytes) = decode_leb128(&raw[offset..])
+		    .ok_or(Error::new(ErrorKind::InvalidData, "fail to decode augmentation length"))?;
+		offset += bytes as usize + sz as usize;
+		unsafe { &*(&raw[(offset - sz as usize)..offset] as *const [u8])}
+	    } else {
+		unsafe { &*(&raw[offset..offset] as *const [u8]) }
 	    };
-	let cie = {
-	    'outer: loop {
-		for i in (0..cies.len()).rev() {
-		    // It is ususally the last one in cies.
-		    if cies[i].offset == cie_offset {
-			break 'outer  &cies[i];
+	}
+
+	fde.instructions = unsafe { &*(&raw[offset..] as *const [u8]) };
+
+	// Keep a reference to raw to make sure it's life-time is
+	// logner than or equal to the fields refering it.
+	fde.raw = raw;
+
+	Ok(())
+    }
+
+    fn parse_call_frame(&self, raw: Vec<u8>, offset: usize,
+			cies: &mut Vec<CFCIE>, fdes: &mut Vec<CFFDE>) -> Result<(), Error> {
+	let cie_id_or_cie_ptr = decode_uword(&raw);
+	let cie_id = if self.is_debug_frame { 0xffffffff } else { 0x0 };
+	if cie_id_or_cie_ptr == cie_id {
+	    let i = cies.len();
+	    unsafe {
+		if cies.capacity() <= i {
+		    if cies.capacity() != 0{
+			cies.reserve(cies.capacity());
+		    } else {
+			cies.reserve(16);
 		    }
 		}
-		return Err(Error::new(ErrorKind::InvalidData, "invalid CIE pointer"));
-	    }
-	};
-	let range_extractor: Box<dyn FnOnce(&[u8], u64) -> Result<(u64, u64, usize), Error>> =
-	    get_range_extractor(cie)?;
+		// Append an element without initialization.  Should be
+		// very careful to make sure that parse_call_frame_cie()
+		// has initialized the element fully.
+		cies.set_len(i + 1);
 
-	let idx = fdes.len();
-	unsafe {
-	    // Append an element without initialization.  Should be
-	    // very carful to make sure that parse_call_frame_fde()
-	    // has initialized the element fully.
-	    fdes.set_len(idx + 1);
-	    let fde = &mut fdes[idx];
-	    fde.offset = offset;
-	    parse_call_frame_fde(raw, fde)
+		let cie = &mut cies[i];
+		cie.offset = offset;
+		self.parse_call_frame_cie(raw, offset, cie)
+	    }
+	} else {
+	    let cie_offset =
+		if self.is_debug_frame {
+		    cie_id_or_cie_ptr as usize
+		} else {
+		    (offset + 4) - cie_id_or_cie_ptr as usize
+		};
+	    let cie = {
+		'outer: loop {
+		    for i in (0..cies.len()).rev() {
+			// It is ususally the last one in cies.
+			if cies[i].offset == cie_offset {
+			    break 'outer  &cies[i];
+			}
+		    }
+		    return Err(Error::new(ErrorKind::InvalidData, "invalid CIE pointer"));
+		}
+	    };
+
+	    let idx = fdes.len();
+	    unsafe {
+		if fdes.capacity() <= idx {
+		    if fdes.capacity() != 0 {
+			fdes.reserve(fdes.capacity());
+		    } else {
+			fdes.reserve(16);
+		    }
+		}
+		// Append an element without initialization.  Should be
+		// very carful to make sure that parse_call_frame_fde()
+		// has initialized the element fully.
+		fdes.set_len(idx + 1);
+		let fde = &mut fdes[idx];
+		fde.offset = offset;
+		self.parse_call_frame_fde(raw, offset, fde, cie)
+	    }
+	}
+    }
+
+    pub fn parse_call_frames(&self, parser: &Elf64Parser) -> Result<(Vec<CFCIE>, Vec<CFFDE>), Error> {
+	let mut is_debug_frame = true;
+	let debug_frame_idx =
+	    if self.is_debug_frame {
+		parser.find_section(".debug_frame").unwrap()
+	    } else {
+		parser.find_section(".eh_frame").unwrap()
+	    };
+	let sect_sz = parser.get_section_size(debug_frame_idx)?;
+	parser.section_seek(debug_frame_idx)?;
+
+	let mut offset: usize = 0;
+
+	let mut cies = Vec::<CFCIE>::new();
+	let mut fdes = Vec::<CFFDE>::new();
+
+	while offset < sect_sz {
+	    // Parse the length of the entry. (4 bytes or 12 bytes)
+	    let mut len_bytes = 4;
+	    let mut buf: [u8; 4] = [0; 4];
+	    unsafe { parser.read_raw(&mut buf)? };
+	    let mut ent_size = decode_uword(&buf) as u64;
+	    if ent_size == 0xffffffff {
+		// 64-bit DWARF format. We don't support it yet.
+		let mut buf: [u8; 8] = [0; 8];
+		unsafe { parser.read_raw(&mut buf)? };
+		ent_size = decode_udword(&buf);
+		len_bytes = 12;
+	    }
+
+	    if ent_size != 0 {
+		let mut raw = Vec::<u8>::with_capacity(ent_size as usize);
+		unsafe { raw.set_len(ent_size as usize) };
+		unsafe { parser.read_raw(&mut raw)? };
+
+		self.parse_call_frame(raw, offset, &mut cies, &mut fdes)?;
+	    }
+
+	    offset += len_bytes + ent_size as usize;
+	}
+
+	Ok((cies, fdes))
+    }
+}
+
+struct EHPointerApplierElf {
+    section_addr: u64,
+    text_addr: u64,
+    data_addr: u64,
+}
+
+impl EHPointerApplierElf {
+    fn new(parser: &Elf64Parser, is_debug_frame: bool) -> EHPointerApplierElf {
+	let sect =
+	    if is_debug_frame {
+		parser.find_section(".debug_frame").unwrap()
+	    } else {
+		parser.find_section(".eh_frame").unwrap()
+	    };
+	let section_addr = parser.get_section_addr(sect).unwrap();
+
+	let text_sect = parser.find_section(".text").unwrap();
+	let text_addr = parser.get_section_addr(text_sect).unwrap();
+	let data_sect = parser.find_section(".data").unwrap();
+	let data_addr = parser.get_section_addr(data_sect).unwrap();
+
+	EHPointerApplierElf {
+	    section_addr,
+	    text_addr,
+	    data_addr,
 	}
     }
 }
 
-fn parse_call_frames(parser: &Elf64Parser) -> Result<(Vec<CFCIE>, Vec<CFFDE>), Error> {
-    let mut is_debug_frame = true;
-    let debug_frame_idx =
-	if let Ok(idx) = parser.find_section(".debug_frame") {
-	    idx
-	} else {
-	    let idx = parser.find_section(".eh_frame")?;
-	    is_debug_frame = false;
-	    idx
-	};
-    let sect_sz = parser.get_section_size(debug_frame_idx)?;
-    parser.section_seek(debug_frame_idx)?;
-
-    let mut offset: usize = 0;
-
-    let mut cies = Vec::<CFCIE>::new();
-    let mut fdes = Vec::<CFFDE>::new();
-
-    while offset < sect_sz {
-	// Parse the length of the entry. (4 bytes or 12 bytes)
-	let mut len_bytes = 4;
-	let mut buf: [u8; 4] = [0; 4];
-	unsafe { parser.read_raw(&mut buf)? };
-	let mut ent_size = decode_uword(&buf) as u64;
-	if ent_size == 0xffffffff {
-	    let mut buf: [u8; 8] = [0; 8];
-	    unsafe { parser.read_raw(&mut buf)? };
-	    ent_size = decode_udword(&buf);
-	    len_bytes = 12;
+impl EHPointerApplier for EHPointerApplierElf {
+    fn apply_pcrel(&self, ptr: u64, off: u64) -> u64 {
+	unsafe {
+	    mem::transmute::<i64, u64>(mem::transmute::<u64, i64>(self.section_addr) +
+				       mem::transmute::<u64, i64>(off) +
+				       mem::transmute::<u64, i64>(ptr))
 	}
-
-	let mut raw = Vec::<u8>::with_capacity(ent_size as usize);
-	unsafe { raw.set_len(ent_size as usize) };
-	unsafe { parser.read_raw(&mut raw)? };
-
-	parse_call_frame(is_debug_frame, raw, offset, &mut cies, &mut fdes)?;
-
-	offset += len_bytes + ent_size as usize;
     }
 
-    Ok((cies, fdes))
+    fn apply_textrel(&self, ptr: u64) -> u64 {
+	self.text_addr + ptr
+    }
+
+    fn apply_datarel(&self, ptr: u64) -> u64 {
+	self.data_addr + ptr
+    }
+
+    fn apply_funcrel(&self, _ptr: u64) -> u64 {
+	// Not implemented
+	0
+    }
+
+    fn apply_aligned(&self, _ptr: u64) -> u64 {
+	// Not implemented
+	0
+    }
+}
+
+#[derive(Debug)]
+pub enum CFInsn {
+    DW_CFA_advance_loc (u8),
+    DW_CFA_offset (u8, u64),
+    DW_CFA_restore (u8),
+    DW_CFA_nop,
+    DW_CFA_set_loc (u64),
+    DW_CFA_advance_loc1 (u8),
+    DW_CFA_advance_loc2 (u16),
+    DW_CFA_advance_loc4 (u32),
+    DW_CFA_offset_extended (u64, u64),
+    DW_CFA_restore_extended (u64),
+    DW_CFA_undefined (u64),
+    DW_CFA_same_value (u64),
+    DW_CFA_register (u64, u64),
+    DW_CFA_remember_state,
+    DW_CFA_restore_state,
+    DW_CFA_def_cfa (u64, u64),
+    DW_CFA_def_cfa_register (u64),
+    DW_CFA_def_cfa_offset (u64),
+    DW_CFA_def_cfa_expression (Vec<u8>),
+    DW_CFA_expression (u64, Vec<u8>),
+    DW_CFA_offset_extended_sf (u64, i64),
+    DW_CFA_def_cfa_sf (u64, i64),
+    DW_CFA_def_cfa_offset_sf (i64),
+    DW_CFA_val_offset (u64, u64),
+    DW_CFA_val_offset_sf (u64, i64),
+    DW_CFA_val_expression (u64, Vec<u8>),
+    DW_CFA_lo_user,
+    DW_CFA_hi_user,
+}
+
+pub struct CFInsnParser<'a> {
+    offset: usize,
+    address_size: usize,
+    raw: &'a [u8],
+}
+
+impl<'a> CFInsnParser<'a> {
+    pub fn new(raw: &'a [u8], address_size: usize) -> CFInsnParser {
+	CFInsnParser { offset: 0, address_size, raw }
+    }
+}
+
+#[allow(non_snake_case)]
+fn decode_uN(sz: usize, raw: &[u8]) -> u64 {
+    match sz {
+	1 => raw[0] as u64,
+	2 => decode_uhalf(raw) as u64,
+	4 => decode_uword(raw) as u64,
+	8 => decode_udword(raw) as u64,
+	_ => panic!("invalid unsigned integer size: {}", sz),
+    }
+}
+
+#[allow(non_snake_case)]
+fn decode_iN(sz: usize, raw: &[u8]) -> i64 {
+    match sz {
+	1 => if raw[0] & 0x80 == 0x80 {
+	    -((!raw[0]) as i64 + 1)
+	} else {
+	    raw[0] as i64
+	},
+	2 => decode_shalf(raw) as i64,
+	4 => decode_sword(raw) as i64,
+	8 => decode_sdword(raw) as i64,
+	_ => panic!("invalid unsigned integer size: {}", sz),
+    }
+}
+
+impl<'a> Iterator for CFInsnParser<'a> {
+    type Item = CFInsn;
+
+    fn next(&mut self) -> Option<Self::Item> {
+	if self.raw.len() <= self.offset {
+	    return None
+	}
+
+	let op = self.raw[self.offset];
+	match op >> 6 {
+	    0 => {
+		match op & 0x3f {
+		    0x0 => {
+			self.offset += 1;
+			Some(CFInsn::DW_CFA_nop)
+		    },
+		    0x1 => {
+			let off = self.offset + 1;
+			self.offset += 1 + self.address_size;
+			Some(CFInsn::DW_CFA_set_loc (decode_uN(self.address_size, &self.raw[off..])))
+		    },
+		    0x2 => {
+			self.offset += 2;
+			Some(CFInsn::DW_CFA_advance_loc1 (self.raw[self.offset - 1]))
+		    },
+		    0x3 => {
+			self.offset += 3;
+			Some(CFInsn::DW_CFA_advance_loc2 (decode_uhalf(&self.raw[(self.offset - 2)..])))
+		    },
+		    0x4 => {
+			self.offset += 5;
+			Some(CFInsn::DW_CFA_advance_loc4 (decode_uword(&self.raw[(self.offset - 4)..])))
+		    },
+		    0x5 => {
+			let (reg, rbytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			let (off, obytes) = decode_leb128(&self.raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
+			self.offset += 1 + rbytes as usize + obytes as usize;
+			Some(CFInsn::DW_CFA_offset_extended (reg, off))
+		    },
+		    0x6 => {
+			let (reg, bytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			self.offset += 1 + bytes as usize;
+			Some(CFInsn::DW_CFA_restore_extended (reg))
+		    },
+		    0x7 => {
+			let (reg, bytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			self.offset += 1 + bytes as usize;
+			Some(CFInsn::DW_CFA_undefined (reg))
+		    },
+		    0x8 => {
+			let (reg, bytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			self.offset += 1 + bytes as usize;
+			Some(CFInsn::DW_CFA_same_value (reg))
+		    },
+		    0x9 => {
+			let (reg, rbytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			let (off, obytes) = decode_leb128(&self.raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
+			self.offset += 1 + rbytes as usize + obytes as usize;
+			Some(CFInsn::DW_CFA_register (reg, off))
+		    },
+		    0xa => {
+			self.offset += 1;
+			Some(CFInsn::DW_CFA_remember_state)
+		    },
+		    0xb => {
+			self.offset += 1;
+			Some(CFInsn::DW_CFA_restore_state)
+		    },
+		    0xc => {
+			let (reg, rbytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			let (off, obytes) = decode_leb128(&self.raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
+			self.offset += 1 + rbytes as usize + obytes as usize;
+			Some(CFInsn::DW_CFA_def_cfa (reg, off))
+		    },
+		    0xd => {
+			let (reg, bytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			self.offset += 1 + bytes as usize;
+			Some(CFInsn::DW_CFA_def_cfa_register (reg))
+		    },
+		    0xe => {
+			let (off, bytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			self.offset += 1 + bytes as usize;
+			Some(CFInsn::DW_CFA_def_cfa_offset (off))
+		    },
+		    0xf => {
+			let (sz, bytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			let expr = Vec::from(&self.raw[(self.offset + 1 + bytes as usize)..(self.offset + 1 + bytes as usize + sz as usize)]);
+			self.offset += 1 + bytes as usize + sz as usize;
+			Some(CFInsn::DW_CFA_def_cfa_expression (expr))
+		    },
+		    0x10 => {
+			let (reg, rbytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			let (sz, sbytes) = decode_leb128(&self.raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
+			let bytes = rbytes + sbytes;
+			let expr = Vec::from(&self.raw[(self.offset + 1 + bytes as usize)..(self.offset + 1 + bytes as usize + sz as usize)]);
+			self.offset += 1 + bytes as usize + sz as usize;
+			Some(CFInsn::DW_CFA_expression (reg, expr))
+		    },
+		    0x11 => {
+			let (reg, rbytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			let (off, obytes) = decode_leb128_s(&self.raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
+			self.offset += 1 + rbytes as usize + obytes as usize;
+			Some(CFInsn::DW_CFA_offset_extended_sf (reg, off))
+		    },
+		    0x12 => {
+			let (reg, rbytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			let (off, obytes) = decode_leb128_s(&self.raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
+			self.offset += 1 + rbytes as usize + obytes as usize;
+			Some(CFInsn::DW_CFA_def_cfa_sf (reg, off))
+		    },
+		    0x13 => {
+			let (off, bytes) = decode_leb128_s(&self.raw[(self.offset + 1)..]).unwrap();
+			self.offset += 1 + bytes as usize;
+			Some(CFInsn::DW_CFA_def_cfa_offset_sf (off))
+		    },
+		    0x14 => {
+			let (reg, rbytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			let (off, obytes) = decode_leb128(&self.raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
+			self.offset += 1 + rbytes as usize + obytes as usize;
+			Some(CFInsn::DW_CFA_val_offset (reg, off))
+		    },
+		    0x15 => {
+			let (reg, rbytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			let (off, obytes) = decode_leb128_s(&self.raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
+			self.offset += 1 + rbytes as usize + obytes as usize;
+			Some(CFInsn::DW_CFA_val_offset_sf (reg, off))
+		    },
+		    0x16 => {
+			let (reg, rbytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+			let (sz, sbytes) = decode_leb128(&self.raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
+			let bytes = rbytes + sbytes;
+			let expr = Vec::from(&self.raw[(self.offset + 1 + bytes as usize)..(self.offset + 1 + bytes as usize + sz as usize)]);
+			self.offset += 1 + bytes as usize + sz as usize;
+			Some(CFInsn::DW_CFA_val_expression (reg, expr))
+		    },
+		    0x1c => {
+			self.offset += 1;
+			Some(CFInsn::DW_CFA_lo_user)
+		    },
+		    0x3f => {
+			self.offset += 1;
+			Some(CFInsn::DW_CFA_hi_user)
+		    },
+		    _ => {
+			None
+		    },
+		}
+	    },
+	    1 => {
+		self.offset += 1;
+		Some(CFInsn::DW_CFA_advance_loc (op & 0x3f))
+	    },
+	    2 => {
+		let (off, bytes) = decode_leb128(&self.raw[(self.offset + 1)..]).unwrap();
+		self.offset += bytes as usize + 1;
+		Some(CFInsn::DW_CFA_offset (op & 0x3f, off))
+	    },
+	    3 => {
+		self.offset += 1;
+		Some(CFInsn::DW_CFA_restore (op & 0x3f))
+	    },
+	    _ => {
+		None
+	    }
+	}
+    }
+}
+
+#[derive(Debug)]
+pub enum DwarfExprOp {
+    DW_OP_addr (u64),
+    DW_OP_deref,
+    DW_OP_const1u (u8),
+    DW_OP_const1s (i8),
+    DW_OP_const2u (u16),
+    DW_OP_const2s (i16),
+    DW_OP_const4u (u32),
+    DW_OP_const4s (i32),
+    DW_OP_const8u (u64),
+    DW_OP_const8s (i64),
+    DW_OP_constu (u64),
+    DW_OP_consts (i64),
+    DW_OP_dup,
+    DW_OP_drop,
+    DW_OP_over,
+    DW_OP_pick (u8),
+    DW_OP_swap,
+    DW_OP_rot,
+    DW_OP_xderef,
+    DW_OP_abs,
+    DW_OP_and,
+    DW_OP_div,
+    DW_OP_minus,
+    DW_OP_mod,
+    DW_OP_mul,
+    DW_OP_neg,
+    DW_OP_not,
+    DW_OP_or,
+    DW_OP_plus,
+    DW_OP_plus_uconst (u64),
+    DW_OP_shl,
+    DW_OP_shr,
+    DW_OP_shra,
+    DW_OP_xor,
+    DW_OP_bra (i16),
+    DW_OP_eq,
+    DW_OP_ge,
+    DW_OP_gt,
+    DW_OP_le,
+    DW_OP_lt,
+    DW_OP_ne,
+    DW_OP_skip (i16),
+    DW_OP_lit (u8),
+    DW_OP_reg (u8),
+    DW_OP_breg (u8, i64),
+    DW_OP_regx (u64),
+    DW_OP_fbreg (i64),
+    DW_OP_bregx (u64, i64),
+    DW_OP_piece (u64),
+    DW_OP_deref_size (u8),
+    DW_OP_xderef_size (u8),
+    DW_OP_nop,
+    DW_OP_push_object_address,
+    DW_OP_call2 (u16),
+    DW_OP_call4 (u32),
+    DW_OP_call_ref (u64),
+    DW_OP_form_tls_address,
+    DW_OP_call_frame_cfa,
+    DW_OP_bit_piece (u64, u64),
+    DW_OP_implicit_value (Vec<u8>),
+    DW_OP_stack_value,
+    DW_OP_implicit_pointer (u64, i64),
+    DW_OP_addrx (u64),
+    DW_OP_constx (u64),
+    DW_OP_entry_value (Vec<u8>),
+    DW_OP_const_type (u64, Vec<u8>),
+    DW_OP_regval_type (u64, u64),
+    DW_OP_deref_type (u8, u64),
+    DW_OP_xderef_type (u8, u64),
+    DW_OP_convert (u64),
+    DW_OP_reinterpret (u64),
+    DW_OP_lo_user,
+    DW_OP_hi_user,
+}
+
+pub struct DwarfExprParser<'a> {
+    address_size: usize,
+    offset: usize,
+    raw: &'a [u8],
+}
+
+impl<'a> DwarfExprParser<'a> {
+    pub fn from(raw: &'a [u8], address_size: usize) -> Self {
+	DwarfExprParser {
+	    address_size,
+	    offset: 0,
+	    raw,
+	}
+    }
+}
+
+impl<'a> Iterator for DwarfExprParser<'a> {
+    type Item = DwarfExprOp;
+
+    fn next(&mut self) -> Option<Self::Item> {
+	if self.offset >= self.raw.len() {
+	    return None;
+	}
+
+	let raw = self.raw;
+	let op = raw[self.offset];
+	match op {
+	    0x3 => {
+		let addr = decode_uN(self.address_size, &raw[(self.offset + 1)..]);
+		self.offset += 1 + self.address_size;
+		Some(DwarfExprOp::DW_OP_addr (addr))
+	    },
+	    0x6 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_deref)
+	    },
+	    0x8 => {
+		self.offset += 2;
+		Some(DwarfExprOp::DW_OP_const1u (raw[self.offset - 1]))
+	    },
+	    0x9 => {
+		self.offset += 2;
+		Some(DwarfExprOp::DW_OP_const1s (raw[self.offset - 1] as i8))
+	    },
+	    0xa => {
+		self.offset += 3;
+		Some(DwarfExprOp::DW_OP_const2u (decode_uhalf(&raw[(self.offset - 2)..])))
+	    },
+	    0xb => {
+		self.offset += 3;
+		Some(DwarfExprOp::DW_OP_const2s (decode_shalf(&raw[(self.offset - 2)..])))
+	    },
+	    0xc => {
+		self.offset += 5;
+		Some(DwarfExprOp::DW_OP_const4u (decode_uword(&raw[(self.offset - 4)..])))
+	    },
+	    0xd => {
+		self.offset += 5;
+		Some(DwarfExprOp::DW_OP_const4s (decode_sword(&raw[(self.offset - 4)..])))
+	    },
+	    0xe => {
+		self.offset += 9;
+		Some(DwarfExprOp::DW_OP_const8u (decode_udword(&raw[(self.offset - 8)..])))
+	    },
+	    0xa => {
+		self.offset += 9;
+		Some(DwarfExprOp::DW_OP_const8s (decode_sdword(&raw[(self.offset - 8)..])))
+	    },
+	    0x10 => {
+		let (v, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		self.offset += 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_constu (v))
+	    },
+	    0x11 => {
+		let (v, bytes) = decode_leb128_s(&raw[(self.offset + 1)..]).unwrap();
+		self.offset += 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_consts (v))
+	    },
+	    0x12 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_dup)
+	    },
+	    0x13 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_drop)
+	    },
+	    0x14 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_over)
+	    },
+	    0x15 => {
+		self.offset += 2;
+		Some(DwarfExprOp::DW_OP_pick (raw[self.offset - 1]))
+	    },
+	    0x16 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_swap)
+	    },
+	    0x17 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_rot)
+	    },
+	    0x18 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_xderef)
+	    },
+	    0x19 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_abs)
+	    },
+	    0x1a => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_and)
+	    },
+	    0x1b => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_div)
+	    },
+	    0x1c => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_minus)
+	    },
+	    0x1d => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_mod)
+	    },
+	    0x1e => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_mul)
+	    },
+	    0x1f => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_neg)
+	    },
+	    0x20 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_not)
+	    },
+	    0x21 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_or)
+	    },
+	    0x22 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_plus)
+	    },
+	    0x23 => {
+		let (addend, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		self.offset += 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_plus_uconst (addend))
+	    },
+	    0x24 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_shl)
+	    },
+	    0x25 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_shr)
+	    },
+	    0x26 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_shra)
+	    },
+	    0x27 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_xor)
+	    },
+	    0x28 => {
+		self.offset += 3;
+		Some(DwarfExprOp::DW_OP_bra (decode_shalf(&raw[(self.offset - 2)..])))
+	    },
+	    0x29 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_eq)
+	    },
+	    0x2a => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_ge)
+	    },
+	    0x2b => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_gt)
+	    },
+	    0x2c => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_le)
+	    },
+	    0x2d => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_lt)
+	    },
+	    0x2e => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_ne)
+	    },
+	    0x2f => {
+		self.offset += 3;
+		Some(DwarfExprOp::DW_OP_skip(decode_shalf(&raw[(self.offset - 2)..])))
+	    },
+	    0x30..=0x4f => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_lit (op - 0x30))
+	    },
+	    0x50..=0x6f => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_reg (op - 0x50))
+	    },
+	    0x70..=0x8f => {
+		let (offset, bytes) = decode_leb128_s(&raw[(self.offset + 1)..]).unwrap();
+		self.offset += 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_breg (op - 0x70, offset))
+	    },
+	    0x90 => {
+		let (offset, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		self.offset += 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_regx (offset))
+	    },
+	    0x91 => {
+		let (offset, bytes) = decode_leb128_s(&raw[(self.offset + 1)..]).unwrap();
+		self.offset += 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_fbreg (offset))
+	    },
+	    0x92 => {
+		let (reg, rbytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		let (offset, obytes) = decode_leb128_s(&raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
+		self.offset += 1 + rbytes as usize + obytes as usize;
+		Some(DwarfExprOp::DW_OP_bregx (reg, offset))
+	    },
+	    0x93 => {
+		let (piece_sz, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		self.offset += 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_piece (piece_sz))
+	    },
+	    0x94 => {
+		self.offset += 2;
+		Some(DwarfExprOp::DW_OP_deref_size (raw[self.offset - 1]))
+	    },
+	    0x95 => {
+		self.offset += 2;
+		Some(DwarfExprOp::DW_OP_xderef_size (raw[self.offset - 1]))
+	    },
+	    0x96 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_nop)
+	    },
+	    0x97 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_push_object_address)
+	    },
+	    0x98 => {
+		self.offset += 3;
+		Some(DwarfExprOp::DW_OP_call2 (decode_uhalf(&raw[(self.offset - 2)..])))
+	    },
+	    0x99 => {
+		self.offset += 5;
+		Some(DwarfExprOp::DW_OP_call4 (decode_uword(&raw[(self.offset - 4)..])))
+	    },
+	    0x9a => {
+		let off = decode_uN(self.address_size, &raw[(self.offset + 1)..]);
+		self.offset += 1 + self.address_size;
+		Some(DwarfExprOp::DW_OP_call_ref (off))
+	    },
+	    0x9b => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_form_tls_address)
+	    },
+	    0x9c => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_call_frame_cfa)
+	    },
+	    0x9d => {
+		let (sz, sbytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		let (off, obytes) = decode_leb128(&raw[(self.offset + 1 + sbytes as usize)..]).unwrap();
+		self.offset += 1 + sbytes as usize + obytes as usize;
+		Some(DwarfExprOp::DW_OP_bit_piece (sz, off))
+	    },
+	    0x9e => {
+		let (sz, sbytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		let blk = Vec::from(&raw[(self.offset + 1 + sbytes as usize)..(self.offset + 1 + sbytes as usize + sz as usize)]);
+		Some(DwarfExprOp::DW_OP_implicit_value (blk))
+	    },
+	    0x9f => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_stack_value)
+	    },
+	    0xa0 => {
+		let die_off = decode_uN(self.address_size, &raw[(self.offset + 1)..]);
+		let (const_off, bytes) = decode_leb128_s(&raw[(self.offset + 1 + self.address_size)..]).unwrap();
+		self.offset += 1 + self.address_size + bytes as usize;
+		Some(DwarfExprOp::DW_OP_implicit_pointer (die_off, const_off))
+	    },
+	    0xa1 => {
+		let (addr, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		self.offset += 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_addrx (addr))
+	    },
+	    0xa2 => {
+		let (v, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		self.offset += 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_constx (v))
+	    },
+	    0xa3 => {
+		let (sz, sbytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		let blk = Vec::from(&raw[(self.offset + 1 + sbytes as usize)..(self.offset + 1 + sbytes as usize + sz as usize)]);
+		self.offset += 1 + sbytes as usize + sz as usize;
+		Some(DwarfExprOp::DW_OP_entry_value (blk))
+	    },
+	    0xa4 => {
+		let (ent_off, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		let pos = self.offset + 1 + bytes as usize ;
+		let sz = raw[pos];
+		let pos = pos + 1;
+		let v = Vec::from(&raw[pos..(pos + sz as usize)]);
+		self.offset += pos + sz as usize;
+		Some(DwarfExprOp::DW_OP_const_type (ent_off, v))
+	    },
+	    0xa5 => {
+		let (reg, rbytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		let pos = self.offset + 1 + rbytes as usize;
+		let (off, obytes) = decode_leb128(&raw[pos..]).unwrap();
+		self.offset += pos + obytes as usize;
+		Some(DwarfExprOp::DW_OP_regval_type (reg, off))
+	    },
+	    0xa6 => {
+		let sz = raw[self.offset + 1];
+		let (ent_off, bytes) = decode_leb128(&raw[(self.offset + 2)..]).unwrap();
+		self.offset = self.offset + 2 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_deref_type (sz, ent_off))
+	    },
+	    0xa7 => {
+		let sz = raw[self.offset + 1];
+		let (ent_off, bytes) = decode_leb128(&raw[(self.offset + 2)..]).unwrap();
+		self.offset = self.offset + 2 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_xderef_type (sz, ent_off))
+	    },
+	    0xa8 => {
+		let (ent_off, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		self.offset = self.offset + 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_convert (ent_off))
+	    },
+	    0xa9 => {
+		let (ent_off, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
+		self.offset = self.offset + 1 + bytes as usize;
+		Some(DwarfExprOp::DW_OP_reinterpret (ent_off))
+	    },
+	    0xe0 => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_lo_user)
+	    },
+	    0xff => {
+		self.offset += 1;
+		Some(DwarfExprOp::DW_OP_hi_user)
+	    },
+	    _ => {
+		None
+	    }
+	}
+    }
 }
 
 /// DwarfResolver provide abilities to query DWARF information of binaries.
@@ -1427,17 +2379,49 @@ mod tests {
         assert_eq!(line, line_ret);
     }
 
-    #[test]
-    fn test_parse_call_frames() {
+    fn test_parse_call_frames(is_debug_frame: bool) {
 	let args: Vec<String> = env::args().collect();
 	let bin_name = &args[0];
 	let parser_r = Elf64Parser::open(bin_name);
 	assert!(parser_r.is_ok());
 	let parser = parser_r.unwrap();
 
-	let cies_fdes = parse_call_frames(&parser);
+	let cfsession = CallFrameSession::from_parser(&parser, is_debug_frame);
+	let cies_fdes = cfsession.parse_call_frames(&parser);
 	//assert!(cies_fdes.is_ok());
 	let (cies, fdes) = cies_fdes.unwrap();
 	println!("cies len={}, fdes len={}", cies.len(), fdes.len());
+
+	for cie in cies {
+	    println!("address size {} data alignment {} offset {}", cie.address_size, cie.data_align_factor, cie.offset);
+	    println!("{:?}", cie.init_instructions);
+	    let insniter = CFInsnParser::new(cie.init_instructions, cie.address_size as usize);
+	    for insn in insniter {
+		println!("INSN: {:?}", insn);
+	    }
+	}
+	for fde in fdes {
+	    println!("CIE pointer {}", fde.cie_pointer);
+	    let insniter = CFInsnParser::new(fde.instructions, 8);
+	    for insn in insniter {
+		println!("INSN: {:?}", insn);
+		if let CFInsn::DW_CFA_def_cfa_expression(expression) = insn {
+		    for expr in DwarfExprParser::from(&expression, 8) {
+			println!("    {:?}", expr);
+		    }
+		}
+	    }
+	}
+	assert!(false);
+    }
+
+    #[test]
+    fn test_parse_call_frames_debug_frame() {
+	test_parse_call_frames(true)
+    }
+
+    #[test]
+    fn test_parse_call_frames_eh_frame() {
+	test_parse_call_frames(false)
     }
 }
