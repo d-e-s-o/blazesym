@@ -862,13 +862,184 @@ fn parse_debug_line_elf(filename: &str) -> Result<Vec<DebugLineCU>, Error> {
     parse_debug_line_elf_parser(&parser, &[])
 }
 
+#[derive(Clone, Debug)]
+enum CFARule {
+    reg_offset (u64, i64),
+    expression (Vec<u8>),
+}
+
+#[derive(Clone, Debug)]
+enum RegRule {
+    undefined,
+    same_value,
+    offset (i64),
+    val_offset (i64),
+    register (u64),
+    expression (Vec<u8>),
+    val_expression (Vec<u8>),
+    architectural,
+}
+
+#[derive(Clone, Debug)]
 struct CallFrameState {
     code_align_factor: u64,
     data_align_factor: i64,
-    cfa_reg: usize,
-    cfa_offset: usize,
-    ra_reg: usize,
-    regs: Vec<usize>,
+    loc: u64,
+    ra_reg: u64,
+    cfa: CFARule,
+    regs: Vec<RegRule>,
+    pushed: Vec<Vec<RegRule>>,
+    init_regs: Vec<RegRule>,
+}
+
+impl CallFrameState {
+    fn new(cie: &CFCIE, reg_num: usize) -> CallFrameState {
+	let mut state = CallFrameState {
+	    code_align_factor: cie.code_align_factor,
+	    data_align_factor: cie.data_align_factor,
+	    loc: 0,
+	    ra_reg: cie.return_address_register as u64,
+	    cfa: cie.aux.init_cfa.clone(),
+	    regs: cie.aux.init_regs.clone(),
+	    pushed: vec![],
+	    init_regs: cie.aux.init_regs.clone(),
+	};
+	state.regs.resize(reg_num, RegRule::undefined);
+	state
+    }
+}
+
+fn run_call_frame_insn(insn: CFInsn, state: &mut CallFrameState) -> Option<u64> {
+    match insn {
+	CFInsn::DW_CFA_advance_loc (adj) => {
+	    let loc = state.loc;
+	    state.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+	    Some(loc)
+	},
+	CFInsn::DW_CFA_offset (reg, offset) => {
+	    state.regs[reg as usize] = RegRule::offset (offset as i64 * state.data_align_factor as i64);
+	    None
+	},
+	CFInsn::DW_CFA_restore (reg) => {
+	    state.regs[reg as usize] = state.init_regs[reg as usize].clone();
+	    None
+	},
+	CFInsn::DW_CFA_nop => None,
+	CFInsn::DW_CFA_set_loc (loc) => {
+	    let old_loc = state.loc;
+	    state.loc = loc;
+	    Some(old_loc)
+	},
+	CFInsn::DW_CFA_advance_loc1 (adj) => {
+	    let loc = state.loc;
+	    state.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+	    Some(loc)
+	},
+	CFInsn::DW_CFA_advance_loc2 (adj) => {
+	    let loc = state.loc;
+	    state.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+	    Some(loc)
+	},
+	CFInsn::DW_CFA_advance_loc4 (adj) => {
+	    let loc = state.loc;
+	    state.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+	    Some(loc)
+	},
+	CFInsn::DW_CFA_offset_extended (reg, offset) => {
+	    state.regs[reg as usize] = RegRule::offset (offset as i64 * state.data_align_factor as i64);
+	    None
+	},
+	CFInsn::DW_CFA_restore_extended (reg) => {
+	    state.regs[reg as usize] = state.init_regs[reg as usize].clone();
+	    None
+	},
+	CFInsn::DW_CFA_undefined (reg) => {
+	    state.regs[reg as usize] = RegRule::undefined;
+	    None
+	},
+	CFInsn::DW_CFA_same_value (reg) => {
+	    state.regs[reg as usize] = RegRule::same_value;
+	    None
+	},
+	CFInsn::DW_CFA_register (reg, reg_from) => {
+	    state.regs[reg as usize] = RegRule::register (reg_from);
+	    None
+	},
+	CFInsn::DW_CFA_remember_state => {
+	    let regs = state.regs.clone();
+	    state.pushed.push(regs);
+	    None
+	},
+	CFInsn::DW_CFA_restore_state => {
+	    let pushed = if let Some(pushed) = state.pushed.pop() {
+		pushed
+	    } else {
+		#[cfg(debug_assertions)]
+		eprintln!("Fail to restore state; inconsistent!");
+		return None
+	    };
+	    state.regs = pushed;
+	    None
+	},
+	CFInsn::DW_CFA_def_cfa (reg, offset) => {
+	    state.cfa = CFARule::reg_offset (reg, offset as i64);
+	    None
+	},
+	CFInsn::DW_CFA_def_cfa_register (reg) => {
+	    if let CFARule::reg_offset(cfa_reg, _offset) = &mut state.cfa {
+		*cfa_reg = reg;
+	    }
+	    None
+	},
+	CFInsn::DW_CFA_def_cfa_offset (offset) => {
+	    if let CFARule::reg_offset(_reg, cfa_offset) = &mut state.cfa {
+		*cfa_offset = offset as i64;
+	    }
+	    None
+	},
+	CFInsn::DW_CFA_def_cfa_expression (expr) => {
+	    state.cfa = CFARule::expression (expr);
+	    None
+	},
+	CFInsn::DW_CFA_expression (reg, expr) => {
+	    state.regs[reg as usize] = RegRule::expression (expr);
+	    None
+	},
+	CFInsn::DW_CFA_offset_extended_sf (reg, offset) => {
+	    state.regs[reg as usize] = RegRule::offset (offset as i64 * state.data_align_factor as i64);
+	    None
+	},
+	CFInsn::DW_CFA_def_cfa_sf (reg, offset) => {
+	    state.cfa = CFARule::reg_offset (reg, offset * state.data_align_factor as i64);
+	    None
+	},
+	CFInsn::DW_CFA_def_cfa_offset_sf (offset) => {
+	    if let CFARule::reg_offset(_reg, cfa_offset) = &mut state.cfa {
+		*cfa_offset = offset as i64 * state.data_align_factor as i64;
+	    }
+	    None
+	},
+	CFInsn::DW_CFA_val_offset (reg, offset) => {
+	    state.regs[reg as usize] = RegRule::val_offset (offset as i64 * state.data_align_factor as i64);
+	    None
+	},
+	CFInsn::DW_CFA_val_offset_sf (reg, offset) => {
+	    state.regs[reg as usize] = RegRule::val_offset (offset * state.data_align_factor as i64);
+	    None
+	},
+	CFInsn::DW_CFA_val_expression (reg, expr) => {
+	    state.regs[reg as usize] = RegRule::val_expression (expr);
+	    None
+	},
+	CFInsn::DW_CFA_lo_user => {None},
+	CFInsn::DW_CFA_hi_user => {None},
+    }
+}
+
+struct CFCIE_aux {
+    raw: Vec<u8>,
+    init_cfa: CFARule,
+    init_regs: Vec<RegRule>,
 }
 
 pub struct CFCIE<'a> {
@@ -885,7 +1056,8 @@ pub struct CFCIE<'a> {
     return_address_register: u8,
     augmentation_data: &'a [u8],
     init_instructions: &'a [u8],
-    raw: Vec<u8>,
+
+    aux: CFCIE_aux,
 }
 
 pub struct CFFDE<'a> {
@@ -1102,7 +1274,7 @@ impl CallFrameSession {
 	0
     }
 
-    fn parse_call_frame_cie(&self, raw: Vec<u8>, offset: usize, cie: &mut CFCIE) -> Result<(), Error> {
+    fn parse_call_frame_cie(&self, raw: &[u8], offset: usize, cie: &mut CFCIE) -> Result<(), Error> {
 	let mut offset: usize = 4;	// skip CIE_id
 
 	let ensure = |offset, x| {
@@ -1181,10 +1353,6 @@ impl CallFrameSession {
 	
 	cie.init_instructions = unsafe { &*(&raw[offset..] as *const [u8]) };
 
-	// Keep a reference to raw to make sure it's life-time is
-	// logner than or equal to the fields refering it.
-	cie.raw = raw;
-
 	if !self.is_debug_frame {
 	    cie.pointer_encoding = self.get_pointer_encoding(cie);
 	} else {
@@ -1194,7 +1362,7 @@ impl CallFrameSession {
 	Ok(())
     }
 
-    fn parse_call_frame_fde(&self, raw: Vec<u8>, off: usize, fde: &mut CFFDE, cie: &CFCIE) -> Result<(), Error> {
+    fn parse_call_frame_fde(&self, mut raw: &[u8], off: usize, fde: &mut CFFDE, cie: &CFCIE) -> Result<(), Error> {
 	let mut offset: usize = 0;
 
 	let ensure = |offset, x| {
@@ -1239,14 +1407,10 @@ impl CallFrameSession {
 
 	fde.instructions = unsafe { &*(&raw[offset..] as *const [u8]) };
 
-	// Keep a reference to raw to make sure it's life-time is
-	// logner than or equal to the fields refering it.
-	fde.raw = raw;
-
 	Ok(())
     }
 
-    fn parse_call_frame(&self, raw: Vec<u8>, offset: usize,
+    fn parse_call_frame(&self, mut raw: Vec<u8>, offset: usize,
 			cies: &mut Vec<CFCIE>, fdes: &mut Vec<CFFDE>) -> Result<(), Error> {
 	let cie_id_or_cie_ptr = decode_uword(&raw);
 	let cie_id = if self.is_debug_frame { 0xffffffff } else { 0x0 };
@@ -1267,7 +1431,21 @@ impl CallFrameSession {
 
 		let cie = &mut cies[i];
 		cie.offset = offset;
-		self.parse_call_frame_cie(raw, offset, cie)
+
+		let result = self.parse_call_frame_cie(&raw, offset, cie);
+
+		if result.is_ok() {
+		    // Initialize aux parts by swapping and dropping.
+		    let mut aux = vec![CFCIE_aux {
+			raw,
+			init_cfa: CFARule::reg_offset (0, 0),
+			init_regs: Vec::with_capacity(0),
+		    }];
+		    mem::swap(&mut cie.aux, &mut aux[0]);
+		    // Drop all content! We don't to call destructors for them since they are garbage data.
+		    aux.set_len(0);
+		}
+		result
 	    }
 	} else {
 	    let cie_offset =
@@ -1303,7 +1481,14 @@ impl CallFrameSession {
 		fdes.set_len(idx + 1);
 		let fde = &mut fdes[idx];
 		fde.offset = offset;
-		self.parse_call_frame_fde(raw, offset, fde, cie)
+		let result = self.parse_call_frame_fde(&raw, offset, fde, cie);
+
+		// Keep a reference to raw to make sure it's life-time is
+		// logner than or equal to the fields refering it.
+		mem::swap(&mut fde.raw, &mut raw);
+		raw.leak();	// garbage data
+
+		result
 	    }
 	}
     }
@@ -1648,7 +1833,7 @@ impl<'a> Iterator for CFInsnParser<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DwarfExprOp {
     DW_OP_addr (u64),
     DW_OP_deref,
@@ -1742,7 +1927,7 @@ impl<'a> DwarfExprParser<'a> {
 }
 
 impl<'a> Iterator for DwarfExprParser<'a> {
-    type Item = DwarfExprOp;
+    type Item = (u64, DwarfExprOp);
 
     fn next(&mut self) -> Option<Self::Item> {
 	if self.offset >= self.raw.len() {
@@ -1751,286 +1936,287 @@ impl<'a> Iterator for DwarfExprParser<'a> {
 
 	let raw = self.raw;
 	let op = raw[self.offset];
+	let saved_offset = self.offset as u64;
 	match op {
 	    0x3 => {
 		let addr = decode_uN(self.address_size, &raw[(self.offset + 1)..]);
 		self.offset += 1 + self.address_size;
-		Some(DwarfExprOp::DW_OP_addr (addr))
+		Some((saved_offset, DwarfExprOp::DW_OP_addr (addr)))
 	    },
 	    0x6 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_deref)
+		Some((saved_offset, DwarfExprOp::DW_OP_deref))
 	    },
 	    0x8 => {
 		self.offset += 2;
-		Some(DwarfExprOp::DW_OP_const1u (raw[self.offset - 1]))
+		Some((saved_offset, DwarfExprOp::DW_OP_const1u (raw[self.offset - 1])))
 	    },
 	    0x9 => {
 		self.offset += 2;
-		Some(DwarfExprOp::DW_OP_const1s (raw[self.offset - 1] as i8))
+		Some((saved_offset, DwarfExprOp::DW_OP_const1s (raw[self.offset - 1] as i8)))
 	    },
 	    0xa => {
 		self.offset += 3;
-		Some(DwarfExprOp::DW_OP_const2u (decode_uhalf(&raw[(self.offset - 2)..])))
+		Some((saved_offset, DwarfExprOp::DW_OP_const2u (decode_uhalf(&raw[(self.offset - 2)..]))))
 	    },
 	    0xb => {
 		self.offset += 3;
-		Some(DwarfExprOp::DW_OP_const2s (decode_shalf(&raw[(self.offset - 2)..])))
+		Some((saved_offset, DwarfExprOp::DW_OP_const2s (decode_shalf(&raw[(self.offset - 2)..]))))
 	    },
 	    0xc => {
 		self.offset += 5;
-		Some(DwarfExprOp::DW_OP_const4u (decode_uword(&raw[(self.offset - 4)..])))
+		Some((saved_offset, DwarfExprOp::DW_OP_const4u (decode_uword(&raw[(self.offset - 4)..]))))
 	    },
 	    0xd => {
 		self.offset += 5;
-		Some(DwarfExprOp::DW_OP_const4s (decode_sword(&raw[(self.offset - 4)..])))
+		Some((saved_offset, DwarfExprOp::DW_OP_const4s (decode_sword(&raw[(self.offset - 4)..]))))
 	    },
 	    0xe => {
 		self.offset += 9;
-		Some(DwarfExprOp::DW_OP_const8u (decode_udword(&raw[(self.offset - 8)..])))
+		Some((saved_offset, DwarfExprOp::DW_OP_const8u (decode_udword(&raw[(self.offset - 8)..]))))
 	    },
 	    0xa => {
 		self.offset += 9;
-		Some(DwarfExprOp::DW_OP_const8s (decode_sdword(&raw[(self.offset - 8)..])))
+		Some((saved_offset, DwarfExprOp::DW_OP_const8s (decode_sdword(&raw[(self.offset - 8)..]))))
 	    },
 	    0x10 => {
 		let (v, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		self.offset += 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_constu (v))
+		Some((saved_offset, DwarfExprOp::DW_OP_constu (v)))
 	    },
 	    0x11 => {
 		let (v, bytes) = decode_leb128_s(&raw[(self.offset + 1)..]).unwrap();
 		self.offset += 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_consts (v))
+		Some((saved_offset, DwarfExprOp::DW_OP_consts (v)))
 	    },
 	    0x12 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_dup)
+		Some((saved_offset, DwarfExprOp::DW_OP_dup))
 	    },
 	    0x13 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_drop)
+		Some((saved_offset, DwarfExprOp::DW_OP_drop))
 	    },
 	    0x14 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_over)
+		Some((saved_offset, DwarfExprOp::DW_OP_over))
 	    },
 	    0x15 => {
 		self.offset += 2;
-		Some(DwarfExprOp::DW_OP_pick (raw[self.offset - 1]))
+		Some((saved_offset, DwarfExprOp::DW_OP_pick (raw[self.offset - 1])))
 	    },
 	    0x16 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_swap)
+		Some((saved_offset, DwarfExprOp::DW_OP_swap))
 	    },
 	    0x17 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_rot)
+		Some((saved_offset, DwarfExprOp::DW_OP_rot))
 	    },
 	    0x18 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_xderef)
+		Some((saved_offset, DwarfExprOp::DW_OP_xderef))
 	    },
 	    0x19 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_abs)
+		Some((saved_offset, DwarfExprOp::DW_OP_abs))
 	    },
 	    0x1a => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_and)
+		Some((saved_offset, DwarfExprOp::DW_OP_and))
 	    },
 	    0x1b => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_div)
+		Some((saved_offset, DwarfExprOp::DW_OP_div))
 	    },
 	    0x1c => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_minus)
+		Some((saved_offset, DwarfExprOp::DW_OP_minus))
 	    },
 	    0x1d => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_mod)
+		Some((saved_offset, DwarfExprOp::DW_OP_mod))
 	    },
 	    0x1e => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_mul)
+		Some((saved_offset, DwarfExprOp::DW_OP_mul))
 	    },
 	    0x1f => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_neg)
+		Some((saved_offset, DwarfExprOp::DW_OP_neg))
 	    },
 	    0x20 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_not)
+		Some((saved_offset, DwarfExprOp::DW_OP_not))
 	    },
 	    0x21 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_or)
+		Some((saved_offset, DwarfExprOp::DW_OP_or))
 	    },
 	    0x22 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_plus)
+		Some((saved_offset, DwarfExprOp::DW_OP_plus))
 	    },
 	    0x23 => {
 		let (addend, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		self.offset += 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_plus_uconst (addend))
+		Some((saved_offset, DwarfExprOp::DW_OP_plus_uconst (addend)))
 	    },
 	    0x24 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_shl)
+		Some((saved_offset, DwarfExprOp::DW_OP_shl))
 	    },
 	    0x25 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_shr)
+		Some((saved_offset, DwarfExprOp::DW_OP_shr))
 	    },
 	    0x26 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_shra)
+		Some((saved_offset, DwarfExprOp::DW_OP_shra))
 	    },
 	    0x27 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_xor)
+		Some((saved_offset, DwarfExprOp::DW_OP_xor))
 	    },
 	    0x28 => {
 		self.offset += 3;
-		Some(DwarfExprOp::DW_OP_bra (decode_shalf(&raw[(self.offset - 2)..])))
+		Some((saved_offset, DwarfExprOp::DW_OP_bra (decode_shalf(&raw[(self.offset - 2)..]))))
 	    },
 	    0x29 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_eq)
+		Some((saved_offset, DwarfExprOp::DW_OP_eq))
 	    },
 	    0x2a => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_ge)
+		Some((saved_offset, DwarfExprOp::DW_OP_ge))
 	    },
 	    0x2b => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_gt)
+		Some((saved_offset, DwarfExprOp::DW_OP_gt))
 	    },
 	    0x2c => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_le)
+		Some((saved_offset, DwarfExprOp::DW_OP_le))
 	    },
 	    0x2d => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_lt)
+		Some((saved_offset, DwarfExprOp::DW_OP_lt))
 	    },
 	    0x2e => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_ne)
+		Some((saved_offset, DwarfExprOp::DW_OP_ne))
 	    },
 	    0x2f => {
 		self.offset += 3;
-		Some(DwarfExprOp::DW_OP_skip(decode_shalf(&raw[(self.offset - 2)..])))
+		Some((saved_offset, DwarfExprOp::DW_OP_skip(decode_shalf(&raw[(self.offset - 2)..]))))
 	    },
 	    0x30..=0x4f => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_lit (op - 0x30))
+		Some((saved_offset, DwarfExprOp::DW_OP_lit (op - 0x30)))
 	    },
 	    0x50..=0x6f => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_reg (op - 0x50))
+		Some((saved_offset, DwarfExprOp::DW_OP_reg (op - 0x50)))
 	    },
 	    0x70..=0x8f => {
 		let (offset, bytes) = decode_leb128_s(&raw[(self.offset + 1)..]).unwrap();
 		self.offset += 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_breg (op - 0x70, offset))
+		Some((saved_offset, DwarfExprOp::DW_OP_breg (op - 0x70, offset)))
 	    },
 	    0x90 => {
 		let (offset, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		self.offset += 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_regx (offset))
+		Some((saved_offset, DwarfExprOp::DW_OP_regx (offset)))
 	    },
 	    0x91 => {
 		let (offset, bytes) = decode_leb128_s(&raw[(self.offset + 1)..]).unwrap();
 		self.offset += 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_fbreg (offset))
+		Some((saved_offset, DwarfExprOp::DW_OP_fbreg (offset)))
 	    },
 	    0x92 => {
 		let (reg, rbytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		let (offset, obytes) = decode_leb128_s(&raw[(self.offset + 1 + rbytes as usize)..]).unwrap();
 		self.offset += 1 + rbytes as usize + obytes as usize;
-		Some(DwarfExprOp::DW_OP_bregx (reg, offset))
+		Some((saved_offset, DwarfExprOp::DW_OP_bregx (reg, offset)))
 	    },
 	    0x93 => {
 		let (piece_sz, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		self.offset += 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_piece (piece_sz))
+		Some((saved_offset, DwarfExprOp::DW_OP_piece (piece_sz)))
 	    },
 	    0x94 => {
 		self.offset += 2;
-		Some(DwarfExprOp::DW_OP_deref_size (raw[self.offset - 1]))
+		Some((saved_offset, DwarfExprOp::DW_OP_deref_size (raw[self.offset - 1])))
 	    },
 	    0x95 => {
 		self.offset += 2;
-		Some(DwarfExprOp::DW_OP_xderef_size (raw[self.offset - 1]))
+		Some((saved_offset, DwarfExprOp::DW_OP_xderef_size (raw[self.offset - 1])))
 	    },
 	    0x96 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_nop)
+		Some((saved_offset, DwarfExprOp::DW_OP_nop))
 	    },
 	    0x97 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_push_object_address)
+		Some((saved_offset, DwarfExprOp::DW_OP_push_object_address))
 	    },
 	    0x98 => {
 		self.offset += 3;
-		Some(DwarfExprOp::DW_OP_call2 (decode_uhalf(&raw[(self.offset - 2)..])))
+		Some((saved_offset, DwarfExprOp::DW_OP_call2 (decode_uhalf(&raw[(self.offset - 2)..]))))
 	    },
 	    0x99 => {
 		self.offset += 5;
-		Some(DwarfExprOp::DW_OP_call4 (decode_uword(&raw[(self.offset - 4)..])))
+		Some((saved_offset, DwarfExprOp::DW_OP_call4 (decode_uword(&raw[(self.offset - 4)..]))))
 	    },
 	    0x9a => {
 		let off = decode_uN(self.address_size, &raw[(self.offset + 1)..]);
 		self.offset += 1 + self.address_size;
-		Some(DwarfExprOp::DW_OP_call_ref (off))
+		Some((saved_offset, DwarfExprOp::DW_OP_call_ref (off)))
 	    },
 	    0x9b => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_form_tls_address)
+		Some((saved_offset, DwarfExprOp::DW_OP_form_tls_address))
 	    },
 	    0x9c => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_call_frame_cfa)
+		Some((saved_offset, DwarfExprOp::DW_OP_call_frame_cfa))
 	    },
 	    0x9d => {
 		let (sz, sbytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		let (off, obytes) = decode_leb128(&raw[(self.offset + 1 + sbytes as usize)..]).unwrap();
 		self.offset += 1 + sbytes as usize + obytes as usize;
-		Some(DwarfExprOp::DW_OP_bit_piece (sz, off))
+		Some((saved_offset, DwarfExprOp::DW_OP_bit_piece (sz, off)))
 	    },
 	    0x9e => {
 		let (sz, sbytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		let blk = Vec::from(&raw[(self.offset + 1 + sbytes as usize)..(self.offset + 1 + sbytes as usize + sz as usize)]);
-		Some(DwarfExprOp::DW_OP_implicit_value (blk))
+		Some((saved_offset, DwarfExprOp::DW_OP_implicit_value (blk)))
 	    },
 	    0x9f => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_stack_value)
+		Some((saved_offset, DwarfExprOp::DW_OP_stack_value))
 	    },
 	    0xa0 => {
 		let die_off = decode_uN(self.address_size, &raw[(self.offset + 1)..]);
 		let (const_off, bytes) = decode_leb128_s(&raw[(self.offset + 1 + self.address_size)..]).unwrap();
 		self.offset += 1 + self.address_size + bytes as usize;
-		Some(DwarfExprOp::DW_OP_implicit_pointer (die_off, const_off))
+		Some((saved_offset, DwarfExprOp::DW_OP_implicit_pointer (die_off, const_off)))
 	    },
 	    0xa1 => {
 		let (addr, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		self.offset += 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_addrx (addr))
+		Some((saved_offset, DwarfExprOp::DW_OP_addrx (addr)))
 	    },
 	    0xa2 => {
 		let (v, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		self.offset += 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_constx (v))
+		Some((saved_offset, DwarfExprOp::DW_OP_constx (v)))
 	    },
 	    0xa3 => {
 		let (sz, sbytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		let blk = Vec::from(&raw[(self.offset + 1 + sbytes as usize)..(self.offset + 1 + sbytes as usize + sz as usize)]);
 		self.offset += 1 + sbytes as usize + sz as usize;
-		Some(DwarfExprOp::DW_OP_entry_value (blk))
+		Some((saved_offset, DwarfExprOp::DW_OP_entry_value (blk)))
 	    },
 	    0xa4 => {
 		let (ent_off, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
@@ -2039,49 +2225,557 @@ impl<'a> Iterator for DwarfExprParser<'a> {
 		let pos = pos + 1;
 		let v = Vec::from(&raw[pos..(pos + sz as usize)]);
 		self.offset += pos + sz as usize;
-		Some(DwarfExprOp::DW_OP_const_type (ent_off, v))
+		Some((saved_offset, DwarfExprOp::DW_OP_const_type (ent_off, v)))
 	    },
 	    0xa5 => {
 		let (reg, rbytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		let pos = self.offset + 1 + rbytes as usize;
 		let (off, obytes) = decode_leb128(&raw[pos..]).unwrap();
 		self.offset += pos + obytes as usize;
-		Some(DwarfExprOp::DW_OP_regval_type (reg, off))
+		Some((saved_offset, DwarfExprOp::DW_OP_regval_type (reg, off)))
 	    },
 	    0xa6 => {
 		let sz = raw[self.offset + 1];
 		let (ent_off, bytes) = decode_leb128(&raw[(self.offset + 2)..]).unwrap();
 		self.offset = self.offset + 2 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_deref_type (sz, ent_off))
+		Some((saved_offset, DwarfExprOp::DW_OP_deref_type (sz, ent_off)))
 	    },
 	    0xa7 => {
 		let sz = raw[self.offset + 1];
 		let (ent_off, bytes) = decode_leb128(&raw[(self.offset + 2)..]).unwrap();
 		self.offset = self.offset + 2 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_xderef_type (sz, ent_off))
+		Some((saved_offset, DwarfExprOp::DW_OP_xderef_type (sz, ent_off)))
 	    },
 	    0xa8 => {
 		let (ent_off, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		self.offset = self.offset + 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_convert (ent_off))
+		Some((saved_offset, DwarfExprOp::DW_OP_convert (ent_off)))
 	    },
 	    0xa9 => {
 		let (ent_off, bytes) = decode_leb128(&raw[(self.offset + 1)..]).unwrap();
 		self.offset = self.offset + 1 + bytes as usize;
-		Some(DwarfExprOp::DW_OP_reinterpret (ent_off))
+		Some((saved_offset, DwarfExprOp::DW_OP_reinterpret (ent_off)))
 	    },
 	    0xe0 => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_lo_user)
+		Some((saved_offset, DwarfExprOp::DW_OP_lo_user))
 	    },
 	    0xff => {
 		self.offset += 1;
-		Some(DwarfExprOp::DW_OP_hi_user)
+		Some((saved_offset, DwarfExprOp::DW_OP_hi_user))
 	    },
 	    _ => {
 		None
 	    }
 	}
+    }
+}
+
+#[derive(Clone)]
+enum DwarfExprPCOp {
+    go_next,
+    skip (i64),
+    stack_value,
+}
+
+fn run_dwarf_expr_insn(insn: DwarfExprOp, stack: &mut Vec<u64>, regs: &[u64], get_mem: &dyn Fn(u64, usize) -> u64) -> Result<DwarfExprPCOp, Error> {
+    match insn {
+	DwarfExprOp::DW_OP_addr (v_u64) => {
+	    stack.push(v_u64);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_deref => {
+	    if let Some(addr) = stack.pop() {
+		let val = get_mem(addr, 8);
+		stack.push(val);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_const1u (v_u8) => {
+	    stack.push(v_u8 as u64);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_const1s (v_i8) => {
+	    stack.push(unsafe { mem::transmute::<i64, u64>(v_i8 as i64) });
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_const2u (v_u16) => {
+	    stack.push(v_u16 as u64);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_const2s (v_i16) => {
+	    stack.push(unsafe { mem::transmute::<i64, u64>(v_i16 as i64) });
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_const4u (v_u32) => {
+	    stack.push(v_u32 as u64);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_const4s (v_i32) => {
+	    stack.push(unsafe { mem::transmute::<i64, u64>(v_i32 as i64) });
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_const8u (v_u64) => {
+	    stack.push(v_u64);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_const8s (v_i64) => {
+	    stack.push(unsafe { mem::transmute::<i64, u64>(v_i64) });
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_constu (v_u64) => {
+	    stack.push(v_u64);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_consts (v_i64) => {
+	    stack.push(unsafe { mem::transmute::<i64, u64>(v_i64) });
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_dup => {
+	    if !stack.is_empty() {
+		stack.push(stack[stack.len() - 1]);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_drop => {
+	    if !stack.is_empty() {
+		stack.pop();
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_over => {
+	    if stack.len() >= 2 {
+		stack.push(stack[stack.len() - 2]);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_pick (v_u8) => {
+	    if stack.len() >= (v_u8 as usize + 1) {
+		stack.push(stack[stack.len() - 1 - v_u8 as usize]);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_swap => {
+	    let len = stack.len();
+	    let tmp = stack[len - 1];
+	    stack[len - 1] = stack[len - 2];
+	    stack[len - 2] = tmp;
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_rot => {
+	    let len = stack.len();
+	    let tmp = stack[len - 1];
+	    stack[len - 1] = stack[len - 2];
+	    stack[len - 2] = stack[len - 3];
+	    stack[len - 3] = tmp;
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_xderef => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_xderef is not implemented"))
+	},
+	DwarfExprOp::DW_OP_abs => {
+	    let len = stack.len();
+	    stack[len - 1] = unsafe { mem::transmute::<i64, u64>(mem::transmute::<u64, i64>(stack[len - 1]).abs()) };
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_and => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(first & second);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_div => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		if first != 0 {
+		    stack.push(second / first);
+		    return Ok(DwarfExprPCOp::go_next);
+		}
+	    }
+	    Err(Error::new(ErrorKind::Other, "divide by zerror"))
+	},
+	DwarfExprOp::DW_OP_minus => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(second - first);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_mod => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(second % first);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_mul => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(second * first);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_neg => {
+	    let len = stack.len();
+	    if len >= 1 {
+		stack[len - 1] = unsafe { mem::transmute::<i64, u64>(-mem::transmute::<u64, i64>(stack[len - 1])) };
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_not => {
+	    let len = stack.len();
+	    if len >= 1 {
+		stack[len - 1] = !stack[len - 1];
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_or => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(second | first);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_plus => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(second + first);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_plus_uconst (v_u64) => {
+	    let len = stack.len();
+	    if len >= 1 {
+		stack[len - 1] += v_u64;
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_shl => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(second << first);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_shr => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(second >> first);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_shra => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+
+		let mut val = second >> first;
+		val |= 0 - ((second & 0x8000000000000000) >> first);
+		stack.push(val);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_xor => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(second ^ first);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_bra (v_i16) => {
+	    if let Some(top) = stack.pop() {
+		if top == 0 {
+		    Ok(DwarfExprPCOp::go_next)
+		} else {
+		    Ok(DwarfExprPCOp::skip (v_i16 as i64))
+		}
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_eq => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(if second == first { 1 } else { 0 });
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_ge => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(if second >= first { 1 } else { 0 });
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_gt => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(if second > first { 1 } else { 0 });
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_le => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(if second <= first { 1 } else { 0 });
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_lt => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(if second < first { 1 } else { 0 });
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_ne => {
+	    if stack.len() >= 2 {
+		let first = stack.pop().unwrap();
+		let second = stack.pop().unwrap();
+		stack.push(if second != first { 1 } else { 0 });
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_skip (v_i16) => {
+	    Ok(DwarfExprPCOp::skip (v_i16 as i64))
+	},
+	DwarfExprOp::DW_OP_lit (v_u8) => {
+	    stack.push(v_u8 as u64);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_reg (v_u8) => {
+	    stack.push(regs[v_u8 as usize]);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_breg (v_u8, v_i64) => {
+	    stack.push(unsafe { mem::transmute::<i64, u64>(mem::transmute::<u64, i64>(regs[v_u8 as usize]) + v_i64) });
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_regx (v_u64) => {
+	    stack.push(regs[v_u64 as usize]);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_fbreg (v_i64) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_breg is not implemented"))
+	},
+	DwarfExprOp::DW_OP_bregx (v_u64, v_i64) => {
+	    stack.push(unsafe { mem::transmute::<i64, u64>(mem::transmute::<u64, i64>(regs[v_u64 as usize]) + v_i64) });
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_piece (v_u64) => {
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_deref_size (v_u8) => {
+	    if let Some(addr) = stack.pop() {
+		let v = get_mem(addr, v_u8 as usize);
+		stack.push(v);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_xderef_size (v_u8) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_xderef_size is not implemented"))
+	},
+	DwarfExprOp::DW_OP_nop => {
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_push_object_address => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_push_object_address is not implemented"))
+	},
+	DwarfExprOp::DW_OP_call2 (v_u16) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_call2 is not implemented"))
+	},
+	DwarfExprOp::DW_OP_call4 (v_u32) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_call4 is not implemented"))
+	},
+	DwarfExprOp::DW_OP_call_ref (v_u64) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_call_ref is not implemented"))
+	},
+	DwarfExprOp::DW_OP_form_tls_address => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_form_tls_address is not implemented"))
+	},
+	DwarfExprOp::DW_OP_call_frame_cfa => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_call_frame_cfa is not implemented"))
+	},
+	DwarfExprOp::DW_OP_bit_piece (v_u64, v_u64_1) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_bit_piece is not implemented"))
+	},
+	DwarfExprOp::DW_OP_implicit_value (v_vu8) => {
+	    let mut v: u64 = 0;
+	    for (i, v8) in v_vu8.iter().enumerate() {
+		v |= (*v8 as u64) << (i * 8);
+	    }
+	    stack.push(v);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_stack_value => {
+	    Ok(DwarfExprPCOp::stack_value)
+	},
+	DwarfExprOp::DW_OP_implicit_pointer (v_u64, v_i64) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_implicit_pointer is not implemented"))
+	},
+	DwarfExprOp::DW_OP_addrx (v_u64) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_addrx is not implemented"))
+	},
+	DwarfExprOp::DW_OP_constx (v_u64) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_constx is not implemented"))
+	},
+	DwarfExprOp::DW_OP_entry_value (v_vu8) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_constx is not implemented"))
+	},
+	DwarfExprOp::DW_OP_const_type (v_u64, v_vu8) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_constx is not implemented"))
+	},
+	DwarfExprOp::DW_OP_regval_type (v_u64, v_u64_1) => {
+	    stack.push(regs[v_u64 as usize]);
+	    Ok(DwarfExprPCOp::go_next)
+	},
+	DwarfExprOp::DW_OP_deref_type (v_u8, v_u64) => {
+	    if let Some(addr) = stack.pop() {
+		let v = get_mem(addr, v_u8 as usize);
+		stack.push(v);
+		Ok(DwarfExprPCOp::go_next)
+	    } else {
+		Err(Error::new(ErrorKind::Other, "stack is empty"))
+	    }
+	},
+	DwarfExprOp::DW_OP_xderef_type (v_u8, v_u64) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_xderef_type is not implemented"))
+	},
+	DwarfExprOp::DW_OP_convert (v_u64) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_convert is not implemented"))
+	},
+	DwarfExprOp::DW_OP_reinterpret (v_u64) => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_reinterpret is not implemented"))
+	},
+	DwarfExprOp::DW_OP_lo_user => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_lo_user is not implemented"))
+	},
+	DwarfExprOp::DW_OP_hi_user => {
+	    Err(Error::new(ErrorKind::Unsupported, "DW_OP_hi_user is not implemented"))
+	},
+    }
+}
+
+pub fn run_dwarf_expr(expr: &[u8], max_rounds: usize, regs: &[u64], get_mem: &dyn Fn(u64, usize) -> u64) -> Result<u64, Error> {
+    let insns: Vec<(u64, DwarfExprOp)> = DwarfExprParser::from(expr, 8).collect();
+    let mut idx = 0;
+    let mut stack = Vec::<u64>::new();
+    let mut rounds = 0;
+
+    while idx < insns.len() {
+	if rounds >= max_rounds {
+	    return Err(Error::new(ErrorKind::Other, "spend too much time"));
+	}
+	rounds += 1;
+
+	let (offset, insn) = &insns[idx];
+
+	match run_dwarf_expr_insn(insn.clone(), &mut stack, regs, get_mem) {
+	    Err(err) => {
+		return Err(err);
+	    },
+	    Ok(DwarfExprPCOp::go_next) => {
+		idx += 1;
+	    },
+	    Ok(DwarfExprPCOp::skip (rel)) => {
+		let tgt_offset =
+		    (if idx < (insns.len() - 1) {
+			insns[idx].0 as i64
+		    } else {
+			expr.len() as i64
+		    } + rel) as u64;
+
+		if tgt_offset == expr.len() as u64{
+		    break;
+		}
+
+		while tgt_offset < insns[idx].0 && idx > 0 {
+		    idx -= 1;
+		}
+		while tgt_offset > insns[idx].0 && idx < (insns.len() - 1) {
+		    idx += 1;
+		}
+		if tgt_offset != insns[idx].0 {
+		    return Err(Error::new(ErrorKind::Other, "invalid branch target"));
+		}
+	    },
+	    Ok(DwarfExprPCOp::stack_value) => {
+		break;
+	    },
+	}
+    }
+
+    if let Some(v) = stack.pop() {
+	println!("stack size {}", stack.len());
+	Ok(v)
+    } else {
+	Err(Error::new(ErrorKind::Other, "stack is empty"))
     }
 }
 
@@ -2389,27 +3083,67 @@ mod tests {
 	let cfsession = CallFrameSession::from_parser(&parser, is_debug_frame);
 	let cies_fdes = cfsession.parse_call_frames(&parser);
 	//assert!(cies_fdes.is_ok());
-	let (cies, fdes) = cies_fdes.unwrap();
+	let (mut cies, fdes) = cies_fdes.unwrap();
 	println!("cies len={}, fdes len={}", cies.len(), fdes.len());
 
-	for cie in cies {
+	for cie in &mut cies {
 	    println!("address size {} data alignment {} offset {}", cie.address_size, cie.data_align_factor, cie.offset);
 	    println!("{:?}", cie.init_instructions);
 	    let insniter = CFInsnParser::new(cie.init_instructions, cie.address_size as usize);
+	    let mut state = CallFrameState::new(&cie, 32);
 	    for insn in insniter {
 		println!("INSN: {:?}", insn);
+		run_call_frame_insn(insn, &mut state);
 	    }
+	    cie.aux.init_cfa = state.cfa;
+	    cie.aux.init_regs = state.regs;
 	}
 	for fde in fdes {
 	    println!("CIE pointer {}", fde.cie_pointer);
 	    let insniter = CFInsnParser::new(fde.instructions, 8);
+
 	    for insn in insniter {
 		println!("INSN: {:?}", insn);
 		if let CFInsn::DW_CFA_def_cfa_expression(expression) = insn {
-		    for expr in DwarfExprParser::from(&expression, 8) {
-			println!("    {:?}", expr);
+		    for (off, insn) in DwarfExprParser::from(&expression, 8) {
+			println!("    {} {:?}", off, insn);
 		    }
 		}
+	    }
+
+	    let mut state = None;
+	    for cie in &cies {
+		if cie.offset == fde.cie_pointer as usize {
+		    state = Some(CallFrameState::new(cie, 32));
+		}
+	    }
+
+	    if let Some(state) = state.as_mut() {
+		let insniter = CFInsnParser::new(fde.instructions, 8);
+		for insn in insniter {
+		    if let Some(loc) = run_call_frame_insn(insn, state) {
+			println!("  loc={} cfa={:?}", loc, state.cfa,);
+			print!("    ");
+			for reg in &state.regs {
+			    if let RegRule::undefined = reg {
+				print!("x ");
+			    } else {
+				print!("{:?} ", reg);
+			    }
+			}
+			println!("");
+		    }
+		}
+		println!("  loc={} cfa={:?}", state.loc, state.cfa);
+		print!("    ");
+		for reg in &state.regs {
+		    if let RegRule::undefined = reg {
+			print!("x ");
+		    } else {
+			print!("{:?} ", reg);
+		    }
+		}
+		println!("");
 	    }
 	}
 	assert!(false);
@@ -2423,5 +3157,31 @@ mod tests {
     #[test]
     fn test_parse_call_frames_eh_frame() {
 	test_parse_call_frames(false)
+    }
+
+    #[test]
+    fn test_run_dwarf_expr() {
+	//  0 DW_OP_breg(7, 8)
+	//  2 DW_OP_breg(16, 0)
+	//  4 DW_OP_lit(15)
+	//  5 DW_OP_and
+	//  6 DW_OP_lit(11)
+	//  7 DW_OP_ge
+	//  8 DW_OP_lit(3)
+	//  9 DW_OP_shl
+	//  10 DW_OP_plus
+	let expr = [119 as u8, 8, 128, 0, 63, 26, 59, 42, 51, 36, 34];
+	let regs = [14 as u64;32];
+	let get_mem = |addr: u64, sz: usize| -> u64 {
+	    0
+	};
+
+	let v = run_dwarf_expr(&expr, 9, &regs, &get_mem);
+	assert!(v.is_ok());
+	assert!(v.unwrap() == 30);
+
+	// max_rounds is too small.
+	let v = run_dwarf_expr(&expr, 8, &regs, &get_mem);
+	assert!(v.is_err());
     }
 }
