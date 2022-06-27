@@ -11,6 +11,8 @@ use std::slice;
 
 #[cfg(test)]
 use std::env;
+#[cfg(test)]
+use std::path::Path;
 
 fn decode_leb128(data: &[u8]) -> Option<(u64, u8)> {
     let mut sz = 0;
@@ -880,21 +882,26 @@ enum RegRule {
     architectural,
 }
 
+/// Keep states for Call Frame Instructions.
+///
+/// Maintain the states of the machine running Call Frame
+/// Instructions, e.q. [`CFInsn`], to make data/side-effects flow from
+/// an instruction to another.
 #[derive(Clone, Debug)]
-struct CallFrameState {
+struct CallFrameMachine {
     code_align_factor: u64,
     data_align_factor: i64,
     loc: u64,
-    ra_reg: u64,
-    cfa: CFARule,
+    ra_reg: u64,		// return address register
+    cfa: CFARule,		// Canonical Frame Address
     regs: Vec<RegRule>,
-    pushed: Vec<Vec<RegRule>>,
-    init_regs: Vec<RegRule>,
+    pushed: Vec<Vec<RegRule>>,	// the stack of pushed states (save/restore)
+    init_regs: Vec<RegRule>,	// the register values when the machine is just initialized.
 }
 
-impl CallFrameState {
-    fn new(cie: &CFCIE, reg_num: usize) -> CallFrameState {
-	let mut state = CallFrameState {
+impl CallFrameMachine {
+    fn new(cie: &CFCIE, reg_num: usize) -> CallFrameMachine {
+	let mut state = CallFrameMachine {
 	    code_align_factor: cie.code_align_factor,
 	    data_align_factor: cie.data_align_factor,
 	    loc: 0,
@@ -907,132 +914,135 @@ impl CallFrameState {
 	state.regs.resize(reg_num, RegRule::undefined);
 	state
     }
-}
 
-fn run_call_frame_insn(insn: CFInsn, state: &mut CallFrameState) -> Option<u64> {
-    match insn {
-	CFInsn::DW_CFA_advance_loc (adj) => {
-	    let loc = state.loc;
-	    state.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
-	    Some(loc)
-	},
-	CFInsn::DW_CFA_offset (reg, offset) => {
-	    state.regs[reg as usize] = RegRule::offset (offset as i64 * state.data_align_factor as i64);
-	    None
-	},
-	CFInsn::DW_CFA_restore (reg) => {
-	    state.regs[reg as usize] = state.init_regs[reg as usize].clone();
-	    None
-	},
-	CFInsn::DW_CFA_nop => None,
-	CFInsn::DW_CFA_set_loc (loc) => {
-	    let old_loc = state.loc;
-	    state.loc = loc;
-	    Some(old_loc)
-	},
-	CFInsn::DW_CFA_advance_loc1 (adj) => {
-	    let loc = state.loc;
-	    state.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
-	    Some(loc)
-	},
-	CFInsn::DW_CFA_advance_loc2 (adj) => {
-	    let loc = state.loc;
-	    state.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
-	    Some(loc)
-	},
-	CFInsn::DW_CFA_advance_loc4 (adj) => {
-	    let loc = state.loc;
-	    state.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
-	    Some(loc)
-	},
-	CFInsn::DW_CFA_offset_extended (reg, offset) => {
-	    state.regs[reg as usize] = RegRule::offset (offset as i64 * state.data_align_factor as i64);
-	    None
-	},
-	CFInsn::DW_CFA_restore_extended (reg) => {
-	    state.regs[reg as usize] = state.init_regs[reg as usize].clone();
-	    None
-	},
-	CFInsn::DW_CFA_undefined (reg) => {
-	    state.regs[reg as usize] = RegRule::undefined;
-	    None
-	},
-	CFInsn::DW_CFA_same_value (reg) => {
-	    state.regs[reg as usize] = RegRule::same_value;
-	    None
-	},
-	CFInsn::DW_CFA_register (reg, reg_from) => {
-	    state.regs[reg as usize] = RegRule::register (reg_from);
-	    None
-	},
-	CFInsn::DW_CFA_remember_state => {
-	    let regs = state.regs.clone();
-	    state.pushed.push(regs);
-	    None
-	},
-	CFInsn::DW_CFA_restore_state => {
-	    let pushed = if let Some(pushed) = state.pushed.pop() {
-		pushed
-	    } else {
-		#[cfg(debug_assertions)]
-		eprintln!("Fail to restore state; inconsistent!");
-		return None
-	    };
-	    state.regs = pushed;
-	    None
-	},
-	CFInsn::DW_CFA_def_cfa (reg, offset) => {
-	    state.cfa = CFARule::reg_offset (reg, offset as i64);
-	    None
-	},
-	CFInsn::DW_CFA_def_cfa_register (reg) => {
-	    if let CFARule::reg_offset(cfa_reg, _offset) = &mut state.cfa {
-		*cfa_reg = reg;
-	    }
-	    None
-	},
-	CFInsn::DW_CFA_def_cfa_offset (offset) => {
-	    if let CFARule::reg_offset(_reg, cfa_offset) = &mut state.cfa {
-		*cfa_offset = offset as i64;
-	    }
-	    None
-	},
-	CFInsn::DW_CFA_def_cfa_expression (expr) => {
-	    state.cfa = CFARule::expression (expr);
-	    None
-	},
-	CFInsn::DW_CFA_expression (reg, expr) => {
-	    state.regs[reg as usize] = RegRule::expression (expr);
-	    None
-	},
-	CFInsn::DW_CFA_offset_extended_sf (reg, offset) => {
-	    state.regs[reg as usize] = RegRule::offset (offset as i64 * state.data_align_factor as i64);
-	    None
-	},
-	CFInsn::DW_CFA_def_cfa_sf (reg, offset) => {
-	    state.cfa = CFARule::reg_offset (reg, offset * state.data_align_factor as i64);
-	    None
-	},
-	CFInsn::DW_CFA_def_cfa_offset_sf (offset) => {
-	    if let CFARule::reg_offset(_reg, cfa_offset) = &mut state.cfa {
-		*cfa_offset = offset as i64 * state.data_align_factor as i64;
-	    }
-	    None
-	},
-	CFInsn::DW_CFA_val_offset (reg, offset) => {
-	    state.regs[reg as usize] = RegRule::val_offset (offset as i64 * state.data_align_factor as i64);
-	    None
-	},
-	CFInsn::DW_CFA_val_offset_sf (reg, offset) => {
-	    state.regs[reg as usize] = RegRule::val_offset (offset * state.data_align_factor as i64);
-	    None
-	},
-	CFInsn::DW_CFA_val_expression (reg, expr) => {
-	    state.regs[reg as usize] = RegRule::val_expression (expr);
-	    None
-	},
-	CFInsn::DW_CFA_lo_user => {None},
-	CFInsn::DW_CFA_hi_user => {None},
+    /// Run a Call Frame Instruction on a call frame machine.
+    ///
+    /// [`CallFrameMachine`] models a call frame machine
+    fn run_insn(&mut self, insn: CFInsn) -> Option<u64> {
+	match insn {
+	    CFInsn::DW_CFA_advance_loc (adj) => {
+		let loc = self.loc;
+		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+		Some(loc)
+	    },
+	    CFInsn::DW_CFA_offset (reg, offset) => {
+		self.regs[reg as usize] = RegRule::offset (offset as i64 * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_restore (reg) => {
+		self.regs[reg as usize] = self.init_regs[reg as usize].clone();
+		None
+	    },
+	    CFInsn::DW_CFA_nop => None,
+	    CFInsn::DW_CFA_set_loc (loc) => {
+		let old_loc = self.loc;
+		self.loc = loc;
+		Some(old_loc)
+	    },
+	    CFInsn::DW_CFA_advance_loc1 (adj) => {
+		let loc = self.loc;
+		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+		Some(loc)
+	    },
+	    CFInsn::DW_CFA_advance_loc2 (adj) => {
+		let loc = self.loc;
+		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+		Some(loc)
+	    },
+	    CFInsn::DW_CFA_advance_loc4 (adj) => {
+		let loc = self.loc;
+		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+		Some(loc)
+	    },
+	    CFInsn::DW_CFA_offset_extended (reg, offset) => {
+		self.regs[reg as usize] = RegRule::offset (offset as i64 * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_restore_extended (reg) => {
+		self.regs[reg as usize] = self.init_regs[reg as usize].clone();
+		None
+	    },
+	    CFInsn::DW_CFA_undefined (reg) => {
+		self.regs[reg as usize] = RegRule::undefined;
+		None
+	    },
+	    CFInsn::DW_CFA_same_value (reg) => {
+		self.regs[reg as usize] = RegRule::same_value;
+		None
+	    },
+	    CFInsn::DW_CFA_register (reg, reg_from) => {
+		self.regs[reg as usize] = RegRule::register (reg_from);
+		None
+	    },
+	    CFInsn::DW_CFA_remember_state => {
+		let regs = self.regs.clone();
+		self.pushed.push(regs);
+		None
+	    },
+	    CFInsn::DW_CFA_restore_state => {
+		let pushed = if let Some(pushed) = self.pushed.pop() {
+		    pushed
+		} else {
+		    #[cfg(debug_assertions)]
+		    eprintln!("Fail to restore state; inconsistent!");
+		    return None
+		};
+		self.regs = pushed;
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa (reg, offset) => {
+		self.cfa = CFARule::reg_offset (reg, offset as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa_register (reg) => {
+		if let CFARule::reg_offset(cfa_reg, _offset) = &mut self.cfa {
+		    *cfa_reg = reg;
+		}
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa_offset (offset) => {
+		if let CFARule::reg_offset(_reg, cfa_offset) = &mut self.cfa {
+		    *cfa_offset = offset as i64;
+		}
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa_expression (expr) => {
+		self.cfa = CFARule::expression (expr);
+		None
+	    },
+	    CFInsn::DW_CFA_expression (reg, expr) => {
+		self.regs[reg as usize] = RegRule::expression (expr);
+		None
+	    },
+	    CFInsn::DW_CFA_offset_extended_sf (reg, offset) => {
+		self.regs[reg as usize] = RegRule::offset (offset as i64 * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa_sf (reg, offset) => {
+		self.cfa = CFARule::reg_offset (reg, offset * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa_offset_sf (offset) => {
+		if let CFARule::reg_offset(_reg, cfa_offset) = &mut self.cfa {
+		    *cfa_offset = offset as i64 * self.data_align_factor as i64;
+		}
+		None
+	    },
+	    CFInsn::DW_CFA_val_offset (reg, offset) => {
+		self.regs[reg as usize] = RegRule::val_offset (offset as i64 * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_val_offset_sf (reg, offset) => {
+		self.regs[reg as usize] = RegRule::val_offset (offset * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_val_expression (reg, expr) => {
+		self.regs[reg as usize] = RegRule::val_expression (expr);
+		None
+	    },
+	    CFInsn::DW_CFA_lo_user => {None},
+	    CFInsn::DW_CFA_hi_user => {None},
+	}
     }
 }
 
@@ -1042,6 +1052,7 @@ struct CFCIE_aux {
     init_regs: Vec<RegRule>,
 }
 
+/// CIE record of Call Frame.
 pub struct CFCIE<'a> {
     offset: usize,
     /// from a .debug_frame or .eh_frame section.
@@ -1060,6 +1071,7 @@ pub struct CFCIE<'a> {
     aux: CFCIE_aux,
 }
 
+/// FDE record of Call Frame.
 pub struct CFFDE<'a> {
     offset: usize,
     cie_pointer: u32,
@@ -1070,12 +1082,19 @@ pub struct CFFDE<'a> {
     raw: Vec<u8>,
 }
 
-/// Exception Header pointer encoding applier.
+/// Exception Header pointer relocation worker.
 ///
 /// The implementations apply base addresses to pointers.  The pointer
 /// may relate to pc, text section, data section, or function
 /// beginning.
-trait EHPointerApplier {
+///
+/// This is a helper trait of [`EHPointerDecoder`].  It is trait
+/// because parts of implementation vary according to application.
+///
+/// An instance of the class that implements this trait is shared by
+/// decoders.  [`EHPDBuilder`] holds an instance to create all
+/// flyweights.
+trait DHPointerReloc {
     fn apply_pcrel(&self, ptr: u64, off: u64) -> u64;
     fn apply_textrel(&self, ptr: u64) -> u64;
     fn apply_datarel(&self, ptr: u64) -> u64;
@@ -1085,20 +1104,26 @@ trait EHPointerApplier {
 
 /// Decode pointers for Exception Header.
 ///
+/// The format of `.eh_frame` is an extendsion of `.debug_frame`.  It
+/// encodes addresses in various ways with various sizes and bases.
+/// The encoding type of a pointer is encoded as a 1-byte value.
+/// `EHPointerDecoder` decode pointers in the way of the gien encoding
+/// type.
+///
 /// See https://refspecs.linuxfoundation.org/LSB_3.0.0/LSB-PDA/LSB-PDA.junk/dwarfext.html
 /// https://refspecs.linuxfoundation.org/LSB_4.1.0/LSB-Core-generic/LSB-Core-generic/ehframechpt.html
 /// and https://refspecs.linuxfoundation.org/LSB_3.0.0/LSB-Core-generic/LSB-Core-generic/ehframechpt.html
 struct EHPointerDecoder {
-    type_value: u8,		// The value of 'L', 'P', and 'R' letters in Augmentation String
+    enc_type: u8,		// The value of 'L', 'P', and 'R' letters in Augmentation String
     pointer_sz: usize,
-    applier: Rc<Box<dyn EHPointerApplier>>,
+    applier: Rc<Box<dyn DHPointerReloc>>,
 }
 
 impl EHPointerDecoder {
     fn apply(&self, v: u64, off: u64) -> u64 {
 	let applier = &self.applier;
 
-	match self.type_value >> 4 {
+	match self.enc_type >> 4 {
 	    0x0 => v,
 	    0x1 => applier.apply_pcrel(v, off),
 	    0x2 => applier.apply_textrel(v),
@@ -1106,7 +1131,7 @@ impl EHPointerDecoder {
 	    0x4 => applier.apply_funcrel(v),
 	    0x5 => applier.apply_aligned(v),
 	    _ => {
-		panic!("unknown pointer type ({})", self.type_value);
+		panic!("unknown pointer type ({})", self.enc_type);
 	    },
 	}
     }
@@ -1117,7 +1142,7 @@ impl EHPointerDecoder {
 
     fn decode(&self, data: &[u8], off: u64) -> Option<(u64, usize)> {
 	// see https://refspecs.linuxfoundation.org/LSB_3.0.0/LSB-PDA/LSB-PDA.junk/dwarfext.html
-	match self.type_value & 0xf {
+	match self.enc_type & 0xf {
 	    0x00 => {
 		let v = decode_uN(self.pointer_sz, data);
 		let v = self.apply(v, off);
@@ -1168,14 +1193,19 @@ impl EHPointerDecoder {
     }
 }
 
+/// Build pointer decoders and maintain a cache.
+///
+/// It implements the Flyweight Pattern for [`EHPointerDecoder`].  It
+/// always returns the same instance for requests with the same
+/// encoding type.
 struct EHPDBuilder {
     decoders: RefCell<HashMap<u8, Rc<EHPointerDecoder>>>,
-    applier: Rc<Box<dyn EHPointerApplier>>,
+    applier: Rc<Box<dyn DHPointerReloc>>,
     pointer_sz: usize,
 }
 
 impl EHPDBuilder {
-    fn new(applier: Rc<Box<dyn EHPointerApplier>>) -> EHPDBuilder {
+    fn new(applier: Rc<Box<dyn DHPointerReloc>>) -> EHPDBuilder {
 	EHPDBuilder {
 	    decoders: RefCell::new(HashMap::new()),
 	    applier: applier,
@@ -1183,47 +1213,48 @@ impl EHPDBuilder {
 	}
     }
 
-    fn build(&self, type_value: u8) -> Rc<EHPointerDecoder> {
+    fn build(&self, enc_type: u8) -> Rc<EHPointerDecoder> {
 	let mut decoders = self.decoders.borrow_mut();
-	if let Some(decoder) = decoders.get(&type_value) {
+	if let Some(decoder) = decoders.get(&enc_type) {
 	    (*decoder).clone()
 	} else {
 	    let decoder = Rc::new(
 		EHPointerDecoder {
-		    type_value,
+		    enc_type,
 		    pointer_sz: self.pointer_sz,
 		    applier: self.applier.clone(),
 		});
-	    decoders.insert(type_value, decoder.clone());
+	    decoders.insert(enc_type, decoder.clone());
 	    decoder
 	}
     }
 }
 
-pub struct CallFrameSession {
+/// Parser of records in .debug_frame or .eh_frame sections.
+pub struct CallFrameParser {
     pd_builder: EHPDBuilder,
     is_debug_frame: bool,
     pointer_sz: usize,
 }
 
-impl CallFrameSession {
-    fn new(pd_builder: EHPDBuilder, is_debug_frame: bool) -> CallFrameSession {
-	CallFrameSession {
+impl CallFrameParser {
+    fn new(pd_builder: EHPDBuilder, is_debug_frame: bool) -> CallFrameParser {
+	CallFrameParser {
 	    pd_builder,
 	    is_debug_frame,
 	    pointer_sz: mem::size_of::<*const u8>(),
 	}
     }
 
-    pub fn from_parser(parser: &Elf64Parser, is_debug_frame: bool) -> CallFrameSession {
-	let applier = EHPointerApplierElf::new(parser, is_debug_frame);
-	let applier_box = Box::new(applier) as Box<dyn EHPointerApplier>;
-	let pd_builder = EHPDBuilder::new(Rc::<Box<dyn EHPointerApplier>>::new(applier_box));
-	CallFrameSession::new(pd_builder, is_debug_frame)
+    pub fn from_parser(parser: &Elf64Parser, is_debug_frame: bool) -> CallFrameParser {
+	let applier = DHPointerRelocElf::new(parser, is_debug_frame);
+	let applier_box = Box::new(applier) as Box<dyn DHPointerReloc>;
+	let pd_builder = EHPDBuilder::new(Rc::<Box<dyn DHPointerReloc>>::new(applier_box));
+	CallFrameParser::new(pd_builder, is_debug_frame)
     }
 
     /// Find pointer encoding of a CIE.
-    fn get_pointer_encoding(&self, cie: &CFCIE) -> u8 {
+    fn get_ptr_enc_type(&self, cie: &CFCIE) -> u8 {
 	let mut aug = cie.augmentation.chars();
 	if aug.next() != Some('z') {
 	    return 0;
@@ -1354,7 +1385,7 @@ impl CallFrameSession {
 	cie.init_instructions = unsafe { &*(&raw[offset..] as *const [u8]) };
 
 	if !self.is_debug_frame {
-	    cie.pointer_encoding = self.get_pointer_encoding(cie);
+	    cie.pointer_encoding = self.get_ptr_enc_type(cie);
 	} else {
 	    cie.pointer_encoding = 0;
 	}
@@ -1538,14 +1569,18 @@ impl CallFrameSession {
     }
 }
 
-struct EHPointerApplierElf {
+/// Implementation of DHPointerReloc for ELF.
+///
+/// It is a partial implementation without function relative and
+/// aligned since both feature are OS/device dependent.
+struct DHPointerRelocElf {
     section_addr: u64,
     text_addr: u64,
     data_addr: u64,
 }
 
-impl EHPointerApplierElf {
-    fn new(parser: &Elf64Parser, is_debug_frame: bool) -> EHPointerApplierElf {
+impl DHPointerRelocElf {
+    fn new(parser: &Elf64Parser, is_debug_frame: bool) -> DHPointerRelocElf {
 	let sect =
 	    if is_debug_frame {
 		parser.find_section(".debug_frame").unwrap()
@@ -1559,7 +1594,7 @@ impl EHPointerApplierElf {
 	let data_sect = parser.find_section(".data").unwrap();
 	let data_addr = parser.get_section_addr(data_sect).unwrap();
 
-	EHPointerApplierElf {
+	DHPointerRelocElf {
 	    section_addr,
 	    text_addr,
 	    data_addr,
@@ -1567,7 +1602,7 @@ impl EHPointerApplierElf {
     }
 }
 
-impl EHPointerApplier for EHPointerApplierElf {
+impl DHPointerReloc for DHPointerRelocElf {
     fn apply_pcrel(&self, ptr: u64, off: u64) -> u64 {
 	unsafe {
 	    mem::transmute::<i64, u64>(mem::transmute::<u64, i64>(self.section_addr) +
@@ -1627,6 +1662,10 @@ pub enum CFInsn {
     DW_CFA_hi_user,
 }
 
+/// Parse Call Frame Instructors found in CIE & FDE records.
+///
+/// Parse instructions from [`CFCIE::initial_instructions`] and
+/// [`CFFDE::instrauctions`].
 pub struct CFInsnParser<'a> {
     offset: usize,
     address_size: usize,
@@ -2278,7 +2317,8 @@ enum DwarfExprPCOp {
     stack_value,
 }
 
-fn run_dwarf_expr_insn(insn: DwarfExprOp, stack: &mut Vec<u64>, regs: &[u64], get_mem: &dyn Fn(u64, usize) -> u64) -> Result<DwarfExprPCOp, Error> {
+fn run_dwarf_expr_insn(insn: DwarfExprOp, stack: &mut Vec<u64>, regs: &[u64],
+		       get_mem: &dyn Fn(u64, usize) -> u64) -> Result<DwarfExprPCOp, Error> {
     match insn {
 	DwarfExprOp::DW_OP_addr (v_u64) => {
 	    stack.push(v_u64);
@@ -2385,7 +2425,10 @@ fn run_dwarf_expr_insn(insn: DwarfExprOp, stack: &mut Vec<u64>, regs: &[u64], ge
 	},
 	DwarfExprOp::DW_OP_abs => {
 	    let len = stack.len();
-	    stack[len - 1] = unsafe { mem::transmute::<i64, u64>(mem::transmute::<u64, i64>(stack[len - 1]).abs()) };
+	    stack[len - 1] = unsafe {
+		mem::transmute::<i64, u64>(
+		    mem::transmute::<u64, i64>(stack[len - 1]).abs())
+	    };
 	    Ok(DwarfExprPCOp::go_next)
 	},
 	DwarfExprOp::DW_OP_and => {
@@ -2722,8 +2765,17 @@ fn run_dwarf_expr_insn(insn: DwarfExprOp, stack: &mut Vec<u64>, regs: &[u64], ge
     }
 }
 
-pub fn run_dwarf_expr(expr: &[u8], max_rounds: usize, regs: &[u64], get_mem: &dyn Fn(u64, usize) -> u64) -> Result<u64, Error> {
-    let insns: Vec<(u64, DwarfExprOp)> = DwarfExprParser::from(expr, 8).collect();
+/// Run DWARF Expression and return a result.
+///
+/// # Arguments
+///
+/// * `max_rounds` - how many rounds (instructions) up to this function can run to limit the runtime of the expression.
+/// * `regs` - The values of registers that the expressiopn will read.
+/// * `address_size` - The size of a pointer/address.
+/// * `get_mem` - The call funciton to fetach the content of a given address.
+pub fn run_dwarf_expr(expr: &[u8], max_rounds: usize, regs: &[u64], address_size: usize,
+		      get_mem: &dyn Fn(u64, usize) -> u64) -> Result<u64, Error> {
+    let insns: Vec<(u64, DwarfExprOp)> = DwarfExprParser::from(expr, address_size).collect();
     let mut idx = 0;
     let mut stack = Vec::<u64>::new();
     let mut rounds = 0;
@@ -3073,39 +3125,46 @@ mod tests {
         assert_eq!(line, line_ret);
     }
 
-    fn test_parse_call_frames(is_debug_frame: bool) {
-	let args: Vec<String> = env::args().collect();
-	let bin_name = &args[0];
-	let parser_r = Elf64Parser::open(bin_name);
+    fn test_parse_call_frames(is_debug_frame: bool, bin_name: &Path,
+			      expected_offsets: &[usize],
+			      expected_cfi_locs: &[u64]) {
+	let parser_r = Elf64Parser::open(bin_name.to_str().unwrap());
 	assert!(parser_r.is_ok());
 	let parser = parser_r.unwrap();
 
-	let cfsession = CallFrameSession::from_parser(&parser, is_debug_frame);
+	let cfsession = CallFrameParser::from_parser(&parser, is_debug_frame);
 	let cies_fdes = cfsession.parse_call_frames(&parser);
 	//assert!(cies_fdes.is_ok());
 	let (mut cies, fdes) = cies_fdes.unwrap();
 	println!("cies len={}, fdes len={}", cies.len(), fdes.len());
 
+	let mut eo_idx = 0;
 	for cie in &mut cies {
 	    println!("address size {} data alignment {} offset {}", cie.address_size, cie.data_align_factor, cie.offset);
 	    println!("{:?}", cie.init_instructions);
 	    let insniter = CFInsnParser::new(cie.init_instructions, cie.address_size as usize);
-	    let mut state = CallFrameState::new(&cie, 32);
+	    let mut state = CallFrameMachine::new(&cie, 32);
 	    for insn in insniter {
 		println!("INSN: {:?}", insn);
-		run_call_frame_insn(insn, &mut state);
+		state.run_insn(insn);
 	    }
 	    cie.aux.init_cfa = state.cfa;
 	    cie.aux.init_regs = state.regs;
+	    assert!(cie.offset == expected_offsets[eo_idx]);
+	    eo_idx += 1;
 	}
+
+	let mut el_idx = 0;
+	let address_size = mem::size_of::<*const u8>();
+
 	for fde in fdes {
-	    println!("CIE pointer {}", fde.cie_pointer);
-	    let insniter = CFInsnParser::new(fde.instructions, 8);
+	    println!("CIE @ {}, pointer {}", fde.offset, fde.cie_pointer);
+	    let insniter = CFInsnParser::new(fde.instructions, address_size);
 
 	    for insn in insniter {
 		println!("INSN: {:?}", insn);
 		if let CFInsn::DW_CFA_def_cfa_expression(expression) = insn {
-		    for (off, insn) in DwarfExprParser::from(&expression, 8) {
+		    for (off, insn) in DwarfExprParser::from(&expression, address_size) {
 			println!("    {} {:?}", off, insn);
 		    }
 		}
@@ -3114,14 +3173,14 @@ mod tests {
 	    let mut state = None;
 	    for cie in &cies {
 		if cie.offset == fde.cie_pointer as usize {
-		    state = Some(CallFrameState::new(cie, 32));
+		    state = Some(CallFrameMachine::new(cie, 32));
 		}
 	    }
 
 	    if let Some(state) = state.as_mut() {
-		let insniter = CFInsnParser::new(fde.instructions, 8);
+		let insniter = CFInsnParser::new(fde.instructions, address_size);
 		for insn in insniter {
-		    if let Some(loc) = run_call_frame_insn(insn, state) {
+		    if let Some(loc) = state.run_insn(insn) {
 			println!("  loc={} cfa={:?}", loc, state.cfa,);
 			print!("    ");
 			for reg in &state.regs {
@@ -3132,6 +3191,9 @@ mod tests {
 			    }
 			}
 			println!("");
+
+			assert!(loc == expected_cfi_locs[el_idx]);
+			el_idx += 1;
 		    }
 		}
 		println!("  loc={} cfa={:?}", state.loc, state.cfa);
@@ -3144,19 +3206,31 @@ mod tests {
 		    }
 		}
 		println!("");
+
+		assert!(state.loc == expected_cfi_locs[el_idx]);
+		el_idx += 1;
 	    }
+	    assert!(fde.offset == expected_offsets[eo_idx]);
+	    eo_idx += 1;
 	}
-	assert!(false);
+	assert!(eo_idx == expected_offsets.len());
+	assert!(el_idx == expected_cfi_locs.len());
     }
 
     #[test]
     fn test_parse_call_frames_debug_frame() {
-	test_parse_call_frames(true)
+	let bin_name = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("tests").join("eh_frame-sample");
+	let expected_offsets = [0, 48];
+	let expected_cfi_locs: [u64;0] = [];
+	test_parse_call_frames(true, &bin_name, &expected_offsets, &expected_cfi_locs)
     }
 
     #[test]
     fn test_parse_call_frames_eh_frame() {
-	test_parse_call_frames(false)
+	let bin_name = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("tests").join("eh_frame-sample");
+	let expected_offsets = [0, 24, 48, 88, 112];
+	let expected_cfi_locs = [0 as u64, 4, 0, 6, 16, 0, 4, 61, 0];
+	test_parse_call_frames(false, &bin_name, &expected_offsets, &expected_cfi_locs)
     }
 
     #[test]
@@ -3176,12 +3250,13 @@ mod tests {
 	    0
 	};
 
-	let v = run_dwarf_expr(&expr, 9, &regs, &get_mem);
+	let address_size = mem::size_of::<*const u8>();
+	let v = run_dwarf_expr(&expr, 9, &regs, address_size, &get_mem);
 	assert!(v.is_ok());
 	assert!(v.unwrap() == 30);
 
 	// max_rounds is too small.
-	let v = run_dwarf_expr(&expr, 8, &regs, &get_mem);
+	let v = run_dwarf_expr(&expr, 8, &regs, address_size, &get_mem);
 	assert!(v.is_err());
     }
 }
