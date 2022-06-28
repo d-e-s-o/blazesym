@@ -882,170 +882,6 @@ enum RegRule {
     architectural,
 }
 
-/// Keep states for Call Frame Instructions.
-///
-/// Maintain the states of the machine running Call Frame
-/// Instructions, e.q. [`CFInsn`], to make data/side-effects flow from
-/// an instruction to another.
-#[derive(Clone, Debug)]
-struct CallFrameMachine {
-    code_align_factor: u64,
-    data_align_factor: i64,
-    loc: u64,
-    ra_reg: u64,		// return address register
-    cfa: CFARule,		// Canonical Frame Address
-    regs: Vec<RegRule>,
-    pushed: Vec<Vec<RegRule>>,	// the stack of pushed states (save/restore)
-    init_regs: Vec<RegRule>,	// the register values when the machine is just initialized.
-}
-
-impl CallFrameMachine {
-    fn new(cie: &CFCIE, reg_num: usize) -> CallFrameMachine {
-	let mut state = CallFrameMachine {
-	    code_align_factor: cie.code_align_factor,
-	    data_align_factor: cie.data_align_factor,
-	    loc: 0,
-	    ra_reg: cie.return_address_register as u64,
-	    cfa: cie.aux.init_cfa.clone(),
-	    regs: cie.aux.init_regs.clone(),
-	    pushed: vec![],
-	    init_regs: cie.aux.init_regs.clone(),
-	};
-	state.regs.resize(reg_num, RegRule::undefined);
-	state
-    }
-
-    /// Run a Call Frame Instruction on a call frame machine.
-    ///
-    /// [`CallFrameMachine`] models a call frame machine
-    fn run_insn(&mut self, insn: CFInsn) -> Option<u64> {
-	match insn {
-	    CFInsn::DW_CFA_advance_loc (adj) => {
-		let loc = self.loc;
-		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
-		Some(loc)
-	    },
-	    CFInsn::DW_CFA_offset (reg, offset) => {
-		self.regs[reg as usize] = RegRule::offset (offset as i64 * self.data_align_factor as i64);
-		None
-	    },
-	    CFInsn::DW_CFA_restore (reg) => {
-		self.regs[reg as usize] = self.init_regs[reg as usize].clone();
-		None
-	    },
-	    CFInsn::DW_CFA_nop => None,
-	    CFInsn::DW_CFA_set_loc (loc) => {
-		let old_loc = self.loc;
-		self.loc = loc;
-		Some(old_loc)
-	    },
-	    CFInsn::DW_CFA_advance_loc1 (adj) => {
-		let loc = self.loc;
-		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
-		Some(loc)
-	    },
-	    CFInsn::DW_CFA_advance_loc2 (adj) => {
-		let loc = self.loc;
-		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
-		Some(loc)
-	    },
-	    CFInsn::DW_CFA_advance_loc4 (adj) => {
-		let loc = self.loc;
-		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
-		Some(loc)
-	    },
-	    CFInsn::DW_CFA_offset_extended (reg, offset) => {
-		self.regs[reg as usize] = RegRule::offset (offset as i64 * self.data_align_factor as i64);
-		None
-	    },
-	    CFInsn::DW_CFA_restore_extended (reg) => {
-		self.regs[reg as usize] = self.init_regs[reg as usize].clone();
-		None
-	    },
-	    CFInsn::DW_CFA_undefined (reg) => {
-		self.regs[reg as usize] = RegRule::undefined;
-		None
-	    },
-	    CFInsn::DW_CFA_same_value (reg) => {
-		self.regs[reg as usize] = RegRule::same_value;
-		None
-	    },
-	    CFInsn::DW_CFA_register (reg, reg_from) => {
-		self.regs[reg as usize] = RegRule::register (reg_from);
-		None
-	    },
-	    CFInsn::DW_CFA_remember_state => {
-		let regs = self.regs.clone();
-		self.pushed.push(regs);
-		None
-	    },
-	    CFInsn::DW_CFA_restore_state => {
-		let pushed = if let Some(pushed) = self.pushed.pop() {
-		    pushed
-		} else {
-		    #[cfg(debug_assertions)]
-		    eprintln!("Fail to restore state; inconsistent!");
-		    return None
-		};
-		self.regs = pushed;
-		None
-	    },
-	    CFInsn::DW_CFA_def_cfa (reg, offset) => {
-		self.cfa = CFARule::reg_offset (reg, offset as i64);
-		None
-	    },
-	    CFInsn::DW_CFA_def_cfa_register (reg) => {
-		if let CFARule::reg_offset(cfa_reg, _offset) = &mut self.cfa {
-		    *cfa_reg = reg;
-		}
-		None
-	    },
-	    CFInsn::DW_CFA_def_cfa_offset (offset) => {
-		if let CFARule::reg_offset(_reg, cfa_offset) = &mut self.cfa {
-		    *cfa_offset = offset as i64;
-		}
-		None
-	    },
-	    CFInsn::DW_CFA_def_cfa_expression (expr) => {
-		self.cfa = CFARule::expression (expr);
-		None
-	    },
-	    CFInsn::DW_CFA_expression (reg, expr) => {
-		self.regs[reg as usize] = RegRule::expression (expr);
-		None
-	    },
-	    CFInsn::DW_CFA_offset_extended_sf (reg, offset) => {
-		self.regs[reg as usize] = RegRule::offset (offset as i64 * self.data_align_factor as i64);
-		None
-	    },
-	    CFInsn::DW_CFA_def_cfa_sf (reg, offset) => {
-		self.cfa = CFARule::reg_offset (reg, offset * self.data_align_factor as i64);
-		None
-	    },
-	    CFInsn::DW_CFA_def_cfa_offset_sf (offset) => {
-		if let CFARule::reg_offset(_reg, cfa_offset) = &mut self.cfa {
-		    *cfa_offset = offset as i64 * self.data_align_factor as i64;
-		}
-		None
-	    },
-	    CFInsn::DW_CFA_val_offset (reg, offset) => {
-		self.regs[reg as usize] = RegRule::val_offset (offset as i64 * self.data_align_factor as i64);
-		None
-	    },
-	    CFInsn::DW_CFA_val_offset_sf (reg, offset) => {
-		self.regs[reg as usize] = RegRule::val_offset (offset * self.data_align_factor as i64);
-		None
-	    },
-	    CFInsn::DW_CFA_val_expression (reg, expr) => {
-		self.regs[reg as usize] = RegRule::val_expression (expr);
-		None
-	    },
-	    CFInsn::DW_CFA_lo_user => {None},
-	    CFInsn::DW_CFA_hi_user => {None},
-	}
-    }
-}
-
 struct CFCIE_aux {
     raw: Vec<u8>,
     init_cfa: CFARule,
@@ -1230,6 +1066,11 @@ impl EHPDBuilder {
     }
 }
 
+enum CieOrCieID {
+    CIE,
+    CIE_PTR (u32),
+}
+
 /// Parser of records in .debug_frame or .eh_frame sections.
 pub struct CallFrameParser {
     pd_builder: EHPDBuilder,
@@ -1305,7 +1146,7 @@ impl CallFrameParser {
 	0
     }
 
-    fn parse_call_frame_cie(&self, raw: &[u8], offset: usize, cie: &mut CFCIE) -> Result<(), Error> {
+    fn parse_call_frame_cie(&self, raw: &[u8], cie: &mut CFCIE) -> Result<(), Error> {
 	let mut offset: usize = 4;	// skip CIE_id
 
 	let ensure = |offset, x| {
@@ -1393,7 +1234,7 @@ impl CallFrameParser {
 	Ok(())
     }
 
-    fn parse_call_frame_fde(&self, mut raw: &[u8], off: usize, fde: &mut CFFDE, cie: &CFCIE) -> Result<(), Error> {
+    fn parse_call_frame_fde(&self, mut raw: &[u8], fde: &mut CFFDE, cie: &CFCIE) -> Result<(), Error> {
 	let mut offset: usize = 0;
 
 	let ensure = |offset, x| {
@@ -1417,11 +1258,11 @@ impl CallFrameParser {
 	    offset += 8;
 	} else {
 	    let decoder = self.pd_builder.build(cie.pointer_encoding);
-	    let (v, bytes) = decoder.decode(&raw[offset..], off as u64)
+	    let (v, bytes) = decoder.decode(&raw[offset..], fde.offset as u64)
 		.ok_or(Error::new(ErrorKind::InvalidData, "fail to decode initial_location"))?;
 	    fde.initial_location = v;
 	    offset += bytes;
-	    let (v, bytes) = decoder.decode(&raw[offset..], off as u64)
+	    let (v, bytes) = decoder.decode(&raw[offset..], fde.offset as u64)
 		.ok_or(Error::new(ErrorKind::InvalidData, "fail to decode address)rabge"))?;
 	    fde.address_range = v;
 	    offset += bytes;
@@ -1441,85 +1282,101 @@ impl CallFrameParser {
 	Ok(())
     }
 
+    fn get_cie_id(&self, raw: &Vec<u8>) -> CieOrCieID {
+	let cie_id_or_cie_ptr = decode_uword(&raw);
+	let cie_id: u32 = if self.is_debug_frame { 0xffffffff } else { 0x0 };
+	if cie_id_or_cie_ptr == cie_id {
+	    CieOrCieID::CIE
+	} else {
+	    CieOrCieID::CIE_PTR (cie_id_or_cie_ptr)
+	}
+    }
+
+    /// parse a single Call Frame record.
+    ///
+    /// A record is either a CIE or a DFE.  This function would parse
+    /// one record if there is.  It would append CIE to `cies` while
+    /// append FDE to `fdes`.
     fn parse_call_frame(&self, mut raw: Vec<u8>, offset: usize,
 			cies: &mut Vec<CFCIE>, fdes: &mut Vec<CFFDE>) -> Result<(), Error> {
-	let cie_id_or_cie_ptr = decode_uword(&raw);
-	let cie_id = if self.is_debug_frame { 0xffffffff } else { 0x0 };
-	if cie_id_or_cie_ptr == cie_id {
-	    let i = cies.len();
-	    unsafe {
-		if cies.capacity() <= i {
-		    if cies.capacity() != 0{
-			cies.reserve(cies.capacity());
-		    } else {
-			cies.reserve(16);
-		    }
-		}
-		// Append an element without initialization.  Should be
-		// very careful to make sure that parse_call_frame_cie()
-		// has initialized the element fully.
-		cies.set_len(i + 1);
-
-		let cie = &mut cies[i];
-		cie.offset = offset;
-
-		let result = self.parse_call_frame_cie(&raw, offset, cie);
-
-		if result.is_ok() {
-		    // Initialize aux parts by swapping and dropping.
-		    let mut aux = vec![CFCIE_aux {
-			raw,
-			init_cfa: CFARule::reg_offset (0, 0),
-			init_regs: Vec::with_capacity(0),
-		    }];
-		    mem::swap(&mut cie.aux, &mut aux[0]);
-		    // Drop all content! We don't to call destructors for them since they are garbage data.
-		    aux.set_len(0);
-		}
-		result
-	    }
-	} else {
-	    let cie_offset =
-		if self.is_debug_frame {
-		    cie_id_or_cie_ptr as usize
-		} else {
-		    (offset + 4) - cie_id_or_cie_ptr as usize
-		};
-	    let cie = {
-		'outer: loop {
-		    for i in (0..cies.len()).rev() {
-			// It is ususally the last one in cies.
-			if cies[i].offset == cie_offset {
-			    break 'outer  &cies[i];
+	match self.get_cie_id(&raw) {
+	    CieOrCieID::CIE => {
+		let i = cies.len();
+		unsafe {
+		    if cies.capacity() <= i {
+			if cies.capacity() != 0 {
+			    cies.reserve(cies.capacity());
+			} else {
+			    cies.reserve(16);
 			}
 		    }
-		    return Err(Error::new(ErrorKind::InvalidData, "invalid CIE pointer"));
-		}
-	    };
+		    // Append an element without initialization.  Should be
+		    // very careful to make sure that parse_call_frame_cie()
+		    // has initialized the element fully.
+		    cies.set_len(i + 1);
 
-	    let idx = fdes.len();
-	    unsafe {
-		if fdes.capacity() <= idx {
-		    if fdes.capacity() != 0 {
-			fdes.reserve(fdes.capacity());
-		    } else {
-			fdes.reserve(16);
+		    let cie = &mut cies[i];
+		    cie.offset = offset;
+
+		    let result = self.parse_call_frame_cie(&raw, cie);
+
+		    if result.is_ok() {
+			// Initialize aux parts by swapping and dropping.
+			let mut aux = vec![CFCIE_aux {
+			    raw,
+			    init_cfa: CFARule::reg_offset (0, 0),
+			    init_regs: Vec::with_capacity(0),
+			}];
+			mem::swap(&mut cie.aux, &mut aux[0]);
+			// Drop all content! We don't to call destructors for them since they are garbage data.
+			aux.set_len(0);
 		    }
+		    result
 		}
-		// Append an element without initialization.  Should be
-		// very carful to make sure that parse_call_frame_fde()
-		// has initialized the element fully.
-		fdes.set_len(idx + 1);
-		let fde = &mut fdes[idx];
-		fde.offset = offset;
-		let result = self.parse_call_frame_fde(&raw, offset, fde, cie);
+	    },
+	    CieOrCieID::CIE_PTR (cie_ptr) => {
+		let cie_offset =
+		    if self.is_debug_frame {
+			cie_ptr as usize
+		    } else {
+			(offset + 4) - cie_ptr as usize
+		    };
+		let cie = {
+		    'outer: loop {
+			for i in (0..cies.len()).rev() {
+			    // It is ususally the last one in cies.
+			    if cies[i].offset == cie_offset {
+				break 'outer  &cies[i];
+			    }
+			}
+			return Err(Error::new(ErrorKind::InvalidData, "invalid CIE pointer"));
+		    }
+		};
 
-		// Keep a reference to raw to make sure it's life-time is
-		// logner than or equal to the fields refering it.
-		mem::swap(&mut fde.raw, &mut raw);
-		raw.leak();	// garbage data
+		let idx = fdes.len();
+		unsafe {
+		    if fdes.capacity() <= idx {
+			if fdes.capacity() != 0 {
+			    fdes.reserve(fdes.capacity());
+			} else {
+			    fdes.reserve(16);
+			}
+		    }
+		    // Append an element without initialization.  Should be
+		    // very carful to make sure that parse_call_frame_fde()
+		    // has initialized the element fully.
+		    fdes.set_len(idx + 1);
+		    let fde = &mut fdes[idx];
+		    fde.offset = offset;
+		    let result = self.parse_call_frame_fde(&raw, fde, cie);
 
-		result
+		    // Keep a reference to raw to make sure it's life-time is
+		    // logner than or equal to the fields refering it.
+		    mem::swap(&mut fde.raw, &mut raw);
+		    raw.leak();	// garbage data
+
+		    result
+		}
 	    }
 	}
     }
@@ -1868,6 +1725,170 @@ impl<'a> Iterator for CFInsnParser<'a> {
 	    _ => {
 		None
 	    }
+	}
+    }
+}
+
+/// Keep states for Call Frame Instructions.
+///
+/// Maintain the states of the machine running Call Frame
+/// Instructions, e.q. [`CFInsn`], to make data/side-effects flow from
+/// an instruction to another.
+#[derive(Clone, Debug)]
+struct CallFrameMachine {
+    code_align_factor: u64,
+    data_align_factor: i64,
+    loc: u64,
+    ra_reg: u64,		// return address register
+    cfa: CFARule,		// Canonical Frame Address
+    regs: Vec<RegRule>,
+    pushed: Vec<Vec<RegRule>>,	// the stack of pushed states (save/restore)
+    init_regs: Vec<RegRule>,	// the register values when the machine is just initialized.
+}
+
+impl CallFrameMachine {
+    fn new(cie: &CFCIE, reg_num: usize) -> CallFrameMachine {
+	let mut state = CallFrameMachine {
+	    code_align_factor: cie.code_align_factor,
+	    data_align_factor: cie.data_align_factor,
+	    loc: 0,
+	    ra_reg: cie.return_address_register as u64,
+	    cfa: cie.aux.init_cfa.clone(),
+	    regs: cie.aux.init_regs.clone(),
+	    pushed: vec![],
+	    init_regs: cie.aux.init_regs.clone(),
+	};
+	state.regs.resize(reg_num, RegRule::undefined);
+	state
+    }
+
+    /// Run a Call Frame Instruction on a call frame machine.
+    ///
+    /// [`CallFrameMachine`] models a call frame machine
+    fn run_insn(&mut self, insn: CFInsn) -> Option<u64> {
+	match insn {
+	    CFInsn::DW_CFA_advance_loc (adj) => {
+		let loc = self.loc;
+		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+		Some(loc)
+	    },
+	    CFInsn::DW_CFA_offset (reg, offset) => {
+		self.regs[reg as usize] = RegRule::offset (offset as i64 * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_restore (reg) => {
+		self.regs[reg as usize] = self.init_regs[reg as usize].clone();
+		None
+	    },
+	    CFInsn::DW_CFA_nop => None,
+	    CFInsn::DW_CFA_set_loc (loc) => {
+		let old_loc = self.loc;
+		self.loc = loc;
+		Some(old_loc)
+	    },
+	    CFInsn::DW_CFA_advance_loc1 (adj) => {
+		let loc = self.loc;
+		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+		Some(loc)
+	    },
+	    CFInsn::DW_CFA_advance_loc2 (adj) => {
+		let loc = self.loc;
+		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+		Some(loc)
+	    },
+	    CFInsn::DW_CFA_advance_loc4 (adj) => {
+		let loc = self.loc;
+		self.loc = unsafe { mem::transmute::<i64, u64>(loc as i64 + adj as i64) };
+		Some(loc)
+	    },
+	    CFInsn::DW_CFA_offset_extended (reg, offset) => {
+		self.regs[reg as usize] = RegRule::offset (offset as i64 * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_restore_extended (reg) => {
+		self.regs[reg as usize] = self.init_regs[reg as usize].clone();
+		None
+	    },
+	    CFInsn::DW_CFA_undefined (reg) => {
+		self.regs[reg as usize] = RegRule::undefined;
+		None
+	    },
+	    CFInsn::DW_CFA_same_value (reg) => {
+		self.regs[reg as usize] = RegRule::same_value;
+		None
+	    },
+	    CFInsn::DW_CFA_register (reg, reg_from) => {
+		self.regs[reg as usize] = RegRule::register (reg_from);
+		None
+	    },
+	    CFInsn::DW_CFA_remember_state => {
+		let regs = self.regs.clone();
+		self.pushed.push(regs);
+		None
+	    },
+	    CFInsn::DW_CFA_restore_state => {
+		let pushed = if let Some(pushed) = self.pushed.pop() {
+		    pushed
+		} else {
+		    #[cfg(debug_assertions)]
+		    eprintln!("Fail to restore state; inconsistent!");
+		    return None
+		};
+		self.regs = pushed;
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa (reg, offset) => {
+		self.cfa = CFARule::reg_offset (reg, offset as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa_register (reg) => {
+		if let CFARule::reg_offset(cfa_reg, _offset) = &mut self.cfa {
+		    *cfa_reg = reg;
+		}
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa_offset (offset) => {
+		if let CFARule::reg_offset(_reg, cfa_offset) = &mut self.cfa {
+		    *cfa_offset = offset as i64;
+		}
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa_expression (expr) => {
+		self.cfa = CFARule::expression (expr);
+		None
+	    },
+	    CFInsn::DW_CFA_expression (reg, expr) => {
+		self.regs[reg as usize] = RegRule::expression (expr);
+		None
+	    },
+	    CFInsn::DW_CFA_offset_extended_sf (reg, offset) => {
+		self.regs[reg as usize] = RegRule::offset (offset as i64 * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa_sf (reg, offset) => {
+		self.cfa = CFARule::reg_offset (reg, offset * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_def_cfa_offset_sf (offset) => {
+		if let CFARule::reg_offset(_reg, cfa_offset) = &mut self.cfa {
+		    *cfa_offset = offset as i64 * self.data_align_factor as i64;
+		}
+		None
+	    },
+	    CFInsn::DW_CFA_val_offset (reg, offset) => {
+		self.regs[reg as usize] = RegRule::val_offset (offset as i64 * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_val_offset_sf (reg, offset) => {
+		self.regs[reg as usize] = RegRule::val_offset (offset * self.data_align_factor as i64);
+		None
+	    },
+	    CFInsn::DW_CFA_val_expression (reg, expr) => {
+		self.regs[reg as usize] = RegRule::val_expression (expr);
+		None
+	    },
+	    CFInsn::DW_CFA_lo_user => {None},
+	    CFInsn::DW_CFA_hi_user => {None},
 	}
     }
 }
