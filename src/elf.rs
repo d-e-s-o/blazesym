@@ -1,8 +1,10 @@
+use memmap2::{MmapMut, MmapOptions};
 use std::borrow::BorrowMut;
 use std::cmp::Ordering;
 use std::fs::File;
 use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
 use std::mem;
+use std::slice;
 
 use std::cell::RefCell;
 
@@ -196,6 +198,10 @@ fn read_u8(file: &mut File, off: u64, size: usize) -> Result<Vec<u8>, Error> {
     Ok(buf)
 }
 
+fn read_u8_m<'a>(mem: &'a mut MmapMut, off: u64, size: usize) -> Result<&'a mut [u8], Error> {
+    Ok(&mut mem[(off as usize)..(off as usize + size)])
+}
+
 fn read_elf_header(file: &mut File) -> Result<Elf64_Ehdr, Error> {
     const DSZ: usize = mem::size_of::<Elf64_Ehdr>();
     let mut buf = Box::new([0_u8; DSZ]);
@@ -246,6 +252,13 @@ fn read_elf_section_raw(file: &mut File, section: &Elf64_Shdr) -> Result<Vec<u8>
     read_u8(file, section.sh_offset as u64, section.sh_size as usize)
 }
 
+fn read_elf_section_raw_m<'a>(
+    mem: &'a mut MmapMut,
+    section: &Elf64_Shdr,
+) -> Result<&'a mut [u8], Error> {
+    read_u8_m(mem, section.sh_offset as u64, section.sh_size as usize)
+}
+
 fn read_elf_section_seek(file: &mut File, section: &Elf64_Shdr) -> Result<(), Error> {
     file.seek(SeekFrom::Start(section.sh_offset as u64))?;
     Ok(())
@@ -267,14 +280,14 @@ fn get_elf_section_name<'a>(sect: &Elf64_Shdr, strtab: &'a [u8]) -> Option<&'a s
     extract_string(strtab, sect.sh_name as usize)
 }
 
-struct Elf64ParserBack {
+struct Elf64ParserBack<'a> {
+    mem: MmapMut,
     ehdr: Option<Elf64_Ehdr>,
     shdrs: Option<Vec<Elf64_Shdr>>,
     shstrtab: Option<Vec<u8>>,
     phdrs: Option<Vec<Elf64_Phdr>>,
-    symtab: Option<Vec<Elf64_Sym>>,        // in address order
-    symtab_origin: Option<Vec<Elf64_Sym>>, // The copy in the same order as the file
-    strtab: Option<Vec<u8>>,
+    symtab: Option<&'a [Elf64_Sym]>, // in address order
+    strtab: Option<&'a [u8]>,
     str2symtab: Option<Vec<(usize, usize)>>, // strtab offset to symtab in the dictionary order
 }
 
@@ -282,25 +295,25 @@ struct Elf64ParserBack {
 ///
 pub struct Elf64Parser {
     filename: String,
+    backobj: RefCell<Elf64ParserBack<'static>>,
     file: RefCell<File>,
-    backobj: RefCell<Elf64ParserBack>,
 }
 
 impl Elf64Parser {
     pub fn open_file(file: File) -> Result<Elf64Parser, Error> {
         let parser = Elf64Parser {
             filename: String::from(""),
-            file: RefCell::new(file),
             backobj: RefCell::new(Elf64ParserBack {
+                mem: unsafe { MmapOptions::new().map_copy(&file)? },
                 ehdr: None,
                 shdrs: None,
                 shstrtab: None,
                 phdrs: None,
                 symtab: None,
-                symtab_origin: None,
                 strtab: None,
                 str2symtab: None,
             }),
+            file: RefCell::new(file),
         };
         Ok(parser)
     }
@@ -399,7 +412,7 @@ impl Elf64Parser {
         } else {
             self.find_section(".dynsym")?
         };
-        let symtab_raw = self.read_section_raw(sect_idx)?;
+        let symtab_raw = self.read_section_raw_m(sect_idx)?;
 
         if symtab_raw.len() % mem::size_of::<Elf64_Sym>() != 0 {
             return Err(Error::new(
@@ -410,15 +423,12 @@ impl Elf64Parser {
         let cnt = symtab_raw.len() / mem::size_of::<Elf64_Sym>();
         let mut symtab: Vec<Elf64_Sym> = unsafe {
             let symtab_ptr = symtab_raw.as_ptr() as *mut Elf64_Sym;
-            symtab_raw.leak();
             Vec::from_raw_parts(symtab_ptr, cnt, cnt)
         };
-        let origin = symtab.clone();
         symtab.sort_by_key(|x| x.st_value);
 
         let mut me = self.backobj.borrow_mut();
-        me.symtab = Some(symtab);
-        me.symtab_origin = Some(origin);
+        me.symtab = Some(symtab.leak());
 
         Ok(())
     }
@@ -437,10 +447,10 @@ impl Elf64Parser {
         } else {
             self.find_section(".dynstr")?
         };
-        let strtab = self.read_section_raw(sect_idx)?;
+        let strtab = self.read_section_raw_m(sect_idx)?;
 
         let mut me = self.backobj.borrow_mut();
-        me.strtab = Some(strtab);
+        me.strtab = Some(unsafe { slice::from_raw_parts(strtab.as_ptr(), strtab.len()) });
 
         Ok(())
     }
@@ -534,6 +544,18 @@ impl Elf64Parser {
         )
     }
 
+    /// Read the raw data of the section of a given index.
+    pub fn read_section_raw_m(&self, sect_idx: usize) -> Result<&mut [u8], Error> {
+        self.check_section_index(sect_idx)?;
+        self.ensure_shdrs()?;
+
+        let mut me = self.backobj.borrow_mut();
+        let shdr = unsafe { &*(&me.shdrs.as_ref().unwrap()[sect_idx] as *const Elf64_Shdr) };
+        let raw = read_elf_section_raw_m(&mut me.mem, shdr)?;
+
+        Ok(unsafe { slice::from_raw_parts_mut(raw.as_ptr() as *mut u8, raw.len()) })
+    }
+
     /// Get the name of the section of a given index.
     pub fn get_section_name(&self, sect_idx: usize) -> Result<&str, Error> {
         self.check_section_index(sect_idx)?;
@@ -606,7 +628,7 @@ impl Elf64Parser {
 
         let sym = &me.symtab.as_ref().unwrap()[idx];
         let sym_name = match extract_string(
-            unsafe { (*self.backobj.as_ptr()).strtab.as_ref().unwrap().as_slice() },
+            unsafe { *(*self.backobj.as_ptr()).strtab.as_ref().unwrap() },
             sym.st_name as usize,
         ) {
             Some(sym_name) => sym_name,
@@ -667,19 +689,12 @@ impl Elf64Parser {
         Ok(unsafe { &(*me).symtab.as_mut().unwrap()[idx] })
     }
 
-    pub fn get_symbol_origin(&self, idx: usize) -> Result<&Elf64_Sym, Error> {
-        self.ensure_symtab()?;
-
-        let me = self.backobj.as_ptr();
-        Ok(unsafe { &(*me).symtab_origin.as_mut().unwrap()[idx] })
-    }
-
     pub fn get_symbol_name(&self, idx: usize) -> Result<&str, Error> {
         let sym = self.get_symbol(idx)?;
 
         let me = self.backobj.as_ptr();
         let sym_name = match extract_string(
-            unsafe { (*me).strtab.as_ref().unwrap().as_slice() },
+            unsafe { *(*me).strtab.as_ref().unwrap() },
             sym.st_name as usize,
         ) {
             Some(name) => name,
