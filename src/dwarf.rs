@@ -403,7 +403,10 @@ fn parse_debug_line_cu(
     let prologue_v4_sz: usize = mem::size_of::<DebugLinePrologue>();
     let buf = reused_buf;
 
-    buf.resize(prologue_sz, 0);
+    if buf.capacity() < prologue_sz {
+	buf.reserve(prologue_sz - buf.len());
+    }
+    unsafe { buf.set_len(prologue_sz) };
     let prologue = unsafe {
         parser.read_raw(buf.as_mut_slice())?;
         let prologue_raw = buf.as_mut_ptr() as *mut DebugLinePrologueV2;
@@ -422,7 +425,10 @@ fn parse_debug_line_cu(
             // Upgrade to V4.
             // V4 has more fields to read.
             Box::leak(v2);
-            buf.resize(prologue_v4_sz, 0);
+	    if buf.capacity() < prologue_v4_sz {
+		buf.reserve(prologue_v4_sz - buf.len());
+	    }
+	    buf.set_len(prologue_v4_sz);
             parser.read_raw(&mut buf.as_mut_slice()[prologue_sz..])?;
             let prologue_raw = buf.as_mut_ptr() as *mut DebugLinePrologue;
             let v4 = Box::<DebugLinePrologue>::from_raw(prologue_raw);
@@ -450,12 +456,10 @@ fn parse_debug_line_cu(
 
     let to_read = prologue.total_length as usize + 4 - prologue_sz;
     let data_buf = buf;
-    if to_read <= data_buf.capacity() {
-        // Gain better performance by skipping initialization.
-        unsafe { data_buf.set_len(to_read) };
-    } else {
-        data_buf.resize(to_read, 0);
+    if data_buf.capacity() < to_read {
+	data_buf.reserve(to_read - data_buf.len());
     }
+    unsafe { data_buf.set_len(to_read) };
     unsafe { parser.read_raw(data_buf.as_mut_slice())? };
 
     let mut pos = 0;
@@ -742,7 +746,8 @@ fn run_debug_line_stmts(
     addresses: &[u64],
 ) -> Result<Vec<DebugLineStates>, Error> {
     let mut ip = 0;
-    let mut matrix = Vec::<DebugLineStates>::new();
+    let mut matrix =
+	Vec::<DebugLineStates>::with_capacity(stmts.len() / 3); // heuristic from existing data.
     let mut should_sort = false;
     let mut states_cur = DebugLineStates::new(prologue);
     let mut states_last = states_cur.clone();
