@@ -231,7 +231,7 @@ struct DebugLinePrologue {
 
 /// The file information of a file for a CU.
 struct DebugLineFileInfo {
-    name: String,
+    name: mem::ManuallyDrop<String>,
     dir_idx: u32, // Index to include_directories of DebugLineCU.
     #[allow(dead_code)]
     mod_tm: u64,
@@ -244,7 +244,7 @@ struct DebugLineCU {
     prologue: DebugLinePrologue,
     #[allow(dead_code)]
     standard_opcode_lengths: Vec<u8>,
-    include_directories: Vec<String>,
+    include_directories: Vec<mem::ManuallyDrop<String>>,
     files: Vec<DebugLineFileInfo>,
     matrix: Vec<DebugLineStates>,
 }
@@ -287,13 +287,13 @@ impl DebugLineCU {
 }
 
 /// Parse the list of directory paths for a CU.
-fn parse_debug_line_dirs(data_buf: &[u8]) -> Result<(Vec<String>, usize), Error> {
-    let mut strs = Vec::<String>::new();
+fn parse_debug_line_dirs(data_buf: &[u8]) -> Result<(Vec<mem::ManuallyDrop<String>>, usize), Error> {
+    let mut dirnames = Vec::<mem::ManuallyDrop<String>>::new();
     let mut pos = 0;
 
     while pos < data_buf.len() {
         if data_buf[pos] == 0 {
-            return Ok((strs, pos + 1));
+            return Ok((dirnames, pos + 1));
         }
 
         // Find NULL byte
@@ -302,15 +302,12 @@ fn parse_debug_line_dirs(data_buf: &[u8]) -> Result<(Vec<String>, usize), Error>
             end += 1;
         }
         if end < data_buf.len() {
-            let mut str_vec = Vec::<u8>::with_capacity(end - pos);
-            str_vec.extend_from_slice(&data_buf[pos..end]);
+	    let dirname = mem::ManuallyDrop::new(unsafe {
+		String::from_raw_parts((&data_buf[pos..end]).as_ptr() as *mut u8,
+				       end - pos, end - pos)
+	    });
 
-            let str_r = String::from_utf8(str_vec);
-            if str_r.is_err() {
-                return Err(Error::new(ErrorKind::InvalidData, "Invalid UTF-8 string"));
-            }
-
-            strs.push(str_r.unwrap());
+            dirnames.push(dirname);
             end += 1;
         }
         pos = end;
@@ -338,14 +335,9 @@ fn parse_debug_line_files(data_buf: &[u8]) -> Result<(Vec<DebugLineFileInfo>, us
             end += 1;
         }
         if end < data_buf.len() {
-            // Null terminated file name string
-            let mut str_vec = Vec::<u8>::with_capacity(end - pos);
-            str_vec.extend_from_slice(&data_buf[pos..end]);
-
-            let str_r = String::from_utf8(str_vec);
-            if str_r.is_err() {
-                return Err(Error::new(ErrorKind::InvalidData, "Invalid UTF-8 string"));
-            }
+	    let str_r = mem::ManuallyDrop::new(unsafe {
+		String::from_raw_parts((&data_buf[pos..end]).as_ptr() as *mut u8, end - pos, end - pos)
+	    });
             end += 1;
 
             // LEB128 directory index
@@ -379,7 +371,7 @@ fn parse_debug_line_files(data_buf: &[u8]) -> Result<(Vec<DebugLineFileInfo>, us
             end += bytes as usize;
 
             strs.push(DebugLineFileInfo {
-                name: str_r.unwrap(),
+                name: str_r,
                 dir_idx: dir_idx as u32,
                 mod_tm,
                 size: flen as usize,
