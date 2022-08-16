@@ -395,21 +395,18 @@ fn parse_debug_line_files(data_buf: &[u8]) -> Result<(Vec<DebugLineFileInfo>, us
 }
 
 fn parse_debug_line_cu(
-    parser: &Elf64Parser,
+    dl_buf: &[u8],
     addresses: &[u64],
-    reused_buf: &mut Vec<u8>,
 ) -> Result<DebugLineCU, Error> {
     let mut prologue_sz: usize = mem::size_of::<DebugLinePrologueV2>();
     let prologue_v4_sz: usize = mem::size_of::<DebugLinePrologue>();
-    let buf = reused_buf;
+    let mut pos;
 
-    if buf.capacity() < prologue_sz {
-	buf.reserve(prologue_sz - buf.len());
-    }
-    unsafe { buf.set_len(prologue_sz) };
     let prologue = unsafe {
-        parser.read_raw(buf.as_mut_slice())?;
-        let prologue_raw = buf.as_mut_ptr() as *mut DebugLinePrologueV2;
+	let buf = &dl_buf[..prologue_sz];
+	pos = prologue_sz;
+
+        let prologue_raw = buf.as_ptr() as *mut u8 as *mut DebugLinePrologueV2;
         let v2 = Box::<DebugLinePrologueV2>::from_raw(prologue_raw);
 
         if v2.version != 0x2 && v2.version != 0x4 {
@@ -425,12 +422,9 @@ fn parse_debug_line_cu(
             // Upgrade to V4.
             // V4 has more fields to read.
             Box::leak(v2);
-	    if buf.capacity() < prologue_v4_sz {
-		buf.reserve(prologue_v4_sz - buf.len());
-	    }
-	    buf.set_len(prologue_v4_sz);
-            parser.read_raw(&mut buf.as_mut_slice()[prologue_sz..])?;
-            let prologue_raw = buf.as_mut_ptr() as *mut DebugLinePrologue;
+	    let buf = &dl_buf[..prologue_v4_sz];
+	    pos = prologue_v4_sz;
+            let prologue_raw = buf.as_ptr() as *mut u8 as *mut DebugLinePrologue;
             let v4 = Box::<DebugLinePrologue>::from_raw(prologue_raw);
             prologue_sz = prologue_v4_sz;
             let prologue_v4 = DebugLinePrologue { ..(*v4) };
@@ -455,12 +449,7 @@ fn parse_debug_line_cu(
     };
 
     let to_read = prologue.total_length as usize + 4 - prologue_sz;
-    let data_buf = buf;
-    if data_buf.capacity() < to_read {
-	data_buf.reserve(to_read - data_buf.len());
-    }
-    unsafe { data_buf.set_len(to_read) };
-    unsafe { parser.read_raw(data_buf.as_mut_slice())? };
+    let data_buf = &dl_buf[pos..(pos + to_read)];
 
     let mut pos = 0;
 
@@ -820,19 +809,20 @@ fn parse_debug_line_elf_parser(
     addresses: &[u64],
 ) -> Result<Vec<DebugLineCU>, Error> {
     let debug_line_idx = parser.find_section(".debug_line")?;
+    let debug_line_buf = parser.read_section_raw_m(debug_line_idx)?;
     let debug_line_sz = parser.get_section_size(debug_line_idx)?;
     let mut remain_sz = debug_line_sz;
     let prologue_size: usize = mem::size_of::<DebugLinePrologueV2>();
     let mut not_found = Vec::from(addresses);
-
-    parser.section_seek(debug_line_idx)?;
+    let mut dl_buf_pos = 0;
 
     let mut all_cus = Vec::<DebugLineCU>::new();
-    let mut buf = Vec::<u8>::new();
     while remain_sz > prologue_size {
-        let debug_line_cu = parse_debug_line_cu(parser, &not_found, &mut buf)?;
+        let debug_line_cu = parse_debug_line_cu(&debug_line_buf[dl_buf_pos..], &not_found)?;
         let prologue = &debug_line_cu.prologue;
-        remain_sz -= prologue.total_length as usize + 4;
+	let cu_sz = prologue.total_length as usize + 4;
+        remain_sz -= cu_sz;
+	dl_buf_pos += cu_sz;
 
         if debug_line_cu.matrix.is_empty() {
             continue;
