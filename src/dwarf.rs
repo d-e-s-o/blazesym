@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::mem;
 use std::rc::Rc;
-use std::slice;
 
 #[cfg(test)]
 use std::env;
@@ -866,23 +865,33 @@ fn parse_debug_line_elf(filename: &str) -> Result<Vec<DebugLineCU>, Error> {
 
 #[derive(Clone, Debug)]
 enum CFARule {
+    #[allow(non_camel_case_types)]
     reg_offset(u64, i64),
+    #[allow(non_camel_case_types)]
     expression(Vec<u8>),
 }
 
 #[derive(Clone, Debug)]
 enum RegRule {
+    #[allow(non_camel_case_types)]
     undefined,
+    #[allow(non_camel_case_types)]
     same_value,
+    #[allow(non_camel_case_types)]
     offset(i64),
+    #[allow(non_camel_case_types)]
     val_offset(i64),
+    #[allow(non_camel_case_types)]
     register(u64),
+    #[allow(non_camel_case_types)]
     expression(Vec<u8>),
+    #[allow(non_camel_case_types)]
     val_expression(Vec<u8>),
+    #[allow(non_camel_case_types)]
     architectural,
 }
 
-struct CFCIE_aux {
+struct CFCIEAux {
     raw: Vec<u8>,
     init_cfa: CFARule,
     init_regs: Vec<RegRule>,
@@ -904,7 +913,7 @@ pub struct CFCIE<'a> {
     augmentation_data: &'a [u8],
     init_instructions: &'a [u8],
 
-    aux: CFCIE_aux,
+    aux: CFCIEAux,
 }
 
 /// FDE record of Call Frame.
@@ -1066,7 +1075,9 @@ impl EHPDBuilder {
 }
 
 enum CieOrCieID {
+    #[allow(non_camel_case_types)]
     CIE,
+    #[allow(non_camel_case_types)]
     CIE_PTR(u32),
 }
 
@@ -1240,7 +1251,7 @@ impl CallFrameParser {
 
     fn parse_call_frame_fde(
         &self,
-        mut raw: &[u8],
+        raw: &[u8],
         fde: &mut CFFDE,
         cie: &CFCIE,
     ) -> Result<(), Error> {
@@ -1351,7 +1362,7 @@ impl CallFrameParser {
 
                     if result.is_ok() {
                         // Initialize aux parts by swapping and dropping.
-                        let mut aux = vec![CFCIE_aux {
+                        let mut aux = vec![CFCIEAux {
                             raw,
                             init_cfa: CFARule::reg_offset(0, 0),
                             init_regs: Vec::with_capacity(0),
@@ -1413,7 +1424,6 @@ impl CallFrameParser {
         &self,
         parser: &Elf64Parser,
     ) -> Result<(Vec<CFCIE>, Vec<CFFDE>), Error> {
-        let mut is_debug_frame = true;
         let debug_frame_idx = if self.is_debug_frame {
             parser.find_section(".debug_frame").unwrap()
         } else {
@@ -1520,33 +1530,61 @@ impl DHPointerReloc for DHPointerRelocElf {
 
 #[derive(Debug)]
 pub enum CFInsn {
+    #[allow(non_camel_case_types)]
     DW_CFA_advance_loc(u8),
+    #[allow(non_camel_case_types)]
     DW_CFA_offset(u8, u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_restore(u8),
+    #[allow(non_camel_case_types)]
     DW_CFA_nop,
+    #[allow(non_camel_case_types)]
     DW_CFA_set_loc(u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_advance_loc1(u8),
+    #[allow(non_camel_case_types)]
     DW_CFA_advance_loc2(u16),
+    #[allow(non_camel_case_types)]
     DW_CFA_advance_loc4(u32),
+    #[allow(non_camel_case_types)]
     DW_CFA_offset_extended(u64, u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_restore_extended(u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_undefined(u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_same_value(u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_register(u64, u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_remember_state,
+    #[allow(non_camel_case_types)]
     DW_CFA_restore_state,
+    #[allow(non_camel_case_types)]
     DW_CFA_def_cfa(u64, u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_def_cfa_register(u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_def_cfa_offset(u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_def_cfa_expression(Vec<u8>),
+    #[allow(non_camel_case_types)]
     DW_CFA_expression(u64, Vec<u8>),
+    #[allow(non_camel_case_types)]
     DW_CFA_offset_extended_sf(u64, i64),
+    #[allow(non_camel_case_types)]
     DW_CFA_def_cfa_sf(u64, i64),
+    #[allow(non_camel_case_types)]
     DW_CFA_def_cfa_offset_sf(i64),
+    #[allow(non_camel_case_types)]
     DW_CFA_val_offset(u64, u64),
+    #[allow(non_camel_case_types)]
     DW_CFA_val_offset_sf(u64, i64),
+    #[allow(non_camel_case_types)]
     DW_CFA_val_expression(u64, Vec<u8>),
+    #[allow(non_camel_case_types)]
     DW_CFA_lo_user,
+    #[allow(non_camel_case_types)]
     DW_CFA_hi_user,
 }
 
@@ -1956,78 +1994,151 @@ impl CallFrameMachine {
 
 #[derive(Debug, Clone)]
 pub enum DwarfExprOp {
+    #[allow(non_camel_case_types)]
     DW_OP_addr(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_deref,
+    #[allow(non_camel_case_types)]
     DW_OP_const1u(u8),
+    #[allow(non_camel_case_types)]
     DW_OP_const1s(i8),
+    #[allow(non_camel_case_types)]
     DW_OP_const2u(u16),
+    #[allow(non_camel_case_types)]
     DW_OP_const2s(i16),
+    #[allow(non_camel_case_types)]
     DW_OP_const4u(u32),
+    #[allow(non_camel_case_types)]
     DW_OP_const4s(i32),
+    #[allow(non_camel_case_types)]
     DW_OP_const8u(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_const8s(i64),
+    #[allow(non_camel_case_types)]
     DW_OP_constu(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_consts(i64),
+    #[allow(non_camel_case_types)]
     DW_OP_dup,
+    #[allow(non_camel_case_types)]
     DW_OP_drop,
+    #[allow(non_camel_case_types)]
     DW_OP_over,
+    #[allow(non_camel_case_types)]
     DW_OP_pick(u8),
+    #[allow(non_camel_case_types)]
     DW_OP_swap,
+    #[allow(non_camel_case_types)]
     DW_OP_rot,
+    #[allow(non_camel_case_types)]
     DW_OP_xderef,
+    #[allow(non_camel_case_types)]
     DW_OP_abs,
+    #[allow(non_camel_case_types)]
     DW_OP_and,
+    #[allow(non_camel_case_types)]
     DW_OP_div,
+    #[allow(non_camel_case_types)]
     DW_OP_minus,
+    #[allow(non_camel_case_types)]
     DW_OP_mod,
+    #[allow(non_camel_case_types)]
     DW_OP_mul,
+    #[allow(non_camel_case_types)]
     DW_OP_neg,
+    #[allow(non_camel_case_types)]
     DW_OP_not,
+    #[allow(non_camel_case_types)]
     DW_OP_or,
+    #[allow(non_camel_case_types)]
     DW_OP_plus,
+    #[allow(non_camel_case_types)]
     DW_OP_plus_uconst(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_shl,
+    #[allow(non_camel_case_types)]
     DW_OP_shr,
+    #[allow(non_camel_case_types)]
     DW_OP_shra,
+    #[allow(non_camel_case_types)]
     DW_OP_xor,
+    #[allow(non_camel_case_types)]
     DW_OP_bra(i16),
+    #[allow(non_camel_case_types)]
     DW_OP_eq,
+    #[allow(non_camel_case_types)]
     DW_OP_ge,
+    #[allow(non_camel_case_types)]
     DW_OP_gt,
+    #[allow(non_camel_case_types)]
     DW_OP_le,
+    #[allow(non_camel_case_types)]
     DW_OP_lt,
+    #[allow(non_camel_case_types)]
     DW_OP_ne,
+    #[allow(non_camel_case_types)]
     DW_OP_skip(i16),
+    #[allow(non_camel_case_types)]
     DW_OP_lit(u8),
+    #[allow(non_camel_case_types)]
     DW_OP_reg(u8),
+    #[allow(non_camel_case_types)]
     DW_OP_breg(u8, i64),
+    #[allow(non_camel_case_types)]
     DW_OP_regx(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_fbreg(i64),
+    #[allow(non_camel_case_types)]
     DW_OP_bregx(u64, i64),
+    #[allow(non_camel_case_types)]
     DW_OP_piece(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_deref_size(u8),
+    #[allow(non_camel_case_types)]
     DW_OP_xderef_size(u8),
+    #[allow(non_camel_case_types)]
     DW_OP_nop,
+    #[allow(non_camel_case_types)]
     DW_OP_push_object_address,
+    #[allow(non_camel_case_types)]
     DW_OP_call2(u16),
+    #[allow(non_camel_case_types)]
     DW_OP_call4(u32),
+    #[allow(non_camel_case_types)]
     DW_OP_call_ref(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_form_tls_address,
+    #[allow(non_camel_case_types)]
     DW_OP_call_frame_cfa,
+    #[allow(non_camel_case_types)]
     DW_OP_bit_piece(u64, u64),
+    #[allow(non_camel_case_types)]
     DW_OP_implicit_value(Vec<u8>),
+    #[allow(non_camel_case_types)]
     DW_OP_stack_value,
+    #[allow(non_camel_case_types)]
     DW_OP_implicit_pointer(u64, i64),
+    #[allow(non_camel_case_types)]
     DW_OP_addrx(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_constx(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_entry_value(Vec<u8>),
+    #[allow(non_camel_case_types)]
     DW_OP_const_type(u64, Vec<u8>),
+    #[allow(non_camel_case_types)]
     DW_OP_regval_type(u64, u64),
+    #[allow(non_camel_case_types)]
     DW_OP_deref_type(u8, u64),
+    #[allow(non_camel_case_types)]
     DW_OP_xderef_type(u8, u64),
+    #[allow(non_camel_case_types)]
     DW_OP_convert(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_reinterpret(u64),
+    #[allow(non_camel_case_types)]
     DW_OP_lo_user,
+    #[allow(non_camel_case_types)]
     DW_OP_hi_user,
 }
 
@@ -2117,7 +2228,7 @@ impl<'a> Iterator for DwarfExprParser<'a> {
                     DwarfExprOp::DW_OP_const8u(decode_udword(&raw[(self.offset - 8)..])),
                 ))
             }
-            0xa => {
+            0xf => {
                 self.offset += 9;
                 Some((
                     saved_offset,
@@ -2446,8 +2557,11 @@ impl<'a> Iterator for DwarfExprParser<'a> {
 
 #[derive(Clone)]
 enum DwarfExprPCOp {
+    #[allow(non_camel_case_types)]
     go_next,
+    #[allow(non_camel_case_types)]
     skip(i64),
+    #[allow(non_camel_case_types)]
     stack_value,
 }
 
@@ -2802,7 +2916,7 @@ fn run_dwarf_expr_insn(
             stack.push(regs[v_u64 as usize]);
             Ok(DwarfExprPCOp::go_next)
         }
-        DwarfExprOp::DW_OP_fbreg(v_i64) => Err(Error::new(
+        DwarfExprOp::DW_OP_fbreg(_v_i64) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_breg is not implemented",
         )),
@@ -2812,7 +2926,7 @@ fn run_dwarf_expr_insn(
             });
             Ok(DwarfExprPCOp::go_next)
         }
-        DwarfExprOp::DW_OP_piece(v_u64) => Ok(DwarfExprPCOp::go_next),
+        DwarfExprOp::DW_OP_piece(_v_u64) => Ok(DwarfExprPCOp::go_next),
         DwarfExprOp::DW_OP_deref_size(v_u8) => {
             if let Some(addr) = stack.pop() {
                 let v = get_mem(addr, v_u8 as usize);
@@ -2822,7 +2936,7 @@ fn run_dwarf_expr_insn(
                 Err(Error::new(ErrorKind::Other, "stack is empty"))
             }
         }
-        DwarfExprOp::DW_OP_xderef_size(v_u8) => Err(Error::new(
+        DwarfExprOp::DW_OP_xderef_size(_v_u8) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_xderef_size is not implemented",
         )),
@@ -2831,15 +2945,15 @@ fn run_dwarf_expr_insn(
             ErrorKind::Unsupported,
             "DW_OP_push_object_address is not implemented",
         )),
-        DwarfExprOp::DW_OP_call2(v_u16) => Err(Error::new(
+        DwarfExprOp::DW_OP_call2(_v_u16) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_call2 is not implemented",
         )),
-        DwarfExprOp::DW_OP_call4(v_u32) => Err(Error::new(
+        DwarfExprOp::DW_OP_call4(_v_u32) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_call4 is not implemented",
         )),
-        DwarfExprOp::DW_OP_call_ref(v_u64) => Err(Error::new(
+        DwarfExprOp::DW_OP_call_ref(_v_u64) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_call_ref is not implemented",
         )),
@@ -2851,7 +2965,7 @@ fn run_dwarf_expr_insn(
             ErrorKind::Unsupported,
             "DW_OP_call_frame_cfa is not implemented",
         )),
-        DwarfExprOp::DW_OP_bit_piece(v_u64, v_u64_1) => Err(Error::new(
+        DwarfExprOp::DW_OP_bit_piece(_v_u64, _v_u64_1) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_bit_piece is not implemented",
         )),
@@ -2864,31 +2978,31 @@ fn run_dwarf_expr_insn(
             Ok(DwarfExprPCOp::go_next)
         }
         DwarfExprOp::DW_OP_stack_value => Ok(DwarfExprPCOp::stack_value),
-        DwarfExprOp::DW_OP_implicit_pointer(v_u64, v_i64) => Err(Error::new(
+        DwarfExprOp::DW_OP_implicit_pointer(_v_u64, _v_i64) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_implicit_pointer is not implemented",
         )),
-        DwarfExprOp::DW_OP_addrx(v_u64) => Err(Error::new(
+        DwarfExprOp::DW_OP_addrx(_v_u64) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_addrx is not implemented",
         )),
-        DwarfExprOp::DW_OP_constx(v_u64) => Err(Error::new(
+        DwarfExprOp::DW_OP_constx(_v_u64) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_constx is not implemented",
         )),
-        DwarfExprOp::DW_OP_entry_value(v_vu8) => Err(Error::new(
+        DwarfExprOp::DW_OP_entry_value(_v_vu8) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_constx is not implemented",
         )),
-        DwarfExprOp::DW_OP_const_type(v_u64, v_vu8) => Err(Error::new(
+        DwarfExprOp::DW_OP_const_type(_v_u64, _v_vu8) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_constx is not implemented",
         )),
-        DwarfExprOp::DW_OP_regval_type(v_u64, v_u64_1) => {
+        DwarfExprOp::DW_OP_regval_type(v_u64, _v_u64_1) => {
             stack.push(regs[v_u64 as usize]);
             Ok(DwarfExprPCOp::go_next)
         }
-        DwarfExprOp::DW_OP_deref_type(v_u8, v_u64) => {
+        DwarfExprOp::DW_OP_deref_type(v_u8, _v_u64) => {
             if let Some(addr) = stack.pop() {
                 let v = get_mem(addr, v_u8 as usize);
                 stack.push(v);
@@ -2897,15 +3011,15 @@ fn run_dwarf_expr_insn(
                 Err(Error::new(ErrorKind::Other, "stack is empty"))
             }
         }
-        DwarfExprOp::DW_OP_xderef_type(v_u8, v_u64) => Err(Error::new(
+        DwarfExprOp::DW_OP_xderef_type(_v_u8, _v_u64) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_xderef_type is not implemented",
         )),
-        DwarfExprOp::DW_OP_convert(v_u64) => Err(Error::new(
+        DwarfExprOp::DW_OP_convert(_v_u64) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_convert is not implemented",
         )),
-        DwarfExprOp::DW_OP_reinterpret(v_u64) => Err(Error::new(
+        DwarfExprOp::DW_OP_reinterpret(_v_u64) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_reinterpret is not implemented",
         )),
@@ -2946,7 +3060,7 @@ pub fn run_dwarf_expr(
         }
         rounds += 1;
 
-        let (offset, insn) = &insns[idx];
+        let (_offset, insn) = &insns[idx];
 
         match run_dwarf_expr_insn(insn.clone(), &mut stack, regs, get_mem) {
             Err(err) => {
@@ -3415,7 +3529,7 @@ mod tests {
         //  10 DW_OP_plus
         let expr = [119 as u8, 8, 128, 0, 63, 26, 59, 42, 51, 36, 34];
         let regs = [14 as u64; 32];
-        let get_mem = |addr: u64, sz: usize| -> u64 { 0 };
+        let get_mem = |_addr: u64, _sz: usize| -> u64 { 0 };
 
         let address_size = mem::size_of::<*const u8>();
         let v = run_dwarf_expr(&expr, 9, &regs, address_size, &get_mem);
