@@ -182,7 +182,7 @@ fn parse_aranges_cu(data: &[u8]) -> Result<(ArangesCU, usize), Error> {
 fn parse_aranges_elf_parser(parser: &Elf64Parser) -> Result<Vec<ArangesCU>, Error> {
     let debug_aranges_idx = parser.find_section(".debug_aranges")?;
 
-    let raw_data = parser.read_section_raw(debug_aranges_idx)?;
+    let raw_data = parser.read_section_raw_m(debug_aranges_idx)?;
 
     let mut pos = 0;
     let mut acus = Vec::<ArangesCU>::new();
@@ -1079,12 +1079,12 @@ fn parse_die_subprogram(
 /// Parse the addresses of symbols from the `.debug_info` section.
 fn parse_symbols(parser: &Elf64Parser) -> Result<Vec<SymbolInfo>, Error> {
     let info_sect_idx = parser.find_section(".debug_info")?;
-    let info_data = parser.read_section_raw(info_sect_idx)?;
+    let info_data = parser.read_section_raw_m(info_sect_idx)?;
     let abbrev_sect_idx = parser.find_section(".debug_abbrev")?;
-    let abbrev_data = parser.read_section_raw(abbrev_sect_idx)?;
+    let abbrev_data = parser.read_section_raw_m(abbrev_sect_idx)?;
     let units = debug_info::UnitIter::new(&info_data, &abbrev_data);
     let str_sect_idx = parser.find_section(".debug_str")?;
-    let str_data = parser.read_section_raw(str_sect_idx)?;
+    let str_data = parser.read_section_raw_m(str_sect_idx)?;
 
     let mut syms = Vec::<SymbolInfo>::new();
     for (uhdr, dieitr) in units {
@@ -1323,10 +1323,10 @@ mod tests {
         assert!(myself_found);
         assert!(parse_symbols_found);
         assert_eq!(
-            (test_parse_symbols as fn() as *const fn() as u64)
+            (test_parse_symbols as fn() as *const fn() as i64)
                 - (parse_symbols as fn(&Elf64Parser) -> Result<Vec<SymbolInfo>, Error>
-                    as *const fn(&Elf64Parser) as u64),
-            myself_addr - parse_symbols_addr
+                    as *const fn(&Elf64Parser) as i64),
+            myself_addr as i64 - parse_symbols_addr as i64
         );
     }
 }
