@@ -38,13 +38,14 @@ struct CacheHolder {
 
 struct CacheHolderOpts {
     line_number_info: bool,
+    debug_info_symbols: bool,
 }
 
 impl CacheHolder {
     fn new(opts: CacheHolderOpts) -> CacheHolder {
         CacheHolder {
             ksym: ksym::KSymCache::new(),
-            elf: elf_cache::ElfCache::new(opts.line_number_info),
+            elf: elf_cache::ElfCache::new(opts.line_number_info, opts.debug_info_symbols),
         }
     }
 
@@ -396,8 +397,15 @@ impl SymResolver for ElfResolver {
         }
     }
 
-    fn find_address(&self, _name: &str) -> Option<u64> {
-        None
+    fn find_address(&self, name: &str) -> Option<u64> {
+        let addr_res = match &self.backend {
+            ElfBackend::Dwarf(dwarf) => dwarf.find_address(name),
+            ElfBackend::Elf(parser) => parser.find_address(name),
+        };
+        match addr_res {
+            Ok(addr) => Some(addr - self.offset + self.loaded_address),
+            _ => None,
+        }
     }
 
     fn find_line_info(&self, addr: u64) -> Option<AddressLineInfo> {
@@ -723,6 +731,11 @@ pub enum SymbolizerFeature {
     /// By default, it is true.  However, if it is false,
     /// the symbolizer will not return the line number information.
     LineNumberInfo(bool), // default is true.
+    /// Switch on or off the feature of parsing symbols (subprogram) from DWARF.
+    ///
+    /// By default, it is false.  BlazeSym parses symbols from DWARF
+    /// only if the user of BlazeSym enables it.
+    DebugInfoSymbols(bool),
 }
 
 /// BlazeSymbolizer provides an interface to symbolize addresses with
@@ -744,6 +757,7 @@ impl BlazeSymbolizer {
     pub fn new() -> Result<BlazeSymbolizer, Error> {
         let opts = CacheHolderOpts {
             line_number_info: true,
+            debug_info_symbols: false,
         };
         let cache_holder = CacheHolder::new(opts);
 
@@ -759,16 +773,23 @@ impl BlazeSymbolizer {
     /// [`SymbolizerFeature`] to turn on or off some features.
     pub fn new_opt(features: &[SymbolizerFeature]) -> Result<BlazeSymbolizer, Error> {
         let mut line_number_info = true;
+        let mut debug_info_symbols = false;
 
         for feature in features {
             match feature {
                 SymbolizerFeature::LineNumberInfo(enabled) => {
                     line_number_info = *enabled;
                 }
+                SymbolizerFeature::DebugInfoSymbols(enabled) => {
+                    debug_info_symbols = *enabled;
+                }
             }
         }
 
-        let cache_holder = CacheHolder::new(CacheHolderOpts { line_number_info });
+        let cache_holder = CacheHolder::new(CacheHolderOpts {
+            line_number_info,
+            debug_info_symbols,
+        });
 
         Ok(BlazeSymbolizer {
             cache_holder,
@@ -776,11 +797,14 @@ impl BlazeSymbolizer {
         })
     }
 
-    /// Find the address of a symbol.
-    ///
-    /// Not implemented yet!
     #[allow(dead_code)]
-    fn find_address(&self, _cfg: &[SymbolSrcCfg], _name: &str) -> Option<u64> {
+    fn find_address(&self, sym_srcs: &[SymbolSrcCfg], name: &str) -> Option<u64> {
+        let resolver_map = ResolverMap::new(sym_srcs, &self.cache_holder).ok()?;
+        for (_, resolver) in resolver_map.resolvers {
+            if let Some(addr) = resolver.find_address(name) {
+                return Some(addr);
+            }
+        }
         None
     }
 
@@ -789,6 +813,35 @@ impl BlazeSymbolizer {
         let resolver_map = ResolverMap::new(sym_srcs, &self.cache_holder).ok()?;
         let resolver = resolver_map.find_resolver(addr)?;
         resolver.find_line_info(addr)
+    }
+
+    /// Find the addresses of a list of symbol names.
+    ///
+    /// Find the addresses of a list of symbol names from the sources
+    /// of symbols and debug info described by `sym_srcs`.
+    ///
+    /// # Arguments
+    ///
+    /// * `sym_srcs` - A list of symbol and debug sources.
+    /// * `names` - A list of symbol names.
+    pub fn find_addresses(&self, sym_srcs: &[SymbolSrcCfg], names: &[&str]) -> Vec<Vec<u64>> {
+        let resolver_map = match ResolverMap::new(sym_srcs, &self.cache_holder) {
+            Ok(map) => map,
+            _ => {
+                return vec![];
+            }
+        };
+        let mut sym_addrs = vec![];
+        for name in names {
+            let mut addrs = vec![];
+            for (_, resolver) in &resolver_map.resolvers {
+                if let Some(addr) = resolver.find_address(name) {
+                    addrs.push(addr);
+                }
+            }
+            sym_addrs.push(addrs);
+        }
+        sym_addrs
     }
 
     /// Symbolize a list of addresses.
@@ -975,6 +1028,11 @@ pub enum blazesym_feature_name {
     /// Users should set `blazesym_feature.params.enable` to enabe or
     /// disable the feature,
     LINE_NUMBER_INFO,
+    /// Enable or disable loading symbols from DWARF.
+    ///
+    /// Users should `blazesym_feature.params.enable` to enable or
+    /// disable the feature.  This feature is disabled by default.
+    DEBUG_INFO_SYMBOLS,
 }
 
 #[repr(C)]
@@ -1149,6 +1207,9 @@ pub unsafe extern "C" fn blazesym_new_opts(
                 blazesym_feature_name::LINE_NUMBER_INFO => {
                     SymbolizerFeature::LineNumberInfo(x.params.enable)
                 }
+                blazesym_feature_name::DEBUG_INFO_SYMBOLS => {
+                    SymbolizerFeature::DebugInfoSymbols(x.params.enable)
+                }
             }
         })
         .collect();
@@ -1318,6 +1379,108 @@ pub unsafe extern "C" fn blazesym_result_free(results: *const blazesym_result) {
     dealloc(raw_buf_with_sz, Layout::from_size_align(sz, 8).unwrap());
 }
 
+unsafe fn convert_addresses_to_c(addresses: Vec<Vec<u64>>) -> *const *const u64 {
+    let mut addr_space_cnt = 0;
+
+    for sym_addrs in &addresses {
+        addr_space_cnt += sym_addrs.len() + 1;
+    }
+
+    let array_sz = ((mem::size_of::<*const u64>() * addresses.len() + mem::size_of::<u64>() - 1)
+        % mem::size_of::<u64>())
+        * mem::size_of::<u64>();
+    let buf_size = array_sz + mem::size_of::<u64>() * addr_space_cnt;
+    let raw_buf_with_sz =
+        alloc(Layout::from_size_align(buf_size + mem::size_of::<u64>(), 8).unwrap());
+
+    *(raw_buf_with_sz as *mut u64) = buf_size as u64;
+
+    let raw_buf = raw_buf_with_sz.add(mem::size_of::<u64>());
+    let mut addrs_ptr = raw_buf as *mut *mut u64;
+    let mut addr_ptr = raw_buf.add(array_sz) as *mut u64;
+
+    for sym_addrs in addresses {
+        *addrs_ptr = addr_ptr;
+        for addr in sym_addrs {
+            *addr_ptr = addr;
+            addr_ptr = addr_ptr.add(1);
+        }
+        *addr_ptr = 0;
+        addr_ptr = addr_ptr.add(1);
+        addrs_ptr = addrs_ptr.add(1);
+    }
+
+    raw_buf as *const *const u64
+}
+
+/// Find the addresses of a list of symbols.
+///
+/// Return an array of `*const u64` with the same size as the
+/// input names.  The caller should free the returned array by calling
+/// [`blazesym_addresses_free()`].
+///
+/// Every name in the input name list may have more than one address.
+/// The respective entry in the returned array is an array containing
+/// all addresses and ended with a null (0x0).
+///
+/// # Safety
+///
+/// The returned pointer should be free by [`blazesym_address_free()`].
+///
+#[no_mangle]
+pub unsafe extern "C" fn blazesym_find_addresses(
+    symbolizer: *mut blazesym,
+    sym_srcs: *const sym_src_cfg,
+    sym_srcs_len: u32,
+    names: *const *const c_char,
+    name_cnt: usize,
+) -> *const *const u64 {
+    let sym_srcs_rs = if let Some(sym_srcs_rs) = symbolsrccfg_to_rust(sym_srcs, sym_srcs_len) {
+        sym_srcs_rs
+    } else {
+        #[cfg(debug_assertions)]
+        eprintln!("Fail to transform configurations of symbolizer from C to Rust");
+        return ptr::null_mut();
+    };
+
+    let symbolizer = &*(*symbolizer).symbolizer;
+
+    let mut names_cstr = vec![];
+    for i in 0..name_cnt {
+        let name_c = *names.add(i);
+        let name_r = CStr::from_ptr(name_c);
+        names_cstr.push(name_r);
+    }
+    let addresses = {
+        let mut names_r = vec![];
+        for i in 0..name_cnt {
+            names_r.push(names_cstr[i].to_str().unwrap());
+        }
+        symbolizer.find_addresses(&sym_srcs_rs, &names_r)
+    };
+
+    convert_addresses_to_c(addresses)
+}
+
+/// Free an array returned by blazesym_find_addresses.
+///
+/// # Safety
+///
+/// The pointer must be returned by [`blazesym_find_addresses()`].
+///
+#[no_mangle]
+pub unsafe extern "C" fn blazesym_addresses_free(addresses: *const *const u64) {
+    if addresses.is_null() {
+        #[cfg(debug_assertions)]
+        eprintln!("blazesym_addresses_free(null)");
+        return;
+    }
+
+    let raw_buf_with_sz = (addresses as *mut u8).offset(-(mem::size_of::<u64>() as isize));
+    let sz = *(raw_buf_with_sz as *mut u64) as usize + mem::size_of::<u64>();
+    dealloc(raw_buf_with_sz, Layout::from_size_align(sz, 8).unwrap());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1351,6 +1514,7 @@ mod tests {
         let cfg = vec![SymbolSrcCfg::Process { pid: None }];
         let cache_holder = CacheHolder::new(CacheHolderOpts {
             line_number_info: true,
+            debug_info_symbols: false,
         });
         let resolver_map = ResolverMap::new(&cfg, &cache_holder);
         assert!(resolver_map.is_ok());
@@ -1382,6 +1546,7 @@ mod tests {
         ];
         let cache_holder = CacheHolder::new(CacheHolderOpts {
             line_number_info: true,
+            debug_info_symbols: false,
         });
         let resolver_map = ResolverMap::new(&srcs, &cache_holder);
         assert!(resolver_map.is_ok());
@@ -1414,6 +1579,7 @@ mod tests {
         }];
         let cache_holder = CacheHolder::new(CacheHolderOpts {
             line_number_info: true,
+            debug_info_symbols: false,
         });
         let resolver_map = ResolverMap::new(&srcs, &cache_holder);
         assert!(resolver_map.is_ok());
