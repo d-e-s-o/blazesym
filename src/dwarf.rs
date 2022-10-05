@@ -880,6 +880,7 @@ pub struct DwarfResolver {
     parser: Rc<Elf64Parser>,
     debug_line_cus: Vec<DebugLineCU>,
     addr_to_dlcu: Vec<(u64, u32)>,
+    debug_info_syms: Vec<SymbolInfo>,
 }
 
 impl DwarfResolver {
@@ -891,9 +892,13 @@ impl DwarfResolver {
         parser: Rc<Elf64Parser>,
         addresses: &[u64],
         line_number_info: bool,
+        debug_info_symbols: bool,
     ) -> Result<DwarfResolver, Error> {
         let debug_line_cus: Vec<DebugLineCU> = if line_number_info {
-            parse_debug_line_elf_parser(&*parser, addresses)?
+            match parse_debug_line_elf_parser(&*parser, addresses) {
+                Ok(dlcus) => dlcus,
+                Err(_) => vec![],
+            }
         } else {
             vec![]
         };
@@ -908,10 +913,23 @@ impl DwarfResolver {
         }
         addr_to_dlcu.sort_by_key(|v| v.0);
 
+        let debug_info_syms = if debug_info_symbols {
+            match parse_symbols(&parser) {
+                Ok(mut syms) => {
+                    syms.sort_by_key(|v: &SymbolInfo| -> String { v.name.clone() });
+                    syms
+                }
+                Err(_) => Vec::<SymbolInfo>::new(),
+            }
+        } else {
+            Vec::<SymbolInfo>::new()
+        };
+
         Ok(DwarfResolver {
             parser,
             debug_line_cus,
             addr_to_dlcu,
+            debug_info_syms,
         })
     }
 
@@ -930,17 +948,27 @@ impl DwarfResolver {
         filename: &str,
         addresses: &[u64],
         line_number_info: bool,
+        debug_info_symbols: bool,
     ) -> Result<DwarfResolver, Error> {
         let parser = Elf64Parser::open(filename)?;
-        Self::from_parser_for_addresses(Rc::new(parser), addresses, line_number_info)
+        Self::from_parser_for_addresses(
+            Rc::new(parser),
+            addresses,
+            line_number_info,
+            debug_info_symbols,
+        )
     }
 
     /// Open a binary to load and parse .debug_line for later uses.
     ///
     /// `filename` is the name of an ELF binary/or shared object that
     /// has .debug_line section.
-    pub fn open(filename: &str, debug_line_info: bool) -> Result<DwarfResolver, Error> {
-        Self::open_for_addresses(filename, &[], debug_line_info)
+    pub fn open(
+        filename: &str,
+        debug_line_info: bool,
+        debug_info_symbols: bool,
+    ) -> Result<DwarfResolver, Error> {
+        Self::open_for_addresses(filename, &[], debug_line_info, debug_info_symbols)
     }
 
     fn find_dlcu_index(&self, address: u64) -> Option<usize> {
@@ -974,6 +1002,17 @@ impl DwarfResolver {
         Some((String::from(dir), String::from(file), line_no))
     }
 
+    /// Find the address of a symbol from DWARF.
+    pub fn find_address(&self, name: &str) -> Result<u64, Error> {
+        match self
+            .debug_info_syms
+            .binary_search_by_key(&name.to_string(), |v| v.name.clone())
+        {
+            Ok(idx) => Ok(self.debug_info_syms[idx].address),
+            Err(_) => self.parser.find_address(name),
+        }
+    }
+
     #[cfg(test)]
     fn pick_address_for_test(&self) -> (u64, &str, &str, usize) {
         let (addr, idx) = self.addr_to_dlcu[self.addr_to_dlcu.len() / 3];
@@ -981,6 +1020,103 @@ impl DwarfResolver {
         let (dir, file, line) = dlcu.stringify_row(0).unwrap();
         (addr, dir, file, line)
     }
+}
+
+struct SymbolInfo {
+    name: String,
+    address: u64,
+}
+
+fn parse_die_subprogram(
+    die: &mut debug_info::DIE<'_>,
+    str_data: &[u8],
+) -> Result<Option<SymbolInfo>, Error> {
+    let mut addr: Option<u64> = None;
+    let mut name_str: Option<&str> = None;
+    for (name, _form, _opt, value) in die {
+        match name {
+            constants::DW_AT_linkage_name | constants::DW_AT_name => {
+                if name_str.is_some() {
+                    continue;
+                }
+                match value {
+                    debug_info::AttrValue::Unsigned(str_off) => {
+                        match extract_string(&str_data, str_off as usize) {
+                            Some(s) => {
+                                name_str = Some(s);
+                            }
+                            _ => {
+                                return Err(Error::new(
+                                    ErrorKind::InvalidData,
+                                    "fail to extract the name of a subprogram",
+                                ));
+                            }
+                        }
+                    }
+                    debug_info::AttrValue::String(s) => {
+                        name_str = Some(s);
+                    }
+                    _ => {
+                        return Err(Error::new(
+                            ErrorKind::InvalidData,
+                            "fail to parse DW_AT_linkage_name {}",
+                        ));
+                    }
+                }
+            }
+            constants::DW_AT_lo_pc => match value {
+                debug_info::AttrValue::Unsigned(pc) => {
+                    addr = Some(pc);
+                }
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "fail to parse DW_AT_lo_pc",
+                    ));
+                }
+            },
+            _ => {}
+        }
+    }
+
+    if addr.is_some() && name_str.is_some() {
+        Ok(Some(SymbolInfo {
+            name: name_str.unwrap().to_string(),
+            address: addr.unwrap(),
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Parse the addresses of symbols from the `.debug_info` section.
+fn parse_symbols(parser: &Elf64Parser) -> Result<Vec<SymbolInfo>, Error> {
+    let info_sect_idx = parser.find_section(".debug_info")?;
+    let info_data = parser.read_section_raw(info_sect_idx)?;
+    let abbrev_sect_idx = parser.find_section(".debug_abbrev")?;
+    let abbrev_data = parser.read_section_raw(abbrev_sect_idx)?;
+    let units = debug_info::UnitIter::new(&info_data, &abbrev_data);
+    let str_sect_idx = parser.find_section(".debug_str")?;
+    let str_data = parser.read_section_raw(str_sect_idx)?;
+
+    let mut syms = Vec::<SymbolInfo>::new();
+    for (uhdr, dieitr) in units {
+        match uhdr {
+            debug_info::UnitHeader::CompileV4(_) => {
+                for mut die in dieitr {
+                    if die.tag == constants::DW_TAG_subprogram {
+                        let syminfo = parse_die_subprogram(&mut die, &str_data)?;
+                        if syminfo.is_some() {
+                            syms.push(syminfo.unwrap());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(syms)
 }
 
 #[cfg(test)]
@@ -1155,7 +1291,7 @@ mod tests {
     fn test_dwarf_resolver() {
         let args: Vec<String> = env::args().collect();
         let bin_name = &args[0];
-        let resolver_r = DwarfResolver::open(bin_name, true);
+        let resolver_r = DwarfResolver::open(bin_name, true, false);
         assert!(resolver_r.is_ok());
         let resolver = resolver_r.unwrap();
         let (addr, dir, file, line) = resolver.pick_address_for_test();
@@ -1167,5 +1303,43 @@ mod tests {
         assert_eq!(dir, dir_ret);
         assert_eq!(file, file_ret);
         assert_eq!(line, line_ret);
+    }
+
+    #[test]
+    fn test_parse_symbols() {
+        let args: Vec<String> = env::args().collect();
+        let bin_name = &args[0];
+        let parser_r = Elf64Parser::open(bin_name);
+        assert!(parser_r.is_ok());
+        let parser = parser_r.unwrap();
+
+        let result = parse_symbols(&parser);
+        assert!(result.is_ok());
+        let syms = result.unwrap();
+
+        let mut myself_found = false;
+        let mut myself_addr: u64 = 0;
+        let mut parse_symbols_found = false;
+        let mut parse_symbols_addr: u64 = 0;
+        for sym in syms {
+            if sym
+                .name
+                .starts_with("_ZN8blazesym5dwarf5tests18test_parse_symbols17h")
+            {
+                myself_found = true;
+                myself_addr = sym.address;
+            } else if sym.name.starts_with("_ZN8blazesym5dwarf13parse_symbols") {
+                parse_symbols_found = true;
+                parse_symbols_addr = sym.address;
+            }
+        }
+        assert!(myself_found);
+        assert!(parse_symbols_found);
+        assert_eq!(
+            (test_parse_symbols as fn() as *const fn() as u64)
+                - (parse_symbols as fn(&Elf64Parser) -> Result<Vec<SymbolInfo>, Error>
+                    as *const fn(&Elf64Parser) as u64),
+            myself_addr - parse_symbols_addr
+        );
     }
 }

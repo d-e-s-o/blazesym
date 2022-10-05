@@ -75,7 +75,7 @@ impl ElfCacheEntry {
         let stat = fstat(file.as_raw_fd())?;
         let parser = Rc::new(Elf64Parser::open_file(file)?);
         let backend = if let Ok(dwarf) =
-            DwarfResolver::from_parser_for_addresses(Rc::clone(&parser), &[], line_number_info)
+            DwarfResolver::from_parser_for_addresses(Rc::clone(&parser), &[], line_number_info, false)
         {
             ElfBackend::Dwarf(Rc::new(dwarf))
         } else {
