@@ -864,7 +864,7 @@ fn parse_debug_line_elf(filename: &str) -> Result<Vec<DebugLineCU>, Error> {
 }
 
 #[derive(Clone, Debug)]
-enum CFARule {
+pub enum CFARule {
     #[allow(non_camel_case_types)]
     reg_offset(u64, i64),
     #[allow(non_camel_case_types)]
@@ -1249,12 +1249,7 @@ impl CallFrameParser {
         Ok(())
     }
 
-    fn parse_call_frame_fde(
-        &self,
-        raw: &[u8],
-        fde: &mut CFFDE,
-        cie: &CFCIE,
-    ) -> Result<(), Error> {
+    fn parse_call_frame_fde(&self, raw: &[u8], fde: &mut CFFDE, cie: &CFCIE) -> Result<(), Error> {
         let mut offset: usize = 0;
 
         let ensure = |offset, x| {
@@ -2567,9 +2562,12 @@ enum DwarfExprPCOp {
 
 fn run_dwarf_expr_insn(
     insn: DwarfExprOp,
+    fb_expr: &[u8],
     stack: &mut Vec<u64>,
     regs: &[u64],
+    address_size: usize,
     get_mem: &dyn Fn(u64, usize) -> u64,
+    cfa: &CFARule,
 ) -> Result<DwarfExprPCOp, Error> {
     match insn {
         DwarfExprOp::DW_OP_addr(v_u64) => {
@@ -2916,10 +2914,11 @@ fn run_dwarf_expr_insn(
             stack.push(regs[v_u64 as usize]);
             Ok(DwarfExprPCOp::go_next)
         }
-        DwarfExprOp::DW_OP_fbreg(_v_i64) => Err(Error::new(
-            ErrorKind::Unsupported,
-            "DW_OP_breg is not implemented",
-        )),
+        DwarfExprOp::DW_OP_fbreg(v_i64) => {
+            let value = run_dwarf_expr(fb_expr, &[], 32, regs, address_size, get_mem, cfa)?;
+            stack.push((value as i128 + v_i64 as i128) as u64);
+            Ok(DwarfExprPCOp::go_next)
+        }
         DwarfExprOp::DW_OP_bregx(v_u64, v_i64) => {
             stack.push(unsafe {
                 mem::transmute::<i64, u64>(mem::transmute::<u64, i64>(regs[v_u64 as usize]) + v_i64)
@@ -2961,10 +2960,19 @@ fn run_dwarf_expr_insn(
             ErrorKind::Unsupported,
             "DW_OP_form_tls_address is not implemented",
         )),
-        DwarfExprOp::DW_OP_call_frame_cfa => Err(Error::new(
-            ErrorKind::Unsupported,
-            "DW_OP_call_frame_cfa is not implemented",
-        )),
+        DwarfExprOp::DW_OP_call_frame_cfa => {
+            match cfa {
+                CFARule::reg_offset(reg, off) => {
+                    stack.push((*reg as i128 + *off as i128) as u64);
+                }
+                CFARule::expression(cfa_expr) => {
+                    let value =
+                        run_dwarf_expr(&cfa_expr, &[], 32, regs, address_size, get_mem, cfa)?;
+                    stack.push(value);
+                }
+            }
+            Ok(DwarfExprPCOp::go_next)
+        }
         DwarfExprOp::DW_OP_bit_piece(_v_u64, _v_u64_1) => Err(Error::new(
             ErrorKind::Unsupported,
             "DW_OP_bit_piece is not implemented",
@@ -3044,10 +3052,12 @@ fn run_dwarf_expr_insn(
 /// * `get_mem` - The call funciton to fetach the content of a given address.
 pub fn run_dwarf_expr(
     expr: &[u8],
+    fb_expr: &[u8],
     max_rounds: usize,
     regs: &[u64],
     address_size: usize,
     get_mem: &dyn Fn(u64, usize) -> u64,
+    cfa: &CFARule,
 ) -> Result<u64, Error> {
     let insns: Vec<(u64, DwarfExprOp)> = DwarfExprParser::from(expr, address_size).collect();
     let mut idx = 0;
@@ -3062,7 +3072,15 @@ pub fn run_dwarf_expr(
 
         let (_offset, insn) = &insns[idx];
 
-        match run_dwarf_expr_insn(insn.clone(), &mut stack, regs, get_mem) {
+        match run_dwarf_expr_insn(
+            insn.clone(),
+            fb_expr,
+            &mut stack,
+            regs,
+            address_size,
+            get_mem,
+            cfa,
+        ) {
             Err(err) => {
                 return Err(err);
             }
@@ -3532,12 +3550,28 @@ mod tests {
         let get_mem = |_addr: u64, _sz: usize| -> u64 { 0 };
 
         let address_size = mem::size_of::<*const u8>();
-        let v = run_dwarf_expr(&expr, 9, &regs, address_size, &get_mem);
+        let v = run_dwarf_expr(
+            &expr,
+            &[],
+            9,
+            &regs,
+            address_size,
+            &get_mem,
+            &CFARule::expression(vec![]),
+        );
         assert!(v.is_ok());
         assert!(v.unwrap() == 30);
 
         // max_rounds is too small.
-        let v = run_dwarf_expr(&expr, 8, &regs, address_size, &get_mem);
+        let v = run_dwarf_expr(
+            &expr,
+            &[],
+            8,
+            &regs,
+            address_size,
+            &get_mem,
+            &CFARule::expression(vec![]),
+        );
         assert!(v.is_err());
     }
 }
