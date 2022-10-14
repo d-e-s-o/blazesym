@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Error, ErrorKind};
+use std::sync::{Condvar, Mutex};
 
 use regex::Regex;
 
@@ -184,4 +185,55 @@ pub fn parse_maps(pid: u32) -> Result<Vec<LinuxMapsEntry>, Error> {
     }
 
     Ok(entries)
+}
+
+struct SyncQueueSharedState<T> {
+    shutdown: bool,
+    data: Vec<T>,
+}
+
+pub struct SyncQueue<T> {
+    state: Mutex<SyncQueueSharedState<T>>,
+    cond: Condvar,
+}
+
+impl<T> SyncQueue<T> {
+    pub fn new() -> Self {
+        SyncQueue {
+            state: Mutex::new(SyncQueueSharedState {
+                shutdown: false,
+                data: vec![],
+            }),
+            cond: Condvar::new(),
+        }
+    }
+
+    pub fn enqueue(&mut self, v: T) {
+        let mut state = self.state.lock().unwrap();
+        state.data.push(v);
+        self.cond.notify_one();
+    }
+
+    pub fn dequeue(&mut self) -> Option<T> {
+        let mut state = self.state.lock().unwrap();
+        while state.data.len() == 0 {
+            if state.shutdown {
+                return None;
+            }
+            state = self.cond.wait(state).unwrap();
+        }
+        Some(state.data.pop().unwrap())
+    }
+
+    #[allow(dead_code)]
+    pub fn has_shutdown(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        state.shutdown
+    }
+
+    pub fn shutdown(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        state.shutdown = true;
+        self.cond.notify_all();
+    }
 }

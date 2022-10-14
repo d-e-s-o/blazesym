@@ -797,6 +797,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     fn test_elf64_symtab() {
         let args: Vec<String> = env::args().collect();
         let bin_name = &args[0];
@@ -813,6 +814,7 @@ mod tests {
         assert_eq!(sym_name_ret, sym_name);
     }
     #[test]
+    #[cfg(debug_assertions)]
     fn test_elf64_find_address() {
         let args: Vec<String> = env::args().collect();
         let bin_name = &args[0];

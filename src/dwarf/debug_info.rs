@@ -19,7 +19,10 @@
 use super::constants::*;
 use super::{decode_leb128_128, decode_leb128_128_s, decode_udword, decode_uhalf, decode_uword};
 use crate::tools::extract_string;
+use std::cell::RefCell;
+use std::io::{Error, ErrorKind};
 use std::iter::Iterator;
+use std::mem;
 
 fn decode_3bytes_usigned(data: &[u8]) -> u32 {
     data[0] as u32 | ((data[1] as u32) << 8) | ((data[2] as u32) << 16)
@@ -85,11 +88,23 @@ impl UnitHeader {
     }
 }
 
+#[derive(Clone)]
+pub struct AbbrevAttr {
+    name: u8,
+    form: u8,
+    opt: u128,
+}
+
+struct AbbrevState {
+    attr_offset: usize,
+    parsed_attrs: Vec<AbbrevAttr>,
+}
+
 /// An abbreviation.
 ///
 /// An abbreviation comprises a list of attributes and the formats of
 /// their values.
-struct Abbrev<'a> {
+pub struct Abbrev<'a> {
     /// The index to the abbreviation table.
     pub abbrev_code: u32,
     /// The type of the abbreviation.
@@ -100,6 +115,63 @@ struct Abbrev<'a> {
     pub has_children: bool,
     /// Raw data of attributes.
     pub attrs: &'a [u8],
+
+    /// (attrs_offset, parsed_values)
+    parsed_attrs: RefCell<AbbrevState>,
+}
+
+impl<'a> Abbrev<'a> {
+    pub fn attrs_iter<'b>(&'b self) -> AbbrevAttrIter<'b>
+    where
+        'a: 'b,
+    {
+        AbbrevAttrIter {
+            abbrev: self,
+            idx: 0,
+        }
+    }
+
+    fn assure_parsed_attr(&self, idx: usize) {
+        let mut parsed_attrs = self.parsed_attrs.borrow_mut();
+        while parsed_attrs.attr_offset < self.attrs.len() && idx <= parsed_attrs.parsed_attrs.len()
+        {
+            if let Some((name, form, opt, bytes)) =
+                parse_abbrev_attr(&self.attrs[parsed_attrs.attr_offset..])
+            {
+                parsed_attrs
+                    .parsed_attrs
+                    .push(AbbrevAttr { name, form, opt });
+                parsed_attrs.attr_offset += bytes;
+            } else {
+                // Invalid attribute data??
+                break;
+            }
+        }
+    }
+}
+
+unsafe impl<'a> Send for Abbrev<'a> {}
+unsafe impl<'a> Sync for Abbrev<'a> {}
+
+pub struct AbbrevAttrIter<'a> {
+    abbrev: &'a Abbrev<'a>,
+    idx: usize,
+}
+
+impl<'a> Iterator for AbbrevAttrIter<'a> {
+    type Item = AbbrevAttr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.abbrev.assure_parsed_attr(self.idx);
+        let parsed_attrs = self.abbrev.parsed_attrs.borrow();
+        let parsed_values = &parsed_attrs.parsed_attrs;
+        if self.idx < parsed_values.len() {
+            let idx = self.idx;
+            self.idx += 1;
+            return Some(parsed_values[idx].clone());
+        }
+        None
+    }
 }
 
 /// Parse an abbreviation from a buffer.
@@ -112,6 +184,10 @@ fn parse_abbrev<'a>(data: &'a [u8]) -> Option<(Abbrev<'a>, usize)> {
                 tag: 0,
                 has_children: false,
                 attrs: &[],
+                parsed_attrs: RefCell::new(AbbrevState {
+                    attr_offset: 0,
+                    parsed_attrs: vec![],
+                }),
             },
             1,
         ));
@@ -144,6 +220,10 @@ fn parse_abbrev<'a>(data: &'a [u8]) -> Option<(Abbrev<'a>, usize)> {
             tag: tag as u8,
             has_children,
             attrs: &data[start_pos..pos],
+            parsed_attrs: RefCell::new(AbbrevState {
+                attr_offset: 0,
+                parsed_attrs: vec![],
+            }),
         },
         pos,
     ))
@@ -749,8 +829,12 @@ fn parse_unit_header(data: &[u8]) -> Option<UnitHeader> {
 pub struct DIE<'a> {
     pub tag: u8,
     pub offset: u64,
-    attrs: Vec<(u8, u8, u128, AttrValue<'a>)>,
-    idx: usize,
+    pub abbrev: Option<&'a Abbrev<'a>>,
+    abbrev_attrs: Option<AbbrevAttrIter<'a>>,
+    data: &'a [u8],
+    dieiter: &'a mut DIEIter<'a>,
+    reading_offset: usize,
+    done: bool,
 }
 
 impl<'a> Iterator for DIE<'a> {
@@ -758,12 +842,43 @@ impl<'a> Iterator for DIE<'a> {
     type Item = (u8, u8, u128, AttrValue<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.idx >= self.attrs.len() {
+        if self.done {
             return None;
         }
+        if self.abbrev.is_none() {
+            return None;
+        }
+        assert!(
+            self.abbrev_attrs.is_some(),
+            "Fail to get the iterator of abbrev attributes"
+        );
 
-        self.idx += 1;
-        Some(self.attrs[self.idx - 1].clone())
+        if let Some(AbbrevAttr { name, form, opt }) = self.abbrev_attrs.as_mut().unwrap().next() {
+            #[cfg(debug)]
+            if form == 0 {
+                assert_eq!(self.abbrev_off, abbrev.attrs.len());
+            }
+            if form == 0 {
+                self.dieiter
+                    .die_finish_reading(self.reading_offset as usize);
+                self.done = true;
+                return None;
+            }
+
+            let (value, bytes) = extract_attr_value(
+                &self.data[self.reading_offset..],
+                form,
+                self.dieiter.dwarf_sz,
+                self.dieiter.addr_sz,
+            )?;
+            self.reading_offset += bytes as usize;
+            return Some((name, form, opt, value));
+        } else {
+            self.dieiter
+                .die_finish_reading(self.reading_offset as usize);
+            self.done = true;
+        }
+        None
     }
 }
 
@@ -775,13 +890,53 @@ pub struct DIEIter<'a> {
     off: usize,
     cur_depth: usize,
     abbrevs: Vec<Abbrev<'a>>,
+    abbrev: Option<&'a Abbrev<'a>>,
+    die_reading_done: bool,
     done: bool,
+}
+
+impl<'a> DIEIter<'a> {
+    pub fn die_finish_reading(&mut self, size: usize) {
+        self.die_reading_done = true;
+        self.off += size;
+    }
+
+    pub fn seek_to_sibling(&mut self, off: usize) {
+        self.off = off;
+        self.cur_depth -= 1;
+        self.die_reading_done = true;
+    }
+
+    fn exhaust_die(&mut self) -> Result<(), Error> {
+        assert!(
+            !self.die_reading_done,
+            "DIE should not have been exhausted!"
+        );
+        let abbrev = *self.abbrev.as_ref().unwrap();
+        for AbbrevAttr { form, .. } in abbrev.attrs_iter() {
+            if form == 0 {
+                continue;
+            }
+            let (_value, bytes) =
+                extract_attr_value(&self.data[self.off..], form, self.dwarf_sz, self.addr_sz)
+                    .ok_or(Error::new(
+                        ErrorKind::InvalidData,
+                        "fail to parse attribute values",
+                    ))?;
+            self.off += bytes;
+        }
+        self.die_reading_done = true;
+        Ok(())
+    }
 }
 
 impl<'a> Iterator for DIEIter<'a> {
     type Item = DIE<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if !self.die_reading_done {
+            self.exhaust_die().unwrap();
+        }
         if self.done {
             return None;
         }
@@ -797,39 +952,31 @@ impl<'a> Iterator for DIEIter<'a> {
             return Some(DIE {
                 tag: 0,
                 offset: saved_off as u64,
-                attrs: vec![],
-                idx: 0,
+                abbrev: None,
+                abbrev_attrs: None,
+                data: &self.data[self.off..],
+                dieiter: unsafe { mem::transmute(self) },
+                reading_offset: 0,
+                done: false,
             });
         }
 
-        let abbrev = &self.abbrevs[abbrev_idx as usize - 1];
+        let abbrev = unsafe { mem::transmute(&self.abbrevs[abbrev_idx as usize - 1]) };
+        self.abbrev = Some(abbrev);
         if abbrev.has_children {
             self.cur_depth += 1;
         }
 
-        let mut attr_off = 0;
-        let attrs = abbrev.attrs;
-        let mut values = Vec::<(u8, u8, u128, AttrValue<'a>)>::new();
-        while attr_off < attrs.len() {
-            let (name, form, opt, bytes) = parse_abbrev_attr(&attrs[attr_off..])?;
-            attr_off += bytes;
-            #[cfg(debug)]
-            if form == 0 {
-                assert_eq!(attr_off, attrs.len());
-            }
-            if form != 0 {
-                let (value, bytes) =
-                    extract_attr_value(&self.data[self.off..], form, self.dwarf_sz, self.addr_sz)?;
-                values.push((name, form, opt, value));
-                self.off += bytes;
-            }
-        }
-
+        self.die_reading_done = false;
         Some(DIE {
             tag: abbrev.tag,
             offset: saved_off as u64,
-            attrs: values,
-            idx: 0,
+            abbrev: Some(abbrev),
+            abbrev_attrs: Some(abbrev.attrs_iter()),
+            data: &self.data[self.off..],
+            dieiter: unsafe { mem::transmute(self) },
+            reading_offset: 0,
+            done: false,
         })
     }
 }
@@ -838,7 +985,7 @@ impl<'a> Iterator for DIEIter<'a> {
 pub struct UnitIter<'a> {
     data: &'a [u8],
     abbrev_data: &'a [u8],
-    off: usize,
+    pub off: usize,
 }
 
 impl<'a> UnitIter<'a> {
@@ -875,6 +1022,8 @@ impl<'a> Iterator for UnitIter<'a> {
                         off: 0,
                         cur_depth: 0,
                         abbrevs,
+                        abbrev: None,
+                        die_reading_done: true,
                         done: false,
                     },
                 ))
@@ -893,6 +1042,8 @@ impl<'a> Iterator for UnitIter<'a> {
                         off: 0,
                         cur_depth: 0,
                         abbrevs,
+                        abbrev: None,
+                        die_reading_done: true,
                         done: false,
                     },
                 ))
@@ -1137,14 +1288,14 @@ mod tests {
 
     #[test]
     fn test_unititer() {
-        let iter = UnitIter::new(&test_info, &test_abbrev);
+        let mut iter = UnitIter::new(&test_info, &test_abbrev);
         let mut cnt = 0;
         let mut die_cnt = 0;
         let mut attr_cnt = 0;
         let mut subprog_cnt = 0;
-        for (_uh, dieiter) in iter {
+        for (_uh, mut dieiter) in iter {
             cnt += 1;
-            for die in dieiter {
+            for mut die in dieiter {
                 die_cnt += 1;
                 if die.tag == DW_TAG_subprogram {
                     subprog_cnt += 1;

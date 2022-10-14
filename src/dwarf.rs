@@ -1,12 +1,17 @@
 use super::elf::Elf64Parser;
-use super::tools::{extract_string, search_address_key};
+use super::tools::{extract_string, search_address_key, SyncQueue};
 
 use std::io::{Error, ErrorKind};
+use std::iter::Iterator;
 use std::mem;
 use std::rc::Rc;
 
 #[cfg(test)]
 use std::env;
+
+use std::clone::Clone;
+use std::sync::mpsc;
+use std::thread;
 
 mod constants;
 mod debug_info;
@@ -914,7 +919,7 @@ impl DwarfResolver {
         addr_to_dlcu.sort_by_key(|v| v.0);
 
         let debug_info_syms = if debug_info_symbols {
-            match parse_symbols(&parser) {
+            match debug_info_parse_symbols(&parser, None, 1) {
                 Ok(mut syms) => {
                     syms.sort_by_key(|v: &SymbolInfo| -> String { v.name.clone() });
                     syms
@@ -1022,9 +1027,26 @@ impl DwarfResolver {
     }
 }
 
+#[derive(Clone)]
 struct SymbolInfo {
     name: String,
     address: u64,
+    size: u64,
+}
+
+fn find_die_sibling(die: &mut debug_info::DIE<'_>) -> Option<usize> {
+    for (name, _form, _opt, value) in die {
+        match name {
+            constants::DW_AT_sibling => {
+                if let debug_info::AttrValue::Unsigned(off) = value {
+                    return Some(off as usize);
+                }
+                return None;
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn parse_die_subprogram(
@@ -1033,6 +1055,8 @@ fn parse_die_subprogram(
 ) -> Result<Option<SymbolInfo>, Error> {
     let mut addr: Option<u64> = None;
     let mut name_str: Option<&str> = None;
+    let mut size = 0;
+
     for (name, _form, _opt, value) in die {
         match name {
             constants::DW_AT_linkage_name | constants::DW_AT_name => {
@@ -1075,6 +1099,17 @@ fn parse_die_subprogram(
                     ));
                 }
             },
+            constants::DW_AT_hi_pc => match value {
+                debug_info::AttrValue::Unsigned(sz) => {
+                    size = sz;
+                }
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "fail to parse DW_AT_lo_pc",
+                    ));
+                }
+            },
             _ => {}
         }
     }
@@ -1083,14 +1118,52 @@ fn parse_die_subprogram(
         Ok(Some(SymbolInfo {
             name: name_str.unwrap().to_string(),
             address: addr.unwrap(),
+            size,
         }))
     } else {
         Ok(None)
     }
 }
 
+fn debug_info_parse_symbols_cu<'a>(
+    mut dieiter: debug_info::DIEIter<'a>,
+    str_data: &[u8],
+    syms: &mut Vec<SymbolInfo>,
+) {
+    while let Some(mut die) = dieiter.next() {
+        if die.tag == 0 || die.tag == constants::DW_TAG_namespace {
+            continue;
+        }
+
+        assert!(die.abbrev.is_some());
+        if die.tag != constants::DW_TAG_subprogram {
+            if die.abbrev.unwrap().has_children {
+                if let Some(sibling_off) = find_die_sibling(&mut die) {
+                    dieiter.seek_to_sibling(sibling_off);
+                }
+            }
+            continue;
+        }
+
+        if let Ok(syminfo) = parse_die_subprogram(&mut die, str_data) {
+            if syminfo.is_some() {
+                syms.push(syminfo.unwrap());
+            }
+        }
+    }
+}
+
+enum DIParseResult {
+    Symbols(Vec<SymbolInfo>),
+    Stop,
+}
+
 /// Parse the addresses of symbols from the `.debug_info` section.
-fn parse_symbols(parser: &Elf64Parser) -> Result<Vec<SymbolInfo>, Error> {
+fn debug_info_parse_symbols(
+    parser: &Elf64Parser,
+    cond: Option<&(dyn Fn(&SymbolInfo) -> bool + Send + Sync)>,
+    nthreads: usize,
+) -> Result<Vec<SymbolInfo>, Error> {
     let info_sect_idx = parser.find_section(".debug_info")?;
     let info_data = parser.read_section_raw(info_sect_idx)?;
     let abbrev_sect_idx = parser.find_section(".debug_abbrev")?;
@@ -1100,19 +1173,100 @@ fn parse_symbols(parser: &Elf64Parser) -> Result<Vec<SymbolInfo>, Error> {
     let str_data = parser.read_section_raw(str_sect_idx)?;
 
     let mut syms = Vec::<SymbolInfo>::new();
-    for (uhdr, dieitr) in units {
-        match uhdr {
-            debug_info::UnitHeader::CompileV4(_) => {
-                for mut die in dieitr {
-                    if die.tag == constants::DW_TAG_subprogram {
-                        let syminfo = parse_die_subprogram(&mut die, &str_data)?;
-                        if syminfo.is_some() {
-                            syms.push(syminfo.unwrap());
+
+    if nthreads > 1 {
+        let mut handles = vec![];
+        let mut queue = SyncQueue::<debug_info::DIEIter<'static>>::new();
+        let cond = unsafe {
+            mem::transmute::<_, Option<&'static (dyn Fn(&SymbolInfo) -> bool + Send + Sync)>>(cond)
+        };
+        let (result_tx, result_rx) = mpsc::channel::<DIParseResult>();
+
+        for _ in 0..nthreads {
+            let result_tx = result_tx.clone();
+            let str_data = unsafe { mem::transmute::<_, &'static mut [u8]>(&mut *str_data) };
+            let queue = unsafe {
+                mem::transmute::<_, &mut SyncQueue<debug_info::DIEIter<'static>>>(&mut queue)
+            };
+
+            let handle = thread::spawn(move || {
+                let mut syms: Vec<SymbolInfo> = vec![];
+                if let Some(cond) = cond {
+                    while let Some(dieiterholder) = queue.dequeue() {
+                        let saved_sz = syms.len();
+                        debug_info_parse_symbols_cu(dieiterholder, str_data, &mut syms);
+                        for sym in &syms[saved_sz..] {
+                            if !cond(&sym) {
+                                result_tx.send(DIParseResult::Stop).unwrap();
+                            }
                         }
                     }
+                } else {
+                    while let Some(dieiterholder) = queue.dequeue() {
+                        debug_info_parse_symbols_cu(dieiterholder, str_data, &mut syms);
+                    }
+                }
+                result_tx.send(DIParseResult::Symbols(syms)).unwrap();
+            });
+
+            handles.push(handle);
+        }
+
+        for (uhdr, dieiter) in units {
+            match uhdr {
+                debug_info::UnitHeader::CompileV4(_) => {
+                    let dieiter =
+                        unsafe { mem::transmute::<_, debug_info::DIEIter<'static>>(dieiter) };
+                    queue.enqueue(dieiter);
+                }
+                _ => {}
+            }
+
+            if let Ok(result) = result_rx.try_recv() {
+                if let DIParseResult::Stop = result {
+                    break;
+                } else {
+                    panic!("Receive an unexpected result!");
                 }
             }
-            _ => {}
+        }
+
+        queue.shutdown();
+
+        drop(result_tx);
+        while let Ok(result) = result_rx.recv() {
+            if let DIParseResult::Symbols(mut thread_syms) = result {
+                syms.append(&mut thread_syms);
+            }
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    } else {
+        if let Some(cond) = cond {
+            'outer: for (uhdr, dieiter) in units {
+                match uhdr {
+                    debug_info::UnitHeader::CompileV4(_) => {
+                        let saved_sz = syms.len();
+                        debug_info_parse_symbols_cu(dieiter, str_data, &mut syms);
+                        for sym in &syms[saved_sz..] {
+                            if !cond(&sym) {
+                                break 'outer;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            for (uhdr, dieiter) in units {
+                match uhdr {
+                    debug_info::UnitHeader::CompileV4(_) => {
+                        debug_info_parse_symbols_cu(dieiter, str_data, &mut syms);
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -1306,14 +1460,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_symbols() {
+    fn test_debug_info_parse_symbols() {
         let args: Vec<String> = env::args().collect();
         let bin_name = &args[0];
         let parser_r = Elf64Parser::open(bin_name);
         assert!(parser_r.is_ok());
         let parser = parser_r.unwrap();
 
-        let result = parse_symbols(&parser);
+        let result = debug_info_parse_symbols(&parser, None, 4);
         assert!(result.is_ok());
         let syms = result.unwrap();
 
@@ -1324,11 +1478,14 @@ mod tests {
         for sym in syms {
             if sym
                 .name
-                .starts_with("_ZN8blazesym5dwarf5tests18test_parse_symbols17h")
+                .starts_with("_ZN8blazesym5dwarf5tests29test_debug_info_parse_symbols17h")
             {
                 myself_found = true;
                 myself_addr = sym.address;
-            } else if sym.name.starts_with("_ZN8blazesym5dwarf13parse_symbols") {
+            } else if sym
+                .name
+                .starts_with("_ZN8blazesym5dwarf24debug_info_parse_symbols17h")
+            {
                 parse_symbols_found = true;
                 parse_symbols_addr = sym.address;
             }
@@ -1336,10 +1493,19 @@ mod tests {
         assert!(myself_found);
         assert!(parse_symbols_found);
         assert_eq!(
-            (test_parse_symbols as fn() as *const fn() as u64)
-                - (parse_symbols as fn(&Elf64Parser) -> Result<Vec<SymbolInfo>, Error>
-                    as *const fn(&Elf64Parser) as u64),
-            myself_addr - parse_symbols_addr
+            (test_debug_info_parse_symbols as fn() as *const fn() as i64)
+                - (debug_info_parse_symbols
+                    as fn(
+                        &Elf64Parser,
+                        Option<&(dyn Fn(&SymbolInfo) -> bool + Send + Sync)>,
+                        usize,
+                    ) -> Result<Vec<SymbolInfo>, Error>
+                    as *const fn(
+                        &Elf64Parser,
+                        Option<&(dyn Fn(&SymbolInfo) -> bool + Send + Sync)>,
+                        usize,
+                    ) as i64),
+            myself_addr as i64 - parse_symbols_addr as i64
         );
     }
 }
