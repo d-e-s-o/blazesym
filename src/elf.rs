@@ -620,7 +620,7 @@ impl Elf64Parser {
         Ok((sym_name, sym.st_value))
     }
 
-    pub fn find_address(&self, name: &str) -> Result<u64, Error> {
+    pub fn find_address(&self, name: &str) -> Result<(u64, u64), Error> {
         self.ensure_str2symtab()?;
 
         let me = self.backobj.borrow();
@@ -647,7 +647,8 @@ impl Elf64Parser {
         match r {
             Ok(str2sym_i) => {
                 let sym_i = str2symtab[str2sym_i].1;
-                Ok(me.symtab.as_ref().unwrap()[sym_i].st_value)
+		let sym_ref = &me.symtab.as_ref().unwrap()[sym_i];
+                Ok((sym_ref.st_value, sym_ref.st_size))
             }
             Err(_) => Err(Error::new(ErrorKind::NotFound, "an unknown symbol")),
         }
@@ -827,7 +828,7 @@ mod tests {
         println!("{}", sym_name);
         let addr_r = parser.find_address(sym_name);
         //assert!(addr_r.is_ok());
-        let addr_ret = addr_r.unwrap();
+        let addr_ret = addr_r.unwrap().0;
         assert_eq!(addr_ret, addr);
     }
 }

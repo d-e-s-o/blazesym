@@ -1008,12 +1008,15 @@ impl DwarfResolver {
     }
 
     /// Find the address of a symbol from DWARF.
-    pub fn find_address(&self, name: &str) -> Result<u64, Error> {
+    pub fn find_address(&self, name: &str) -> Result<(u64, u64), Error> {
         match self
             .debug_info_syms
             .binary_search_by_key(&name.to_string(), |v| v.name.clone())
         {
-            Ok(idx) => Ok(self.debug_info_syms[idx].address),
+            Ok(idx) => {
+		let SymbolInfo { address, size, .. } = self.debug_info_syms[idx];
+		Ok((address, size))
+	    },
             Err(_) => self.parser.find_address(name),
         }
     }
@@ -1184,7 +1187,7 @@ fn debug_info_parse_symbols(
 
         for _ in 0..nthreads {
             let result_tx = result_tx.clone();
-            let str_data = unsafe { mem::transmute::<_, &'static mut [u8]>(&mut *str_data) };
+            let str_data = unsafe { mem::transmute::<_, &'static [u8]>(&*str_data) };
             let queue = unsafe {
                 mem::transmute::<_, &mut SyncQueue<debug_info::DIEIter<'static>>>(&mut queue)
             };
@@ -1248,7 +1251,7 @@ fn debug_info_parse_symbols(
                 match uhdr {
                     debug_info::UnitHeader::CompileV4(_) => {
                         let saved_sz = syms.len();
-                        debug_info_parse_symbols_cu(dieiter, str_data, &mut syms);
+                        debug_info_parse_symbols_cu(dieiter, str_data.as_slice(), &mut syms);
                         for sym in &syms[saved_sz..] {
                             if !cond(&sym) {
                                 break 'outer;
@@ -1262,7 +1265,7 @@ fn debug_info_parse_symbols(
             for (uhdr, dieiter) in units {
                 match uhdr {
                     debug_info::UnitHeader::CompileV4(_) => {
-                        debug_info_parse_symbols_cu(dieiter, str_data, &mut syms);
+                        debug_info_parse_symbols_cu(dieiter, str_data.as_slice(), &mut syms);
                     }
                     _ => {}
                 }

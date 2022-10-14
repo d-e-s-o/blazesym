@@ -87,8 +87,8 @@ trait SymResolver {
     /// Find the name and the start address of a symbol found for
     /// the given address.
     fn find_symbol(&self, addr: u64) -> Option<(&str, u64)>;
-    /// Find the address of a symbol anme.
-    fn find_address(&self, name: &str) -> Option<u64>;
+    /// Find the address and size of a symbol anme.
+    fn find_address(&self, name: &str) -> Option<(u64, u64)>;
     /// Find the file name and the line number of an address.
     fn find_line_info(&self, addr: u64) -> Option<AddressLineInfo>;
 
@@ -397,13 +397,13 @@ impl SymResolver for ElfResolver {
         }
     }
 
-    fn find_address(&self, name: &str) -> Option<u64> {
+    fn find_address(&self, name: &str) -> Option<(u64, u64)> {
         let addr_res = match &self.backend {
             ElfBackend::Dwarf(dwarf) => dwarf.find_address(name),
             ElfBackend::Elf(parser) => parser.find_address(name),
         };
         match addr_res {
-            Ok(addr) => Some(addr - self.offset + self.loaded_address),
+            Ok((addr, size)) => Some((addr - self.offset + self.loaded_address, size)),
             _ => None,
         }
     }
@@ -479,7 +479,7 @@ impl SymResolver for KernelResolver {
             self.kernelresolver.as_ref().unwrap().find_symbol(addr)
         }
     }
-    fn find_address(&self, _name: &str) -> Option<u64> {
+    fn find_address(&self, _name: &str) -> Option<(u64, u64)> {
         None
     }
     fn find_line_info(&self, addr: u64) -> Option<AddressLineInfo> {
@@ -798,7 +798,7 @@ impl BlazeSymbolizer {
     }
 
     #[allow(dead_code)]
-    fn find_address(&self, sym_srcs: &[SymbolSrcCfg], name: &str) -> Option<u64> {
+    fn find_address(&self, sym_srcs: &[SymbolSrcCfg], name: &str) -> Option<(u64, u64)> {
         let resolver_map = ResolverMap::new(sym_srcs, &self.cache_holder).ok()?;
         for (_, resolver) in resolver_map.resolvers {
             if let Some(addr) = resolver.find_address(name) {
@@ -824,7 +824,7 @@ impl BlazeSymbolizer {
     ///
     /// * `sym_srcs` - A list of symbol and debug sources.
     /// * `names` - A list of symbol names.
-    pub fn find_addresses(&self, sym_srcs: &[SymbolSrcCfg], names: &[&str]) -> Vec<Vec<u64>> {
+    pub fn find_addresses(&self, sym_srcs: &[SymbolSrcCfg], names: &[&str]) -> Vec<Vec<(u64, u64)>> {
         let resolver_map = match ResolverMap::new(sym_srcs, &self.cache_holder) {
             Ok(map) => map,
             _ => {
@@ -1379,11 +1379,11 @@ pub unsafe extern "C" fn blazesym_result_free(results: *const blazesym_result) {
     dealloc(raw_buf_with_sz, Layout::from_size_align(sz, 8).unwrap());
 }
 
-unsafe fn convert_addresses_to_c(addresses: Vec<Vec<u64>>) -> *const *const u64 {
+unsafe fn convert_addresses_to_c(addresses: Vec<Vec<(u64, u64)>>) -> *const *const u64 {
     let mut addr_space_cnt = 0;
 
     for sym_addrs in &addresses {
-        addr_space_cnt += sym_addrs.len() + 1;
+        addr_space_cnt += (sym_addrs.len() + 1) * 2;
     }
 
     let array_sz = ((mem::size_of::<*const u64>() * addresses.len() + mem::size_of::<u64>() - 1)
@@ -1401,12 +1401,18 @@ unsafe fn convert_addresses_to_c(addresses: Vec<Vec<u64>>) -> *const *const u64 
 
     for sym_addrs in addresses {
         *addrs_ptr = addr_ptr;
-        for addr in sym_addrs {
+        for (addr, size) in sym_addrs {
             *addr_ptr = addr;
             addr_ptr = addr_ptr.add(1);
+            *addr_ptr = size;
+            addr_ptr = addr_ptr.add(1);
         }
-        *addr_ptr = 0;
+
+        *addr_ptr = 0;		// addr
         addr_ptr = addr_ptr.add(1);
+        *addr_ptr = 0;		// size
+        addr_ptr = addr_ptr.add(1);
+
         addrs_ptr = addrs_ptr.add(1);
     }
 

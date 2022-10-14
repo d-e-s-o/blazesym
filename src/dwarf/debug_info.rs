@@ -1288,14 +1288,14 @@ mod tests {
 
     #[test]
     fn test_unititer() {
-        let mut iter = UnitIter::new(&test_info, &test_abbrev);
+        let iter = UnitIter::new(&test_info, &test_abbrev);
         let mut cnt = 0;
         let mut die_cnt = 0;
         let mut attr_cnt = 0;
         let mut subprog_cnt = 0;
-        for (_uh, mut dieiter) in iter {
+        for (_uh, dieiter) in iter {
             cnt += 1;
-            for mut die in dieiter {
+            for die in dieiter {
                 die_cnt += 1;
                 if die.tag == DW_TAG_subprogram {
                     subprog_cnt += 1;

@@ -131,11 +131,11 @@ impl SymResolver for KSymResolver {
         None
     }
 
-    fn find_address(&self, name: &str) -> Option<u64> {
+    fn find_address(&self, name: &str) -> Option<(u64, u64)> {
         self.ensure_sym_to_addr();
 
         if let Some(addr) = self.sym_to_addr.borrow().get(name) {
-            return Some(*addr);
+            return Some((*addr, 0));
         }
         None
     }
@@ -221,7 +221,7 @@ mod tests {
         let name = sym.name.clone();
         let found = resolver.find_address(&name);
         assert!(found.is_some());
-        assert_eq!(found.unwrap(), addr);
+        assert_eq!(found.unwrap().0, addr);
     }
 
     #[test]
