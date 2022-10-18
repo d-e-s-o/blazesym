@@ -647,7 +647,7 @@ impl Elf64Parser {
         match r {
             Ok(str2sym_i) => {
                 let sym_i = str2symtab[str2sym_i].1;
-		let sym_ref = &me.symtab.as_ref().unwrap()[sym_i];
+                let sym_ref = &me.symtab.as_ref().unwrap()[sym_i];
                 Ok((sym_ref.st_value, sym_ref.st_size))
             }
             Err(_) => Err(Error::new(ErrorKind::NotFound, "an unknown symbol")),

@@ -824,7 +824,11 @@ impl BlazeSymbolizer {
     ///
     /// * `sym_srcs` - A list of symbol and debug sources.
     /// * `names` - A list of symbol names.
-    pub fn find_addresses(&self, sym_srcs: &[SymbolSrcCfg], names: &[&str]) -> Vec<Vec<(u64, u64)>> {
+    pub fn find_addresses(
+        &self,
+        sym_srcs: &[SymbolSrcCfg],
+        names: &[&str],
+    ) -> Vec<Vec<(u64, u64)>> {
         let resolver_map = match ResolverMap::new(sym_srcs, &self.cache_holder) {
             Ok(map) => map,
             _ => {
@@ -1408,9 +1412,9 @@ unsafe fn convert_addresses_to_c(addresses: Vec<Vec<(u64, u64)>>) -> *const *con
             addr_ptr = addr_ptr.add(1);
         }
 
-        *addr_ptr = 0;		// addr
+        *addr_ptr = 0; // addr
         addr_ptr = addr_ptr.add(1);
-        *addr_ptr = 0;		// size
+        *addr_ptr = 0; // size
         addr_ptr = addr_ptr.add(1);
 
         addrs_ptr = addrs_ptr.add(1);
