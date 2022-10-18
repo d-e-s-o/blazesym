@@ -16,6 +16,9 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 [dependencies]
 nix = "0.24"
 regex = "1.6"
+gimli = "0.23.0"
+object = "*"
+memmap2 = "*"
 
 [build-dependencies]
 cbindgen = "0.24"

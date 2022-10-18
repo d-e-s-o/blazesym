@@ -16,6 +16,7 @@ use std::thread;
 mod constants;
 mod debug_info;
 
+#[inline]
 fn decode_leb128_128(data: &[u8]) -> Option<(u128, u8)> {
     let mut sz = 0;
     let mut v: u128 = 0;
@@ -29,6 +30,7 @@ fn decode_leb128_128(data: &[u8]) -> Option<(u128, u8)> {
     None
 }
 
+#[inline]
 fn decode_leb128(data: &[u8]) -> Option<(u64, u8)> {
     match decode_leb128_128(data) {
         Some((v, s)) => Some((v as u64, s)),
@@ -1014,9 +1016,9 @@ impl DwarfResolver {
             .binary_search_by_key(&name.to_string(), |v| v.name.clone())
         {
             Ok(idx) => {
-		let SymbolInfo { address, size, .. } = self.debug_info_syms[idx];
-		Ok((address, size))
-	    },
+                let SymbolInfo { address, size, .. } = self.debug_info_syms[idx];
+                Ok((address, size))
+            }
             Err(_) => self.parser.find_address(name),
         }
     }
@@ -1128,6 +1130,90 @@ fn parse_die_subprogram(
     }
 }
 
+fn parse_die_subprogram_gimli<E, T, K>(
+    die: &gimli::DebuggingInformationEntry<'_, '_, E, T>,
+    dwarf: &gimli::Dwarf<K>,
+) -> Result<Option<SymbolInfo>, Error>
+where
+    E: gimli::Reader<Offset = T>,
+    T: gimli::ReaderOffset,
+    K: gimli::Reader<Offset = T>,
+{
+    let mut addr: Option<u64> = None;
+    let mut name_str: Option<String> = None;
+    let mut size = 0;
+
+    let mut attrs = die.attrs();
+    while let Some(attr) = attrs.next().unwrap() {
+        let name = attr.name();
+        let value = attr.value();
+        match name {
+            gimli::DW_AT_linkage_name | gimli::DW_AT_name => {
+                if name_str.is_some() {
+                    continue;
+                }
+                match value {
+                    gimli::AttributeValue::String(sname) => {
+                        name_str = Some(String::from(sname.to_string().unwrap().into_owned()));
+                    }
+                    gimli::AttributeValue::DebugStrRef(dsoff) => {
+                        name_str = Some(String::from(
+                            dwarf.string(dsoff).unwrap().to_string().unwrap(),
+                        ));
+                    }
+                    /*
+                    gimli::AttributeValue::DebugStrRef(dsoff) => {
+                    },*/
+                    e => {
+                        return Err(Error::new(
+                            ErrorKind::InvalidData,
+                            "fail to parse DW_AT_linkage_name {}",
+                        ));
+                    }
+                }
+            }
+            gimli::DW_AT_low_pc => match value {
+                gimli::AttributeValue::Addr(pc) => {
+                    addr = Some(pc);
+                }
+                e => {
+                    println!("err {:?}", e);
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "fail to parse DW_AT_lo_pc",
+                    ));
+                }
+            },
+            gimli::DW_AT_high_pc => match value {
+                gimli::AttributeValue::Addr(pc) => {
+                    size = pc - addr.unwrap();
+                }
+                gimli::AttributeValue::Udata(sz) => {
+                    size = sz;
+                }
+                e => {
+                    println!("err {:?}", e);
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        "fail to parse DW_AT_lo_pc",
+                    ));
+                }
+            },
+            _ => {}
+        }
+    }
+
+    if addr.is_some() && name_str.is_some() {
+        Ok(Some(SymbolInfo {
+            name: name_str.unwrap(),
+            address: addr.unwrap(),
+            size,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 fn debug_info_parse_symbols_cu<'a>(
     mut dieiter: debug_info::DIEIter<'a>,
     str_data: &[u8],
@@ -1161,6 +1247,75 @@ enum DIParseResult {
     Stop,
 }
 
+use object::{Object, ObjectSection};
+use std::{borrow, fs};
+
+fn debug_info_parse_gimli_cu<R, T>(
+    unit: &gimli::Unit<R, T>,
+    syms: &mut Vec<SymbolInfo>,
+    dwarf: &gimli::Dwarf<R>,
+) where
+    R: gimli::Reader<Offset = T>,
+    T: gimli::ReaderOffset,
+{
+    let mut entries = unit.entries();
+    while let Some((delta, entry)) = entries.next_dfs().unwrap() {
+        if entry.tag() != gimli::DW_TAG_subprogram {
+            continue;
+        }
+        if let Ok(syminfo) = parse_die_subprogram_gimli(entry, dwarf) {
+            if syminfo.is_some() {
+                syms.push(syminfo.unwrap());
+            }
+        }
+    }
+}
+
+use std::time::Instant;
+
+fn debug_info_parse_gimli(filename: &str) -> Result<Vec<SymbolInfo>, Error> {
+    let file = fs::File::open(filename).unwrap();
+    let mmap = unsafe { memmap2::Mmap::map(&file).unwrap() };
+    let object = object::File::parse(&*mmap).unwrap();
+    let endian = if object.is_little_endian() {
+        gimli::RunTimeEndian::Little
+    } else {
+        gimli::RunTimeEndian::Big
+    };
+
+    let load_section = |id: gimli::SectionId| -> Result<borrow::Cow<[u8]>, gimli::Error> {
+        match object.section_by_name(id.name()) {
+            Some(ref section) => Ok(section
+                .uncompressed_data()
+                .unwrap_or(borrow::Cow::Borrowed(&[][..]))),
+            None => Ok(borrow::Cow::Borrowed(&[][..])),
+        }
+    };
+    // Load all of the sections.
+    let dwarf_cow = gimli::Dwarf::load(&load_section, &load_section).unwrap();
+
+    // Borrow a `Cow<[u8]>` to create an `EndianSlice`.
+    let borrow_section: &dyn for<'a> Fn(
+        &'a borrow::Cow<[u8]>,
+    ) -> gimli::EndianSlice<'a, gimli::RunTimeEndian> =
+        &|section| gimli::EndianSlice::new(&*section, endian);
+
+    // Create `EndianSlice`s for all of the sections.
+    let dwarf = dwarf_cow.borrow(&borrow_section);
+
+    let now = Instant::now();
+    let mut syms = vec![];
+    // Iterate over the compilation units.
+    let mut iter = dwarf.units();
+    while let Some(header) = iter.next().unwrap() {
+        let unit = dwarf.unit(header).unwrap();
+        debug_info_parse_gimli_cu(&unit, &mut syms, &dwarf);
+    }
+    println!("{} us", now.elapsed().as_micros());
+
+    Ok(syms)
+}
+
 /// Parse the addresses of symbols from the `.debug_info` section.
 fn debug_info_parse_symbols(
     parser: &Elf64Parser,
@@ -1175,6 +1330,7 @@ fn debug_info_parse_symbols(
     let str_sect_idx = parser.find_section(".debug_str")?;
     let str_data = parser.read_section_raw(str_sect_idx)?;
 
+    let now = Instant::now();
     let mut syms = Vec::<SymbolInfo>::new();
 
     if nthreads > 1 {
@@ -1272,6 +1428,7 @@ fn debug_info_parse_symbols(
             }
         }
     }
+    println!("{} us", now.elapsed().as_micros());
 
     Ok(syms)
 }
@@ -1470,7 +1627,7 @@ mod tests {
         assert!(parser_r.is_ok());
         let parser = parser_r.unwrap();
 
-        let result = debug_info_parse_symbols(&parser, None, 4);
+        let result = debug_info_parse_symbols(&parser, None, 1);
         assert!(result.is_ok());
         let syms = result.unwrap();
 
@@ -1493,6 +1650,54 @@ mod tests {
                 parse_symbols_addr = sym.address;
             }
         }
+        assert!(false);
+        assert!(myself_found);
+        assert!(parse_symbols_found);
+        assert_eq!(
+            (test_debug_info_parse_symbols as fn() as *const fn() as i64)
+                - (debug_info_parse_symbols
+                    as fn(
+                        &Elf64Parser,
+                        Option<&(dyn Fn(&SymbolInfo) -> bool + Send + Sync)>,
+                        usize,
+                    ) -> Result<Vec<SymbolInfo>, Error>
+                    as *const fn(
+                        &Elf64Parser,
+                        Option<&(dyn Fn(&SymbolInfo) -> bool + Send + Sync)>,
+                        usize,
+                    ) as i64),
+            myself_addr as i64 - parse_symbols_addr as i64
+        );
+    }
+    #[test]
+    fn test_debug_info_parse_gimli() {
+        let args: Vec<String> = env::args().collect();
+        let bin_name = &args[0];
+
+        let result = debug_info_parse_gimli(bin_name);
+        assert!(result.is_ok());
+        let syms = result.unwrap();
+
+        let mut myself_found = false;
+        let mut myself_addr: u64 = 0;
+        let mut parse_symbols_found = false;
+        let mut parse_symbols_addr: u64 = 0;
+        for sym in syms {
+            if sym
+                .name
+                .starts_with("_ZN8blazesym5dwarf5tests29test_debug_info_parse_symbols17h")
+            {
+                myself_found = true;
+                myself_addr = sym.address;
+            } else if sym
+                .name
+                .starts_with("_ZN8blazesym5dwarf24debug_info_parse_symbols17h")
+            {
+                parse_symbols_found = true;
+                parse_symbols_addr = sym.address;
+            }
+        }
+        assert!(false);
         assert!(myself_found);
         assert!(parse_symbols_found);
         assert_eq!(
