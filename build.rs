@@ -1,7 +1,11 @@
+#![allow(clippy::let_unit_value)]
+
 use std::env;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs::copy;
+use std::fs::read as read_file;
+use std::fs::write as write_file;
 use std::ops::Deref as _;
 use std::path::Path;
 use std::path::PathBuf;
@@ -151,7 +155,6 @@ fn unpack_xz(_src: &Path, _dst: &Path) {
 /// Put files in a zip archive, uncompressed.
 #[cfg(feature = "zip")]
 fn zip(files: &[PathBuf], dst: &Path) {
-    use std::fs::read as read_file;
     use std::fs::File;
     use std::io::Write as _;
     use zip::write::FileOptions;
@@ -240,16 +243,43 @@ fn prepare_bench_files(crate_root: &Path) {
     gsym(&src, dst);
 }
 
+fn touch_dir<D>(dir: D) -> Result<()>
+where
+    D: AsRef<Path>,
+{
+    let output = dir
+        .as_ref()
+        .parent()
+        .context("OUT_DIR has no parent")?
+        .join("output");
+
+    let mut content = read_file(&output)?;
+    content.push(b'\n');
+    let () = write_file(&output, content)?;
+    run(
+        "bash",
+        ["-c", &format!("stat {} > /tmp/foobar", output.display())],
+    )
+    .unwrap();
+    Ok(())
+}
+
+
 fn main() {
     let crate_dir = env!("CARGO_MANIFEST_DIR");
+    // Note that `OUT_DIR` is only present at runtime.
+    let out_dir = env::var("OUT_DIR").unwrap();
 
     if cfg!(feature = "generate-test-files") && !cfg!(feature = "dont-generate-test-files") {
         prepare_test_files(crate_dir.as_ref());
+        let _ignored = touch_dir(&out_dir).unwrap();
     }
 
     if cfg!(feature = "generate-bench-files") {
         prepare_bench_files(crate_dir.as_ref());
+        let _ignored = touch_dir(&out_dir).unwrap();
     }
+
 
     #[cfg(feature = "generate-c-header")]
     {
