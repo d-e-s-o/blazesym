@@ -3,17 +3,17 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::fs::File;
-use std::io::BufRead;
-use std::io::BufReader;
 use std::io::Error;
 use std::io::ErrorKind;
-use std::io::Read;
+use std::mem::transmute;
 use std::num::NonZeroU32;
+use std::ops::Deref as _;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Component;
 use std::path::PathBuf;
 use std::str;
 
+use crate::mmap::Mmap;
 use crate::Addr;
 
 
@@ -61,6 +61,24 @@ fn trim_ascii_start(mut bytes: &[u8]) -> &[u8] {
         }
     }
     bytes
+}
+
+// TODO: Use slice::trim_ascii_end once it stabilized.
+fn trim_ascii_end(mut bytes: &[u8]) -> &[u8] {
+    // Note: A pattern matching based approach (instead of indexing) allows
+    // making the function const.
+    while let [rest @ .., last] = bytes {
+        if last.is_ascii_whitespace() {
+            bytes = rest;
+        } else {
+            break
+        }
+    }
+    bytes
+}
+
+fn trim_ascii(bytes: &[u8]) -> &[u8] {
+    trim_ascii_end(trim_ascii_start(bytes))
 }
 
 
@@ -200,38 +218,50 @@ fn parse_maps_line<'line>(line: &'line [u8], pid: Pid) -> Result<MapsEntry, Erro
 /// `filter` is a filter function (similar to those usable on iterators)
 /// that determines which entries we keep (those for which it returned
 /// `true`) and which we discard (anything `false`).
-fn parse_file<R, F>(reader: R, pid: Pid, mut filter: F) -> Result<Vec<MapsEntry>, Error>
-where
-    R: Read,
-    F: FnMut(&MapsEntry) -> bool,
-{
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
-    let mut entries = Vec::<MapsEntry>::new();
-    while reader.read_line(&mut line)? > 0 {
-        let line_str = line.trim();
-        // There shouldn't be any empty lines, but we'd just ignore them. We
-        // need to trim anyway.
-        if !line_str.is_empty() {
-            let entry = parse_maps_line(line_str.as_bytes(), pid)?;
-            if filter(&entry) {
-                let () = entries.push(entry);
+fn parse_file(data: &[u8], pid: Pid) -> impl Iterator<Item = Result<MapsEntry, Error>> + '_ {
+    data.split(|&b| b == b'\n' || b == b'\r')
+        .filter_map(move |raw_line| {
+            let raw_line = trim_ascii(raw_line);
+            if !raw_line.is_empty() {
+                Some(parse_maps_line(raw_line, pid))
+            } else {
+                None
             }
-        }
-        line.clear();
-    }
+        })
+}
 
-    Ok(entries)
+#[derive(Debug)]
+struct MapsEntryIter<I> {
+    /// XXX
+    iter: I,
+    _mmap: Mmap,
+}
+
+impl<I> Iterator for MapsEntryIter<I>
+where
+    I: Iterator<Item = Result<MapsEntry, Error>>,
+{
+    type Item = Result<MapsEntry, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
+    }
 }
 
 /// Parse the maps file for the process with the given PID.
-pub(crate) fn parse<F>(pid: Pid, filter: F) -> Result<Vec<MapsEntry>, Error>
-where
-    F: FnMut(&MapsEntry) -> bool,
-{
+pub(crate) fn parse(pid: Pid) -> Result<impl Iterator<Item = Result<MapsEntry, Error>>, Error> {
     let path = format!("/proc/{pid}/maps");
-    let file = File::open(path)?;
-    parse_file(file, pid, filter)
+    let file = File::open(path).unwrap();
+    let mmap = Mmap::map(&file).unwrap();
+    // SAFETY: We keep `mmap` around for the duration that data (and the derived
+    //         iterator below) lives, so the 'static lifetime is apt.
+    let data = unsafe { transmute::<_, &'static [u8]>(mmap.deref()) };
+
+    let iter = MapsEntryIter {
+        iter: parse_file(data, pid),
+        _mmap: mmap,
+    };
+    Ok(iter)
 }
 
 /// A helper function checking whether a `MapsEntry` has relevant to
@@ -283,8 +313,8 @@ mod tests {
     /// Check that we can parse `/proc/self/maps`.
     #[test]
     fn self_map_parsing() {
-        let maps = parse(Pid::Slf, |_entry| true).unwrap();
-        assert!(!maps.is_empty(), "{}", maps.len());
+        let maps = parse(Pid::Slf).unwrap();
+        assert_eq!(maps.count(), 0);
     }
 
     #[test]
@@ -322,7 +352,10 @@ mod tests {
 ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
 "#;
 
-        let _entries = parse_file(lines.as_bytes(), Pid::Slf, is_symbolization_relevant).unwrap();
+        let entries = parse_file(lines.as_bytes(), Pid::Slf);
+        let () = entries.for_each(|entry| {
+            let _entry = entry.unwrap();
+        });
 
         // Parse the first (actual) line.
         let entry = parse_maps_line(lines.lines().nth(1).unwrap().as_bytes(), Pid::Slf).unwrap();
