@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -8,8 +9,10 @@ use std::io::Error;
 use std::io::ErrorKind;
 use std::io::Read;
 use std::num::NonZeroU32;
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::Component;
 use std::path::PathBuf;
+use std::str;
 
 use crate::Addr;
 
@@ -45,18 +48,47 @@ pub(crate) struct MapsEntry {
     pub path: PathBuf,
 }
 
+
+// TODO: Use slice::trim_ascii_start once it stabilized.
+fn trim_ascii_start(mut bytes: &[u8]) -> &[u8] {
+    // Note: A pattern matching based approach (instead of indexing) allows
+    // making the function const.
+    while let [first, rest @ ..] = bytes {
+        if first.is_ascii_whitespace() {
+            bytes = rest;
+        } else {
+            break
+        }
+    }
+    bytes
+}
+
+
+fn split_bytes<F>(bytes: &[u8], mut check: F) -> Option<(&[u8], &[u8])>
+where
+    F: FnMut(u8) -> bool,
+{
+    let (idx, _) = bytes.iter().enumerate().find(|(_idx, b)| check(**b))?;
+    let (left, right) = bytes.split_at(idx);
+    Some((left, &right[1..]))
+}
+
+
 /// Parse a line of a proc maps file.
-fn parse_maps_line<'line>(line: &'line str, pid: Pid) -> Result<MapsEntry, Error> {
+fn parse_maps_line<'line>(line: &'line [u8], pid: Pid) -> Result<MapsEntry, Error> {
     let full_line = line;
 
-    let split_once = |line: &'line str, component| -> Result<(&'line str, &'line str), Error> {
-        line.split_once(|c: char| c.is_ascii_whitespace())
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::InvalidData,
-                    format!("failed to find {component} in proc maps line: {line}\n{full_line}"),
-                )
-            })
+    let split_once = |line: &'line [u8], component| -> Result<(&'line [u8], &'line [u8]), Error> {
+        split_bytes(line, |b| b.is_ascii_whitespace()).ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "failed to find {component} in proc maps line: {}\n{}",
+                    String::from_utf8_lossy(line),
+                    String::from_utf8_lossy(full_line)
+                ),
+            )
+        })
     };
 
     // Lines have the following format:
@@ -66,35 +98,75 @@ fn parse_maps_line<'line>(line: &'line str, pid: Pid) -> Result<MapsEntry, Error
     // a7cb1000-a7cb2000 ---p 00000000 00:00 0
     // a7ed5000-a8008000 r-xp 00000000 03:00 4222       /lib/libc.so.6
     let (address_str, line) = split_once(line, "address range")?;
-    let (loaded_str, end_str) = address_str.split_once('-').ok_or_else(|| {
+    let (loaded_str, end_str) = split_bytes(address_str, |b| b == b'-').ok_or_else(|| {
         Error::new(
             ErrorKind::InvalidData,
-            format!("encountered malformed address range in proc maps line: {full_line}"),
+            format!(
+                "encountered malformed address range in proc maps line: {}",
+                String::from_utf8_lossy(full_line)
+            ),
+        )
+    })?;
+    let loaded_str = str::from_utf8(loaded_str).map_err(|err| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "encountered malformed start address in proc maps line: {}: {err}",
+                String::from_utf8_lossy(full_line)
+            ),
         )
     })?;
     let loaded_address = Addr::from_str_radix(loaded_str, 16).map_err(|err| {
         Error::new(
             ErrorKind::InvalidData,
-            format!("encountered malformed start address in proc maps line: {full_line}: {err}"),
+            format!(
+                "encountered malformed start address in proc maps line: {}: {err}",
+                String::from_utf8_lossy(full_line)
+            ),
+        )
+    })?;
+    let end_str = str::from_utf8(end_str).map_err(|err| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "encountered malformed end address in proc maps line: {}: {err}",
+                String::from_utf8_lossy(full_line)
+            ),
         )
     })?;
     let end_address = Addr::from_str_radix(end_str, 16).map_err(|err| {
         Error::new(
             ErrorKind::InvalidData,
-            format!("encountered malformed end address in proc maps line: {full_line}: {err}"),
+            format!(
+                "encountered malformed end address in proc maps line: {}: {err}",
+                String::from_utf8_lossy(full_line)
+            ),
         )
     })?;
 
     let (mode_str, line) = split_once(line, "permissions component")?;
     let mode = mode_str
-        .chars()
-        .fold(0, |mode, c| (mode << 1) | u8::from(c != '-'));
+        .iter()
+        .fold(0, |mode, b| (mode << 1) | u8::from(*b != b'-'));
 
     let (offset_str, line) = split_once(line, "offset component")?;
+    let offset_str = str::from_utf8(offset_str).map_err(|err| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "encountered malformed offset component in proc maps line: {}: {err}",
+                String::from_utf8_lossy(full_line)
+            ),
+        )
+    })?;
+
     let offset = u64::from_str_radix(offset_str, 16).map_err(|err| {
         Error::new(
             ErrorKind::InvalidData,
-            format!("encountered malformed offset component in proc maps line: {full_line}: {err}"),
+            format!(
+                "encountered malformed offset component in proc maps line: {}: {err}",
+                String::from_utf8_lossy(full_line)
+            ),
         )
     })?;
 
@@ -102,12 +174,15 @@ fn parse_maps_line<'line>(line: &'line str, pid: Pid) -> Result<MapsEntry, Error
     // Note that by design, a path may not be present and so we may not be able
     // to successfully split.
     let path_str = split_once(line, "inode component")
-        .map(|(_inode, line)| line.trim())
-        .unwrap_or("");
-    let path = if path_str.ends_with(" (deleted)") {
-        PathBuf::from(format!("/proc/{pid}/map_files/{address_str}"))
+        .map(|(_inode, line)| trim_ascii_start(line))
+        .unwrap_or(b"");
+    let path = if path_str.ends_with(b" (deleted)") {
+        PathBuf::from(format!(
+            "/proc/{pid}/map_files/{}",
+            String::from_utf8_lossy(address_str)
+        ))
     } else {
-        PathBuf::from(path_str)
+        PathBuf::from(OsStr::from_bytes(path_str).to_os_string())
     };
 
     let entry = MapsEntry {
@@ -138,7 +213,7 @@ where
         // There shouldn't be any empty lines, but we'd just ignore them. We
         // need to trim anyway.
         if !line_str.is_empty() {
-            let entry = parse_maps_line(line_str, pid)?;
+            let entry = parse_maps_line(line_str.as_bytes(), pid)?;
             if filter(&entry) {
                 let () = entries.push(entry);
             }
@@ -196,6 +271,15 @@ mod tests {
     use test_log::test;
 
 
+    /// Check that we can split a byte slice as expected.
+    #[test]
+    fn byte_slice_splitting() {
+        let bytes = b"56156eb96000-56156ebf2000";
+        let (left, right) = split_bytes(bytes, |b| b == b'-').unwrap();
+        assert_eq!(left, b"56156eb96000");
+        assert_eq!(right, b"56156ebf2000");
+    }
+
     /// Check that we can parse `/proc/self/maps`.
     #[test]
     fn self_map_parsing() {
@@ -241,12 +325,12 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
         let _entries = parse_file(lines.as_bytes(), Pid::Slf, is_symbolization_relevant).unwrap();
 
         // Parse the first (actual) line.
-        let entry = parse_maps_line(lines.lines().nth(1).unwrap(), Pid::Slf).unwrap();
+        let entry = parse_maps_line(lines.lines().nth(1).unwrap().as_bytes(), Pid::Slf).unwrap();
         assert_eq!(entry.loaded_address, 0x55f4a95c9000);
         assert_eq!(entry._end_address, 0x55f4a95cb000);
         assert_eq!(entry.path, Path::new("/usr/bin/cat"));
 
-        let entry = parse_maps_line(lines.lines().nth(8).unwrap(), Pid::Slf).unwrap();
+        let entry = parse_maps_line(lines.lines().nth(8).unwrap().as_bytes(), Pid::Slf).unwrap();
         assert_eq!(
             entry.path,
             Path::new("/proc/self/map_files/7f2321e00000-7f2321e37000")
