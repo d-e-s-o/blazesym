@@ -44,6 +44,7 @@
 
 pub(crate) mod buildid;
 pub(crate) mod ioctl;
+mod kernel;
 mod meta;
 mod normalizer;
 mod user;
@@ -53,8 +54,10 @@ use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::str;
 
+pub use kernel::KernelOutput;
 pub use meta::Apk;
 pub use meta::Elf;
+pub use meta::KernelAddrMeta;
 pub use meta::Unknown;
 pub use meta::UserMeta;
 pub use normalizer::Builder;
