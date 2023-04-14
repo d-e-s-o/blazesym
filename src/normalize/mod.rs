@@ -39,12 +39,15 @@
 //! ```
 
 pub(crate) mod buildid;
+mod kernel;
 mod meta;
 mod normalizer;
 mod user;
 
 pub use meta::Apk;
+pub use kernel::NormalizedKernelAddrs;
 pub use meta::Elf;
+pub use meta::KernelAddrMeta;
 pub use meta::Unknown;
 pub use meta::UserMeta;
 pub use normalizer::Builder;

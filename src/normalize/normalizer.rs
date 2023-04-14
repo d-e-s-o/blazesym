@@ -3,6 +3,8 @@ use crate::Addr;
 use crate::Pid;
 use crate::Result;
 
+use super::kernel::normalize_kernel_addrs;
+use super::kernel::NormalizedKernelAddrs;
 use super::user::normalize_user_addrs_sorted_impl;
 use super::user::UserOutput;
 
@@ -134,6 +136,15 @@ impl Normalizer {
             |normalized: &mut UserOutput| normalized.outputs.as_mut_slice(),
             |sorted_addrs| normalize_user_addrs_sorted_impl(sorted_addrs, pid, self.build_ids),
         )
+    }
+
+
+    /// Normalize `addrs` belonging to the kernel.
+    ///
+    /// Normalized addresses are reported in the exact same order in
+    /// which the non-normalized ones were provided.
+    pub fn normalize_kernel_addrs(&self, addrs: &[Addr]) -> Result<NormalizedKernelAddrs> {
+      normalize_kernel_addrs(addrs)
     }
 }
 
