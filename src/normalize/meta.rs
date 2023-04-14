@@ -62,6 +62,43 @@ pub struct Elf<'src> {
 }
 
 
+/// Meta information about a Linux kernel address.
+#[derive(Clone, Debug)]
+pub struct Kernel<'src> {
+    /// The kernel's release string (i.e., roughly what `uname -r` reports).
+    ///
+    /// This is a free-form string.
+    pub release: String,
+    /// The kernel binary's build ID, if available.
+    pub build_id: Option<BuildId<'src>>,
+    /// The struct is non-exhaustive and open to extension.
+    #[doc(hidden)]
+    pub(crate) _non_exhaustive: (),
+}
+
+
+/// Meta information about a Linux kernel module address.
+#[derive(Clone, Debug)]
+pub struct KernelModule<'src> {
+    /// The name of the kernel module.
+    pub name: String,
+    /// The kernel module's version string.
+    ///
+    /// This is a free-form string. It may resemble bits of `modinfo`'s
+    /// `vermagic` field.
+    pub version: String,
+    /// The kernel's release string (i.e., roughly what `uname -r` reports).
+    ///
+    /// This is a free-form string.
+    pub kernel_release: String,
+    /// The kernel module's build ID, if available.
+    pub build_id: Option<BuildId<'src>>,
+    /// The struct is non-exhaustive and open to extension.
+    #[doc(hidden)]
+    pub(crate) _non_exhaustive: (),
+}
+
+
 /// Meta information about an address that could not be determined to be
 /// belonging to a specific component.
 ///
@@ -98,7 +135,7 @@ impl From<Unknown> for UserMeta<'_> {
 }
 
 
-/// Meta information for an address.
+/// Meta information for a normalized user space address.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum UserMeta<'src> {
@@ -137,6 +174,16 @@ impl<'src> UserMeta<'src> {
             _ => None,
         }
     }
+}
+
+
+/// Meta information for a normalized kernel space address.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum KernelAddrMeta<'src> {
+    Kernel(Kernel<'src>),
+    KernelModule(KernelModule<'src>),
+    Unknown(Unknown),
 }
 
 

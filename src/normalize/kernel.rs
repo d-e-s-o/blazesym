@@ -19,7 +19,12 @@ use crate::ErrorExt as _;
 use crate::IntoError as _;
 use crate::Result;
 
+use super::meta::KernelAddrMeta;
 use super::normalizer::Output;
+
+
+/// A type representing normalized kernel addresses.
+pub type KernelOutput<'src> = Output<KernelAddrMeta<'src>>;
 
 
 /// The absolute path of the `randomize_va_space` `proc` node.
@@ -176,6 +181,45 @@ fn find_kaslr_offset(parser: &ElfParser<File>) -> Result<Option<u64>> {
         }
     }
     Ok(None)
+}
+
+pub(super) fn normalize_kernel_addrs(_addrs: &[Addr]) -> Result<KernelOutput<'static>> {
+    // No PID means that we can only resolve kernel addresses.
+
+    // TODO: We'd need to take into account KASLR offsets here, for
+    //       example.
+
+    // The canonical source for getting its value is /proc/kcore.
+    // But that file may not be present. Reference:
+    // https://www.kernel.org/doc/html/latest/admin-guide/kdump/vmcoreinfo.html#kerneloffset
+    //
+    // https://github.com/osandov/drgn/blob/c76f25b8525c9a80ee4b4f5ce3292c14125c9e1b/libdrgn/drgn_program_parse_vmcoreinfo.inc.strswitch#L51
+    // has example logic
+
+    // May have to check 'kernel.randomize_va_space' sysctl
+    // Check System.map-<kernel version>
+    // - discrepancy to /proc/kallsysms contents would be KASLR offset
+    // - _head or _text symbol from /proc/kallsysms could point to kernel base
+    //   address
+    //
+    // /sys/kernel/debug/kernel_page_tables could potentially be of
+    // interest, too
+    //
+    // CONFIG_RANDOMIZE_BASE seems to be a necessity
+    //
+    // nokaslr would disable KASLR, kaslr would enable it
+    // /proc/cmdline contains command line
+    //
+    // try lsmod or /proc/modules to access module address
+    //
+    // Could potentially parse dmesg:
+    // > 505.654475:   <6> Kernel Offset: 0x2c28000000 from 0xffffff8008000000
+    //
+    // May be worth looking at
+    // https://github.com/libvmi/libvmi/blob/0f832ebfc41bde5977be0547d9bfa9722891e631/libvmi/os/linux/core.c#L404
+    // as well
+
+    Err(Error::with_unsupported("not yet implemented"))
 }
 
 

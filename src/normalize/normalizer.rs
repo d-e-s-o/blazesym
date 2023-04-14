@@ -17,6 +17,8 @@ use super::buildid::BuildId;
 use super::buildid::DefaultBuildIdReader;
 use super::buildid::NoBuildIdReader;
 use super::ioctl::query_procmap;
+use super::kernel::normalize_kernel_addrs;
+use super::kernel::KernelOutput;
 use super::user;
 use super::user::normalize_sorted_user_addrs_with_entries;
 use super::user::UserOutput;
@@ -318,7 +320,7 @@ impl Normalizer {
         pid: Pid,
         addrs: &[Addr],
         opts: &NormalizeOpts,
-    ) -> Result<UserOutput> {
+    ) -> Result<UserOutput<'_>> {
         let NormalizeOpts {
             sorted_addrs,
             map_files,
@@ -340,7 +342,16 @@ impl Normalizer {
     ///
     /// A convenience wrapper around [`Normalizer::normalize_user_addrs_opts`][]
     /// that uses the default normalization options.
-    pub fn normalize_user_addrs(&self, pid: Pid, addrs: &[Addr]) -> Result<UserOutput> {
+    pub fn normalize_user_addrs(&self, pid: Pid, addrs: &[Addr]) -> Result<UserOutput<'_>> {
         self.normalize_user_addrs_opts(pid, addrs, &NormalizeOpts::default())
+    }
+
+
+    /// Normalize `addrs` belonging to the kernel.
+    ///
+    /// Normalized addresses are reported in the exact same order in
+    /// which the non-normalized ones were provided.
+    pub fn normalize_kernel_addrs(&self, addrs: &[Addr]) -> Result<KernelOutput<'_>> {
+        normalize_kernel_addrs(addrs)
     }
 }
