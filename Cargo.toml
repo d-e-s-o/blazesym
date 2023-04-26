@@ -51,7 +51,7 @@ lru = {version = "0.10", optional = true}
 regex = {version = "1.6", optional = true}
 
 [dev-dependencies]
-blazesym = {path = ".", features = ["generate-test-files", "log"]}
+#blazesym = {path = ".", features = ["generate-test-files", "log"]}
 criterion = "0.4"
 criterion-perf-events = "0.3"
 env_logger = "0.10"
