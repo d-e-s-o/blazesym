@@ -53,7 +53,9 @@ regex = {version = "1.6", optional = true}
 [dev-dependencies]
 blazesym = {path = ".", features = ["generate-test-files", "log"]}
 criterion = "0.4"
+criterion-perf-events = "0.3"
 env_logger = "0.10"
+perfcnt = "0.8"
 tempfile = "3.4"
 test-log = "0.2"
 

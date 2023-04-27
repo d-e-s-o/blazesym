@@ -7,9 +7,13 @@ use std::time::Duration;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
+use criterion_perf_events::Perf;
+
+use perfcnt::linux::HardwareEventType as Hardware;
+use perfcnt::linux::PerfCounterBuilderLinux as Builder;
 
 
-fn benchmark(c: &mut Criterion) {
+fn benchmark(c: &mut Criterion<Perf>) {
     let mut group = c.benchmark_group("main");
     group.sample_size(500);
     group.warm_up_time(Duration::from_secs(5));
@@ -20,5 +24,9 @@ fn benchmark(c: &mut Criterion) {
     normalize::benchmark(&mut group);
 }
 
-criterion_group!(benches, benchmark);
+criterion_group!(
+    name = benches;
+    config = Criterion::default().with_measurement(Perf::new(Builder::from_hardware_event(Hardware::Instructions)));
+    targets = benchmark
+);
 criterion_main!(benches);
