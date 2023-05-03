@@ -190,10 +190,11 @@ mod tests {
 
     use std::env;
 
-    use test_log::test;
+    use coverage_helper::test;
+
 
     /// Make sure that we can find file line information for a function, if available.
-    #[test]
+    #[test_log::test(test)]
     fn test_find_line_info() {
         let test_gsym = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

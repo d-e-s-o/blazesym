@@ -371,16 +371,16 @@ mod tests {
     use std::io::Write as _;
     use std::ops::Deref as _;
 
+    use coverage_helper::test;
+
     use tempfile::tempfile;
     use tempfile::NamedTempFile;
-
-    use test_log::test;
 
     use crate::elf::ElfParser;
 
 
     /// Check that we can properly open a zip archive.
-    #[test]
+    #[test_log::test(test)]
     fn zip_opening() {
         let zip = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -389,7 +389,7 @@ mod tests {
     }
 
     /// Check that we can iterate over the entries of a zip archive.
-    #[test]
+    #[test_log::test(test)]
     fn zip_entry_iteration() {
         let zip = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -405,7 +405,7 @@ mod tests {
     }
 
     /// Check that we can find archive entries by name.
-    #[test]
+    #[test_log::test(test)]
     fn zip_entry_reading() {
         let zip = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -442,7 +442,7 @@ mod tests {
     }
 
     /// Check that we fail `Archive` creation for corrupted archives.
-    #[test]
+    #[test_log::test(test)]
     fn zip_creation_corrupted() {
         let zip = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

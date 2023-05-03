@@ -73,10 +73,12 @@ mod tests {
     use std::io::ErrorKind;
     use std::path::Path;
 
+    use coverage_helper::test;
+
 
     /// Check that we error our as expected when encountering a source
     /// that is not present.
-    #[test]
+    #[test_log::test(test)]
     fn non_present_file() {
         fn test(src: &Source) {
             let inspector = Inspector::new();

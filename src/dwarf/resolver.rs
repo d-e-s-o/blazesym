@@ -210,10 +210,10 @@ impl DwarfResolver {
 mod tests {
     use super::*;
 
-    use test_log::test;
+    use coverage_helper::test;
 
 
-    #[test]
+    #[test_log::test(test)]
     fn test_dwarf_resolver() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -228,7 +228,7 @@ mod tests {
     }
 
     /// Check that we can look up a symbol in DWARF debug information.
-    #[test]
+    #[test_log::test(test)]
     fn lookup_symbol() {
         let test_dwarf = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -249,7 +249,7 @@ mod tests {
     }
 
     /// Check that we fail to look up variables.
-    #[test]
+    #[test_log::test(test)]
     fn lookup_symbol_wrong_type() {
         let test_dwarf = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

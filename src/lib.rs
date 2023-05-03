@@ -24,6 +24,7 @@
 #![allow(clippy::collapsible_if, clippy::let_and_return, clippy::let_unit_value)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_debug_implementations)]
+#![cfg_attr(coverage_nightly, feature(no_coverage))]
 #![cfg_attr(feature = "nightly", feature(test))]
 #![cfg_attr(not(feature = "lru"), allow(dead_code))]
 

@@ -258,19 +258,19 @@ mod tests {
 
     use std::path::Path;
 
-    use test_log::test;
+    use coverage_helper::test;
 
 
     /// Check that we can parse `/proc/self/maps`.
     #[allow(clippy::suspicious_map)]
-    #[test]
+    #[test_log::test(test)]
     fn self_map_parsing() {
         let maps = parse(Pid::Slf).unwrap();
         assert_ne!(maps.map(|entry| entry.unwrap()).count(), 0);
     }
 
     /// Make sure that we can parse proc maps lines correctly.
-    #[test]
+    #[test_log::test(test)]
     fn map_line_parsing() {
         let lines = r#"
 55f4a95c9000-55f4a95cb000 r--p 00000000 00:20 41445                      /usr/bin/cat

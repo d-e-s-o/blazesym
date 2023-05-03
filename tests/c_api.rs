@@ -1,4 +1,5 @@
 #![allow(clippy::let_and_return, clippy::let_unit_value)]
+#![cfg_attr(coverage_nightly, feature(no_coverage))]
 
 use std::ffi::CStr;
 use std::ffi::CString;
@@ -31,9 +32,11 @@ use blazesym::c_api::blaze_user_addrs_free;
 use blazesym::c_api::blazesym_result_free;
 use blazesym::Addr;
 
+use coverage_helper::test;
+
 
 /// Make sure that we can create and free a symbolizer instance.
-#[test]
+#[test_log::test(test)]
 fn symbolizer_creation() {
     let symbolizer = blaze_symbolizer_new();
     let () = unsafe { blaze_symbolizer_free(symbolizer) };
@@ -42,7 +45,7 @@ fn symbolizer_creation() {
 
 /// Make sure that we can create and free a symbolizer instance with the
 /// provided options.
-#[test]
+#[test_log::test(test)]
 fn symbolizer_creation_with_opts() {
     let opts = blaze_symbolizer_opts {
         debug_syms: true,
@@ -54,7 +57,7 @@ fn symbolizer_creation_with_opts() {
 
 
 /// Make sure that we can symbolize an address in an ELF file.
-#[test]
+#[test_log::test(test)]
 fn symbolize_from_elf() {
     let test_dwarf = Path::new(&env!("CARGO_MANIFEST_DIR"))
         .join("data")
@@ -158,7 +161,7 @@ fn symbolize_in_process() {
 
 
 /// Make sure that we can create and free a normalizer instance.
-#[test]
+#[test_log::test(test)]
 fn normalizer_creation() {
     let normalizer = blaze_normalizer_new();
     let () = unsafe { blaze_normalizer_free(normalizer) };
@@ -166,7 +169,7 @@ fn normalizer_creation() {
 
 
 /// Check that we can normalize user space addresses.
-#[test]
+#[test_log::test(test)]
 fn normalize_user_addrs() {
     let addrs = [
         libc::__errno_location as Addr,
@@ -194,7 +197,7 @@ fn normalize_user_addrs() {
 
 
 /// Check that we can normalize sorted user space addresses.
-#[test]
+#[test_log::test(test)]
 fn normalize_user_addrs_sorted() {
     let mut addrs = [
         libc::__errno_location as Addr,
@@ -223,7 +226,7 @@ fn normalize_user_addrs_sorted() {
 
 
 /// Make sure that we can create and free an inspector instance.
-#[test]
+#[test_log::test(test)]
 fn inspector_creation() {
     let inspector = blaze_inspector_new();
     let () = unsafe { blaze_inspector_free(inspector) };
@@ -231,7 +234,7 @@ fn inspector_creation() {
 
 
 /// Make sure that we can lookup a function's address using DWARF information.
-#[test]
+#[test_log::test(test)]
 fn lookup_dwarf() {
     let test_dwarf = Path::new(&env!("CARGO_MANIFEST_DIR"))
         .join("data")

@@ -304,10 +304,10 @@ mod tests {
     use std::io::Write;
     use std::path::Path;
 
-    use test_log::test;
+    use coverage_helper::test;
 
 
-    #[test]
+    #[test_log::test(test)]
     fn test_parse_context() {
         let test_gsym = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(ctx.get_str(addrinfo.name as usize).unwrap(), "factorial");
     }
 
-    #[test]
+    #[test_log::test(test)]
     fn test_find_addr() {
         let test_gsym = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

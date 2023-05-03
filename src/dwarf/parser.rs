@@ -841,7 +841,7 @@ pub(crate) fn debug_info_parse_symbols<'a>(
 mod tests {
     use super::*;
 
-    use test_log::test;
+    use coverage_helper::test;
 
     #[cfg(feature = "nightly")]
     use test::Bencher;
@@ -946,7 +946,7 @@ mod tests {
         parse_aranges_elf_parser(&parser)
     }
 
-    #[test]
+    #[test_log::test(test)]
     fn test_parse_debug_line_elf() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -956,7 +956,7 @@ mod tests {
         let _line = parse_debug_line_elf_parser(&parser, &[]).unwrap();
     }
 
-    #[test]
+    #[test_log::test(test)]
     fn test_run_debug_line_stmts_1() {
         let stmts = [
             0x00, 0x09, 0x02, 0x30, 0x8b, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xa0, 0x04,
@@ -990,7 +990,7 @@ mod tests {
         assert_eq!(matrix[2].address, 0x18b48);
     }
 
-    #[test]
+    #[test_log::test(test)]
     fn test_run_debug_line_stmts_2() {
         //	File name                            Line number    Starting address    View    Stmt
         //	    methods.rs                                   789             0x18c70               x
@@ -1068,7 +1068,7 @@ mod tests {
         assert!(matrix[18].is_stmt);
     }
 
-    #[test]
+    #[test_log::test(test)]
     fn test_parse_aranges_elf() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -1077,7 +1077,7 @@ mod tests {
         let _aranges = parse_aranges_elf(bin_name.as_ref()).unwrap();
     }
 
-    #[test]
+    #[test_log::test(test)]
     fn test_debug_info_parse_symbols() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

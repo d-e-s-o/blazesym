@@ -148,14 +148,15 @@ mod tests {
     use std::ffi::CStr;
     use std::io::Write;
 
+    use coverage_helper::test;
+
     use tempfile::tempfile;
-    use test_log::test;
 
     use crate::util::ReadRaw;
 
 
     /// Check that we can `mmap` a file.
-    #[test]
+    #[test_log::test(test)]
     fn mmap() {
         let mut file = tempfile().unwrap();
         let cstr = b"Daniel was here. Briefly.\0";
@@ -172,7 +173,7 @@ mod tests {
     }
 
     /// Check that we can properly restrict the view of a `Mmap`.
-    #[test]
+    #[test_log::test(test)]
     fn view_constraining() {
         let mut file = tempfile().unwrap();
         let s = b"abcdefghijklmnopqrstuvwxyz";

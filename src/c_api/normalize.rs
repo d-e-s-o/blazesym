@@ -389,10 +389,12 @@ pub unsafe extern "C" fn blaze_user_addrs_free(addrs: *mut blaze_normalized_user
 mod tests {
     use super::*;
 
+    use coverage_helper::test;
+
 
     /// Check that we can convert an [`Unknown`] into a
     /// [`blaze_user_addr_meta_unknown`] and back.
-    #[test]
+    #[test_log::test(test)]
     fn unknown_convesion() {
         let unknown = Unknown {
             _non_exhaustive: (),
@@ -404,7 +406,7 @@ mod tests {
 
     /// Check that we correctly format the debug representation of a
     /// [`blaze_user_addr_meta_variant`].
-    #[test]
+    #[test_log::test(test)]
     fn debug_meta_variant() {
         let unknown = blaze_user_addr_meta_unknown {};
         let variant = blaze_user_addr_meta_variant {
