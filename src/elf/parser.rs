@@ -535,7 +535,7 @@ mod tests {
     use coverage_helper::test;
 
 
-    #[test_log::test(test)]
+    #[test]
     fn test_elf64_parser() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -545,7 +545,7 @@ mod tests {
         assert!(parser.find_section(".shstrtab").is_ok());
     }
 
-    #[test_log::test(test)]
+    #[test]
     fn test_elf64_symtab() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(sym_name_ret, sym_name);
     }
 
-    #[test_log::test(test)]
+    #[test]
     fn elf64_lookup_symbol_random() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -582,7 +582,7 @@ mod tests {
     }
 
     /// Make sure that we can look up a symbol in an ELF file.
-    #[test_log::test(test)]
+    #[test]
     fn lookup_symbol() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

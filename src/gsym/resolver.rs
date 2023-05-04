@@ -194,7 +194,7 @@ mod tests {
 
 
     /// Make sure that we can find file line information for a function, if available.
-    #[test_log::test(test)]
+    #[test]
     fn test_find_line_info() {
         let test_gsym = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

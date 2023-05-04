@@ -19,7 +19,7 @@ use coverage_helper::test;
 
 
 /// Make sure that we fail symbolization when providing a non-existent source.
-#[test_log::test(test)]
+#[test]
 fn error_on_non_existent_source() {
     let non_existent = Path::new("/does-not-exists");
     let srcs = vec![
@@ -35,7 +35,7 @@ fn error_on_non_existent_source() {
 }
 
 /// Check that we can correctly symbolize an address using GSYM.
-#[test_log::test(test)]
+#[test]
 fn symbolize_gsym() {
     let test_gsym = Path::new(&env!("CARGO_MANIFEST_DIR"))
         .join("data")
@@ -57,7 +57,7 @@ fn symbolize_gsym() {
 }
 
 /// Check that we can symbolize an address using DWARF.
-#[test_log::test(test)]
+#[test]
 fn symbolize_dwarf() {
     let test_dwarf = Path::new(&env!("CARGO_MANIFEST_DIR"))
         .join("data")
@@ -77,7 +77,7 @@ fn symbolize_dwarf() {
 }
 
 /// Check that we can symbolize addresses inside our own process.
-#[test_log::test(test)]
+#[test]
 fn symbolize_process() {
     let src = symbolize::Source::Process(symbolize::Process::new(Pid::Slf));
     let addrs = [symbolize_process as Addr, Symbolizer::new as Addr];
@@ -98,7 +98,7 @@ fn symbolize_process() {
 }
 
 /// Check that we can look up an address using DWARF.
-#[test_log::test(test)]
+#[test]
 fn lookup_dwarf() {
     let test_dwarf = Path::new(&env!("CARGO_MANIFEST_DIR"))
         .join("data")
@@ -118,7 +118,7 @@ fn lookup_dwarf() {
 }
 
 /// Check that we can normalize user addresses in our own shared object.
-#[test_log::test(test)]
+#[test]
 fn normalize_user_addr() {
     fn test(so: &str) {
         let test_so = Path::new(&env!("CARGO_MANIFEST_DIR")).join("data").join(so);
@@ -167,7 +167,7 @@ fn normalize_user_addr() {
 
 
 /// Check that we can look up an address.
-#[test_log::test(test)]
+#[test]
 fn inspect() {
     fn test(src: inspect::Source) {
         let inspector = Inspector::new();

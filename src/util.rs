@@ -389,7 +389,7 @@ mod tests {
 
 
     /// Make sure that `[u8]::ensure` works as expected.
-    #[test_log::test(test)]
+    #[test]
     fn u8_slice_len_ensurance() {
         let slice = [0u8; 0].as_slice();
         assert_eq!(slice.ensure(0), Some(()));
@@ -402,7 +402,7 @@ mod tests {
     }
 
     /// Check that we can align the read pointer on a `[u8]`.
-    #[test_log::test(test)]
+    #[test]
     fn u8_slice_align() {
         let mut buffer = [0u8; 64];
         let ptr = buffer.as_mut_ptr();
@@ -443,7 +443,7 @@ mod tests {
     }
 
     /// Check that we can read various integers from a slice.
-    #[test_log::test(test)]
+    #[test]
     fn pod_reading() {
         macro_rules! test {
             ($type:ty) => {{
@@ -477,7 +477,7 @@ mod tests {
     }
 
     /// Check that we can read references to `Pod`s.
-    #[test_log::test(test)]
+    #[test]
     fn pod_ref_reading() {
         // This test assumes that `u64`'s required alignment is greater
         // than 1.
@@ -512,7 +512,7 @@ mod tests {
 
     /// Test reading of signed and unsigned 16 and 32 bit values against known
     /// results.
-    #[test_log::test(test)]
+    #[test]
     fn word_reading() {
         let data = 0xf936857fu32.to_ne_bytes();
         assert_eq!(data.as_slice().read_u16().unwrap(), 0x857f);
@@ -522,7 +522,7 @@ mod tests {
     }
 
     /// Make sure that we can read leb128 encoded values.
-    #[test_log::test(test)]
+    #[test]
     fn leb128_reading() {
         let data = [0xf4, 0xf3, 0x75];
         let (v, s) = data.as_slice().read_u128_leb128().unwrap();
@@ -535,7 +535,7 @@ mod tests {
     }
 
     /// Check that we can read a NUL terminated string from a slice.
-    #[test_log::test(test)]
+    #[test]
     fn cstr_reading() {
         let mut slice = b"abc\x001234".as_slice();
 
@@ -548,7 +548,7 @@ mod tests {
     }
 
     /// Test that we correctly binary search for a lower bound.
-    #[test_log::test(test)]
+    #[test]
     fn search_lower_bound() {
         let data = [];
         assert_eq!(find_match_or_lower_bound(&data, &0), None);

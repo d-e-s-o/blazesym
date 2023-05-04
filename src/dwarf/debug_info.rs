@@ -787,7 +787,7 @@ mod tests {
     use crate::elf::ElfParser;
 
 
-    #[test_log::test(test)]
+    #[test]
     fn test_parse_abbrev() {
         let raw = [
             0x01, 0x11, 0x01, 0x25, 0x0e, 0x13, 0x05, 0x03, 0x0e, 0x10, 0x17, 0x1b, 0x0e, 0xb4,
@@ -829,7 +829,7 @@ mod tests {
         assert!(abbrev.has_children);
     }
 
-    #[test_log::test(test)]
+    #[test]
     fn test_parse_cu_abbrevs() {
         let raw = [
             0x01, 0x11, 0x01, 0x25, 0x0e, 0x13, 0x05, 0x03, 0x0e, 0x10, 0x17, 0x1b, 0x0e, 0xb4,
@@ -843,7 +843,7 @@ mod tests {
         assert_eq!(bytes, raw.len());
     }
 
-    #[test_log::test(test)]
+    #[test]
     fn test_unititer() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -879,7 +879,7 @@ mod tests {
 
     /// Make sure check we do not panic when handling DWARFv5 (which is not
     /// currently supported).
-    #[test_log::test(test)]
+    #[test]
     fn test_unititer_v5() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

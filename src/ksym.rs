@@ -214,7 +214,7 @@ mod tests {
 
     // This test case is skipped by default for /proc/kallsyms may
     // not available in some environment.
-    #[test_log::test(test)]
+    #[test]
     #[ignore = "system-dependent; may fail"]
     fn ksym_resolver_load_find() {
         let resolver = KSymResolver::load_file_name(PathBuf::from(KALLSYMS)).unwrap();
@@ -266,7 +266,7 @@ mod tests {
         assert!(found.unwrap().iter().any(|x| x.address == addr));
     }
 
-    #[test_log::test(test)]
+    #[test]
     fn ksym_cache() {
         let kallsyms = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -278,7 +278,7 @@ mod tests {
         assert!(resolver1.is_ok());
     }
 
-    #[test_log::test(test)]
+    #[test]
     fn find_addresses_ksym() {
         let resolver = KSymResolver {
             syms: vec![
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(syms[0].name, "3");
     }
 
-    #[test_log::test(test)]
+    #[test]
     fn find_addresses_ksym_exhaust() {
         let syms_sz = 10;
         let mut resolver = KSymResolver {

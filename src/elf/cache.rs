@@ -176,7 +176,7 @@ mod tests {
     use coverage_helper::test;
 
 
-    #[test_log::test(test)]
+    #[test]
     fn test_cache() {
         let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

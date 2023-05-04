@@ -386,7 +386,7 @@ mod tests {
 
 
     /// Check that we can reorder elements in an array as expected.
-    #[test_log::test(test)]
+    #[test]
     fn array_reordering() {
         let mut array = vec![];
         reorder::<usize, ()>(&mut array, vec![]);
@@ -405,7 +405,7 @@ mod tests {
 
 
     /// Check that we can read a binary's build ID.
-    #[test_log::test(test)]
+    #[test]
     fn build_id_reading() {
         let elf = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -424,7 +424,7 @@ mod tests {
     }
 
     /// Check that we detect unsorted input addresses.
-    #[test_log::test(test)]
+    #[test]
     fn user_address_normalization_unsorted() {
         let mut addrs = [
             libc::__errno_location as Addr,
@@ -442,7 +442,7 @@ mod tests {
     }
 
     /// Check that we handle unknown addresses as expected.
-    #[test_log::test(test)]
+    #[test]
     fn user_address_normalization_unknown() {
         // The very first page of the address space should never be
         // mapped, so use addresses from there.
@@ -460,7 +460,7 @@ mod tests {
     }
 
     /// Check that we can normalize user addresses.
-    #[test_log::test(test)]
+    #[test]
     fn user_address_normalization() {
         let addrs = [
             libc::__errno_location as Addr,
@@ -499,7 +499,7 @@ mod tests {
     }
 
     /// Check that we can normalize user addresses in our own shared object.
-    #[test_log::test(test)]
+    #[test]
     fn user_address_normalization_custom_so() {
         let test_so = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

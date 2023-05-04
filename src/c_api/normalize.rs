@@ -394,7 +394,7 @@ mod tests {
 
     /// Check that we can convert an [`Unknown`] into a
     /// [`blaze_user_addr_meta_unknown`] and back.
-    #[test_log::test(test)]
+    #[test]
     fn unknown_convesion() {
         let unknown = Unknown {
             _non_exhaustive: (),
@@ -406,7 +406,7 @@ mod tests {
 
     /// Check that we correctly format the debug representation of a
     /// [`blaze_user_addr_meta_variant`].
-    #[test_log::test(test)]
+    #[test]
     fn debug_meta_variant() {
         let unknown = blaze_user_addr_meta_unknown {};
         let variant = blaze_user_addr_meta_variant {

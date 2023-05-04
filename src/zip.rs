@@ -380,7 +380,7 @@ mod tests {
 
 
     /// Check that we can properly open a zip archive.
-    #[test_log::test(test)]
+    #[test]
     fn zip_opening() {
         let zip = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -389,7 +389,7 @@ mod tests {
     }
 
     /// Check that we can iterate over the entries of a zip archive.
-    #[test_log::test(test)]
+    #[test]
     fn zip_entry_iteration() {
         let zip = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -405,7 +405,7 @@ mod tests {
     }
 
     /// Check that we can find archive entries by name.
-    #[test_log::test(test)]
+    #[test]
     fn zip_entry_reading() {
         let zip = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -442,7 +442,7 @@ mod tests {
     }
 
     /// Check that we fail `Archive` creation for corrupted archives.
-    #[test_log::test(test)]
+    #[test]
     fn zip_creation_corrupted() {
         let zip = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
