@@ -10,7 +10,7 @@
 /**
  * The type of a symbol.
  */
-typedef enum blaze_sym_type {
+typedef enum {
   /**
    * That type could not be determined (possibly because the source does not
    * contains information about the type).
@@ -29,7 +29,7 @@ typedef enum blaze_sym_type {
 /**
  * The valid variant kind in [`blaze_user_addr_meta`].
  */
-typedef enum blaze_user_addr_meta_kind {
+typedef enum {
   /**
    * [`blaze_user_addr_meta_variant::unknown`] is valid.
    */
@@ -69,13 +69,13 @@ typedef struct blaze_symbolizer blaze_symbolizer;
 /**
  * Information about a looked up symbol.
  */
-typedef struct blaze_sym_info {
+typedef struct {
   const char *name;
   uintptr_t addr;
   size_t size;
   uint64_t file_offset;
   const char *obj_file_name;
-  enum blaze_sym_type sym_type;
+  blaze_sym_type sym_type;
 } blaze_sym_info;
 
 /**
@@ -83,7 +83,7 @@ typedef struct blaze_sym_info {
  *
  * C ABI compatible version of [`inspect::Elf`].
  */
-typedef struct blaze_inspect_elf_src {
+typedef struct {
   /**
    * The path to the binary. This member is always present.
    */
@@ -98,7 +98,7 @@ typedef struct blaze_inspect_elf_src {
 /**
  * C compatible version of [`Binary`].
  */
-typedef struct blaze_user_addr_meta_binary {
+typedef struct {
   /**
    * The path to the binary. This member is always present.
    */
@@ -116,36 +116,36 @@ typedef struct blaze_user_addr_meta_binary {
 /**
  * C compatible version of [`Unknown`].
  */
-typedef struct blaze_user_addr_meta_unknown {
+typedef struct {
   uint8_t __unused;
 } blaze_user_addr_meta_unknown;
 
 /**
  * The actual variant data in [`blaze_user_addr_meta`].
  */
-typedef union blaze_user_addr_meta_variant {
+typedef union {
   /**
    * Valid on [`blaze_user_addr_meta_kind::BLAZE_USER_ADDR_BINARY`].
    */
-  struct blaze_user_addr_meta_binary binary;
+  blaze_user_addr_meta_binary binary;
   /**
    * Valid on [`blaze_user_addr_meta_kind::BLAZE_USER_ADDR_UNKNOWN`].
    */
-  struct blaze_user_addr_meta_unknown unknown;
+  blaze_user_addr_meta_unknown unknown;
 } blaze_user_addr_meta_variant;
 
 /**
  * C ABI compatible version of [`UserAddrMeta`].
  */
-typedef struct blaze_user_addr_meta {
+typedef struct {
   /**
    * The variant kind that is present.
    */
-  enum blaze_user_addr_meta_kind kind;
+  blaze_user_addr_meta_kind kind;
   /**
    * The actual variant with its data.
    */
-  union blaze_user_addr_meta_variant variant;
+  blaze_user_addr_meta_variant variant;
 } blaze_user_addr_meta;
 
 /**
@@ -153,7 +153,7 @@ typedef struct blaze_user_addr_meta {
  * [`blaze_user_addr_meta`] array (such as
  * [`blaze_normalized_user_addrs::metas`]).
  */
-typedef struct blaze_normalized_addr {
+typedef struct {
   /**
    * The normalized address.
    */
@@ -169,7 +169,7 @@ typedef struct blaze_normalized_addr {
  *
  * C ABI compatible version of [`NormalizedUserAddrs`].
  */
-typedef struct blaze_normalized_user_addrs {
+typedef struct {
   /**
    * The number of [`blaze_user_addr_meta`] objects present in `metas`.
    */
@@ -177,7 +177,7 @@ typedef struct blaze_normalized_user_addrs {
   /**
    * An array of `meta_count` objects.
    */
-  struct blaze_user_addr_meta *metas;
+  blaze_user_addr_meta *metas;
   /**
    * The number of [`blaze_normalized_addr`] objects present in `addrs`.
    */
@@ -185,21 +185,13 @@ typedef struct blaze_normalized_user_addrs {
   /**
    * An array of `addr_count` objects.
    */
-  struct blaze_normalized_addr *addrs;
+  blaze_normalized_addr *addrs;
 } blaze_normalized_user_addrs;
 
 /**
- * A placeholder symbolizer for C API.
- *
- * It is returned by [`blaze_symbolizer_new`] and should be free by
- * [`blaze_symbolizer_free`].
+ * Options for configuring [`Symbolizer`] objects.
  */
-typedef struct blaze_symbolizer blaze_symbolizer;
-
-/**
- * Options for configuring `blaze_symbolizer` objects.
- */
-typedef struct blaze_symbolizer_opts {
+typedef struct {
   /**
    * Whether to enable usage of debug symbols.
    */
@@ -218,7 +210,7 @@ typedef struct blaze_symbolizer_opts {
  * A `blaze_sym` is the information of a symbol found for an
  * address. One address may result in several symbols.
  */
-typedef struct blaze_sym {
+typedef struct {
   /**
    * The symbol name is where the given address should belong to.
    */
@@ -247,7 +239,7 @@ typedef struct blaze_sym {
  * Every address has an `blaze_entry` in
  * [`blaze_result::entries`] to collect symbols found.
  */
-typedef struct blaze_entry {
+typedef struct {
   /**
    * The number of symbols found for an address.
    */
@@ -257,7 +249,7 @@ typedef struct blaze_entry {
    *
    * `syms` is an array of [`blaze_sym`] in the size `size`.
    */
-  const struct blaze_sym *syms;
+  const blaze_sym *syms;
 } blaze_entry;
 
 /**
@@ -266,7 +258,7 @@ typedef struct blaze_entry {
  * Instances of [`blaze_result`] are returned by any of the `blaze_symbolize_*`
  * variants. They should be freed by calling [`blaze_result_free`].
  */
-typedef struct blaze_result {
+typedef struct {
   /**
    * The number of addresses being symbolized.
    */
@@ -278,7 +270,7 @@ typedef struct blaze_result {
    * Therefore, every address must have an entry here on the same
    * order.
    */
-  struct blaze_entry entries[0];
+  blaze_entry entries[0];
 } blaze_result;
 
 /**
@@ -287,7 +279,7 @@ typedef struct blaze_result {
  * Load all ELF files in a process as the sources of symbols and debug
  * information.
  */
-typedef struct blaze_symbolize_src_process {
+typedef struct {
   /**
    * It is the PID of a process to symbolize.
    *
@@ -303,7 +295,7 @@ typedef struct blaze_symbolize_src_process {
  * Use a kernel image and a snapshot of its kallsyms as a source of symbols and
  * debug information.
  */
-typedef struct blaze_symbolize_src_kernel {
+typedef struct {
   /**
    * The path of a copy of kallsyms.
    *
@@ -330,7 +322,7 @@ typedef struct blaze_symbolize_src_kernel {
  * Describes the path and address of an ELF file loaded in a
  * process.
  */
-typedef struct blaze_symbolize_src_elf {
+typedef struct {
   /**
    * The path to the ELF file.
    *
@@ -345,7 +337,7 @@ typedef struct blaze_symbolize_src_elf {
 /**
  * The parameters to load symbols and debug information from a gsym file.
  */
-typedef struct blaze_symbolize_src_gsym {
+typedef struct {
   /**
    * The path to a gsym file.
    */
@@ -373,10 +365,10 @@ extern "C" {
  * [`blaze_inspector_new`], `src` needs to point to a valid object, and `names`
  * needs to be a valid pointer to `name_cnt` strings.
  */
-const struct blaze_sym_info *const *blaze_inspect_syms_elf(const struct blaze_inspector *inspector,
-                                                           const struct blaze_inspect_elf_src *src,
-                                                           const char *const *names,
-                                                           size_t name_cnt);
+const blaze_sym_info *const *blaze_inspect_syms_elf(const blaze_inspector *inspector,
+                                                    const blaze_inspect_elf_src *src,
+                                                    const char *const *names,
+                                                    size_t name_cnt);
 
 /**
  * Free an array returned by [`blaze_inspect_syms_elf`].
@@ -386,7 +378,7 @@ const struct blaze_sym_info *const *blaze_inspect_syms_elf(const struct blaze_in
  * The pointer must be returned by [`blaze_inspect_syms_elf`].
  *
  */
-void blaze_inspect_syms_free(const struct blaze_sym_info *const *syms);
+void blaze_inspect_syms_free(const blaze_sym_info *const *syms);
 
 /**
  * Create an instance of a blazesym inspector.
@@ -394,7 +386,7 @@ void blaze_inspect_syms_free(const struct blaze_sym_info *const *syms);
  * The returned pointer should be released using
  * [`blaze_inspector_free`] once it is no longer needed.
  */
-struct blaze_inspector *blaze_inspector_new(void);
+blaze_inspector *blaze_inspector_new(void);
 
 /**
  * Free a blazesym inspector.
@@ -406,7 +398,7 @@ struct blaze_inspector *blaze_inspector_new(void);
  * The provided inspector should have been created by
  * [`blaze_inspector_new`].
  */
-void blaze_inspector_free(struct blaze_inspector *inspector);
+void blaze_inspector_free(blaze_inspector *inspector);
 
 /**
  * Create an instance of a blazesym normalizer.
@@ -414,7 +406,7 @@ void blaze_inspector_free(struct blaze_inspector *inspector);
  * The returned pointer should be released using
  * [`blaze_normalizer_free`] once it is no longer needed.
  */
-struct blaze_normalizer *blaze_normalizer_new(void);
+blaze_normalizer *blaze_normalizer_new(void);
 
 /**
  * Free a blazesym normalizer.
@@ -426,7 +418,7 @@ struct blaze_normalizer *blaze_normalizer_new(void);
  * The provided normalizer should have been created by
  * [`blaze_normalizer_new`].
  */
-void blaze_normalizer_free(struct blaze_normalizer *normalizer);
+void blaze_normalizer_free(blaze_normalizer *normalizer);
 
 /**
  * Normalize a list of user space addresses.
@@ -443,10 +435,10 @@ void blaze_normalizer_free(struct blaze_normalizer *normalizer);
  * Callers need to pass in a valid `addrs` pointer, pointing to memory of
  * `addr_count` addresses.
  */
-struct blaze_normalized_user_addrs *blaze_normalize_user_addrs(const struct blaze_normalizer *normalizer,
-                                                               const uintptr_t *addrs,
-                                                               size_t addr_count,
-                                                               uint32_t pid);
+blaze_normalized_user_addrs *blaze_normalize_user_addrs(const blaze_normalizer *normalizer,
+                                                        const uintptr_t *addrs,
+                                                        size_t addr_count,
+                                                        uint32_t pid);
 
 /**
  * Normalize a list of user space addresses.
@@ -462,10 +454,10 @@ struct blaze_normalized_user_addrs *blaze_normalize_user_addrs(const struct blaz
  * Callers need to pass in a valid `addrs` pointer, pointing to memory of
  * `addr_count` addresses.
  */
-struct blaze_normalized_user_addrs *blaze_normalize_user_addrs_sorted(const struct blaze_normalizer *normalizer,
-                                                                      const uintptr_t *addrs,
-                                                                      size_t addr_count,
-                                                                      uint32_t pid);
+blaze_normalized_user_addrs *blaze_normalize_user_addrs_sorted(const blaze_normalizer *normalizer,
+                                                               const uintptr_t *addrs,
+                                                               size_t addr_count,
+                                                               uint32_t pid);
 
 /**
  * Free an object as returned by [`blaze_normalized_user_addrs`] or
@@ -476,7 +468,7 @@ struct blaze_normalized_user_addrs *blaze_normalize_user_addrs_sorted(const stru
  * [`blaze_normalized_user_addrs`] or
  * [`blaze_normalize_user_addrs_sorted`].
  */
-void blaze_user_addrs_free(struct blaze_normalized_user_addrs *addrs);
+void blaze_user_addrs_free(blaze_normalized_user_addrs *addrs);
 
 /**
  * Create an instance of a symbolizer.
@@ -489,7 +481,7 @@ blaze_symbolizer *blaze_symbolizer_new(void);
  * # Safety
  * `opts` needs to be a valid pointer.
  */
-blaze_symbolizer *blaze_symbolizer_new_opts(const struct blaze_symbolizer_opts *opts);
+blaze_symbolizer *blaze_symbolizer_new_opts(const blaze_symbolizer_opts *opts);
 
 /**
  * Free an instance of blazesym a symbolizer for C API.
@@ -514,10 +506,10 @@ void blaze_symbolizer_free(blaze_symbolizer *symbolizer);
  * [`blaze_symbolize_src_process`] object. `addrs` must represent an array of
  * `addr_cnt` objects.
  */
-const struct blaze_result *blaze_symbolize_process(blaze_symbolizer *symbolizer,
-                                                   const struct blaze_symbolize_src_process *src,
-                                                   const uintptr_t *addrs,
-                                                   size_t addr_cnt);
+const blaze_result *blaze_symbolize_process(blaze_symbolizer *symbolizer,
+                                            const blaze_symbolize_src_process *src,
+                                            const uintptr_t *addrs,
+                                            size_t addr_cnt);
 
 /**
  * Symbolize kernel addresses.
@@ -532,10 +524,10 @@ const struct blaze_result *blaze_symbolize_process(blaze_symbolizer *symbolizer,
  * [`blaze_symbolize_src_kernel`] object. `addrs` must represent an array of
  * `addr_cnt` objects.
  */
-const struct blaze_result *blaze_symbolize_kernel(blaze_symbolizer *symbolizer,
-                                                  const struct blaze_symbolize_src_kernel *src,
-                                                  const uintptr_t *addrs,
-                                                  size_t addr_cnt);
+const blaze_result *blaze_symbolize_kernel(blaze_symbolizer *symbolizer,
+                                           const blaze_symbolize_src_kernel *src,
+                                           const uintptr_t *addrs,
+                                           size_t addr_cnt);
 
 /**
  * Symbolize addresses in an ELF file.
@@ -550,10 +542,10 @@ const struct blaze_result *blaze_symbolize_kernel(blaze_symbolizer *symbolizer,
  * [`blaze_symbolize_src_elf`] object. `addrs` must represent an array of
  * `addr_cnt` objects.
  */
-const struct blaze_result *blaze_symbolize_elf(blaze_symbolizer *symbolizer,
-                                               const struct blaze_symbolize_src_elf *src,
-                                               const uintptr_t *addrs,
-                                               size_t addr_cnt);
+const blaze_result *blaze_symbolize_elf(blaze_symbolizer *symbolizer,
+                                        const blaze_symbolize_src_elf *src,
+                                        const uintptr_t *addrs,
+                                        size_t addr_cnt);
 
 /**
  * Symbolize addresses in a Gsym file.
@@ -568,10 +560,10 @@ const struct blaze_result *blaze_symbolize_elf(blaze_symbolizer *symbolizer,
  * [`blaze_symbolize_src_gsym`] object. `addrs` must represent an array of
  * `addr_cnt` objects.
  */
-const struct blaze_result *blaze_symbolize_gsym(blaze_symbolizer *symbolizer,
-                                                const struct blaze_symbolize_src_gsym *src,
-                                                const uintptr_t *addrs,
-                                                size_t addr_cnt);
+const blaze_result *blaze_symbolize_gsym(blaze_symbolizer *symbolizer,
+                                         const blaze_symbolize_src_gsym *src,
+                                         const uintptr_t *addrs,
+                                         size_t addr_cnt);
 
 /**
  * Free an array returned by any of the `blaze_symbolize_*` variants.
@@ -580,7 +572,7 @@ const struct blaze_result *blaze_symbolize_gsym(blaze_symbolizer *symbolizer,
  * The pointer must have been returned by any of the `blaze_symbolize_*`
  * variants.
  */
-void blaze_result_free(const struct blaze_result *results);
+void blaze_result_free(const blaze_result *results);
 
 #ifdef __cplusplus
 } // extern "C"

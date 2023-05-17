@@ -133,13 +133,6 @@ impl From<&blaze_symbolize_src_gsym> for Gsym {
 }
 
 
-/// A placeholder symbolizer for C API.
-///
-/// It is returned by [`blaze_symbolizer_new`] and should be free by
-/// [`blaze_symbolizer_free`].
-pub type blaze_symbolizer = Symbolizer;
-
-
 /// The result of symbolization of an address.
 ///
 /// A `blaze_sym` is the information of a symbol found for an
@@ -205,7 +198,7 @@ unsafe fn from_cstr(cstr: *const c_char) -> PathBuf {
 }
 
 
-/// Options for configuring `blaze_symbolizer` objects.
+/// Options for configuring [`Symbolizer`] objects.
 #[repr(C)]
 #[derive(Debug)]
 pub struct blaze_symbolizer_opts {
@@ -220,7 +213,7 @@ pub struct blaze_symbolizer_opts {
 
 /// Create an instance of a symbolizer.
 #[no_mangle]
-pub extern "C" fn blaze_symbolizer_new() -> *mut blaze_symbolizer {
+pub extern "C" fn blaze_symbolizer_new() -> *mut Symbolizer {
     let symbolizer = Symbolizer::new();
     let symbolizer_box = Box::new(symbolizer);
     Box::into_raw(symbolizer_box)
@@ -233,7 +226,7 @@ pub extern "C" fn blaze_symbolizer_new() -> *mut blaze_symbolizer {
 #[no_mangle]
 pub unsafe extern "C" fn blaze_symbolizer_new_opts(
     opts: *const blaze_symbolizer_opts,
-) -> *mut blaze_symbolizer {
+) -> *mut Symbolizer {
     // SAFETY: The caller ensures that the pointer is valid.
     let opts = unsafe { &*opts };
     let blaze_symbolizer_opts {
@@ -256,7 +249,7 @@ pub unsafe extern "C" fn blaze_symbolizer_new_opts(
 /// The pointer must have been returned by [`blaze_symbolizer_new`] or
 /// [`blaze_symbolizer_new_opts`].
 #[no_mangle]
-pub unsafe extern "C" fn blaze_symbolizer_free(symbolizer: *mut blaze_symbolizer) {
+pub unsafe extern "C" fn blaze_symbolizer_free(symbolizer: *mut Symbolizer) {
     if !symbolizer.is_null() {
         drop(unsafe { Box::from_raw(symbolizer) });
     }
@@ -341,7 +334,7 @@ unsafe fn convert_symbolizedresults_to_c(
 }
 
 unsafe fn blaze_symbolize_impl(
-    symbolizer: *mut blaze_symbolizer,
+    symbolizer: *mut Symbolizer,
     src: Source,
     addrs: *const Addr,
     addr_cnt: usize,
@@ -381,7 +374,7 @@ unsafe fn blaze_symbolize_impl(
 /// `addr_cnt` objects.
 #[no_mangle]
 pub unsafe extern "C" fn blaze_symbolize_process(
-    symbolizer: *mut blaze_symbolizer,
+    symbolizer: *mut Symbolizer,
     src: *const blaze_symbolize_src_process,
     addrs: *const Addr,
     addr_cnt: usize,
@@ -405,7 +398,7 @@ pub unsafe extern "C" fn blaze_symbolize_process(
 /// `addr_cnt` objects.
 #[no_mangle]
 pub unsafe extern "C" fn blaze_symbolize_kernel(
-    symbolizer: *mut blaze_symbolizer,
+    symbolizer: *mut Symbolizer,
     src: *const blaze_symbolize_src_kernel,
     addrs: *const Addr,
     addr_cnt: usize,
@@ -429,7 +422,7 @@ pub unsafe extern "C" fn blaze_symbolize_kernel(
 /// `addr_cnt` objects.
 #[no_mangle]
 pub unsafe extern "C" fn blaze_symbolize_elf(
-    symbolizer: *mut blaze_symbolizer,
+    symbolizer: *mut Symbolizer,
     src: *const blaze_symbolize_src_elf,
     addrs: *const Addr,
     addr_cnt: usize,
@@ -453,7 +446,7 @@ pub unsafe extern "C" fn blaze_symbolize_elf(
 /// `addr_cnt` objects.
 #[no_mangle]
 pub unsafe extern "C" fn blaze_symbolize_gsym(
-    symbolizer: *mut blaze_symbolizer,
+    symbolizer: *mut Symbolizer,
     src: *const blaze_symbolize_src_gsym,
     addrs: *const Addr,
     addr_cnt: usize,

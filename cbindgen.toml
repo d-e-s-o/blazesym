@@ -3,6 +3,7 @@
 language = "C"
 cpp_compat = true
 include_guard = "__blazesym_h_"
+style = "type"
 usize_is_size_t = true
 
 [export]
