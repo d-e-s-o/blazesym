@@ -11,6 +11,7 @@ use std::ptr;
 use std::slice;
 
 use crate::log::error;
+use crate::normalize::Archive;
 use crate::normalize::Binary;
 use crate::normalize::NormalizedUserAddrs;
 use crate::normalize::Normalizer;
@@ -75,8 +76,89 @@ impl From<(Addr, usize)> for blaze_normalized_addr {
 pub enum blaze_user_addr_meta_kind {
     /// [`blaze_user_addr_meta_variant::unknown`] is valid.
     BLAZE_USER_ADDR_UNKNOWN,
+    /// [`blaze_user_addr_meta_variant::archive`] is valid.
+    BLAZE_USER_ADDR_ARCHIVE,
     /// [`blaze_user_addr_meta_variant::binary`] is valid.
     BLAZE_USER_ADDR_BINARY,
+}
+
+
+/// C compatible version of [`Archive`].
+#[repr(C)]
+#[derive(Debug)]
+pub struct blaze_user_addr_meta_archive {
+    /// The canonical absolute path to the archive, including its name.
+    /// This member is always present.
+    archive_path: *mut c_char,
+    /// The relative path to the binary inside the archive.
+    binary_path: *mut c_char,
+    /// The length of the build ID, in bytes.
+    binary_build_id_len: usize,
+    /// The optional build ID of the binary, if found.
+    binary_build_id: *mut u8,
+}
+
+impl From<Archive> for blaze_user_addr_meta_archive {
+    fn from(other: Archive) -> Self {
+        let Archive {
+            archive_path,
+            binary_path,
+            binary_build_id,
+            _non_exhaustive: (),
+        } = other;
+        Self {
+            archive_path: CString::new(archive_path.into_os_string().into_vec())
+                .expect("encountered path with NUL bytes")
+                .into_raw(),
+            binary_path: CString::new(binary_path.into_os_string().into_vec())
+                .expect("encountered path with NUL bytes")
+                .into_raw(),
+            binary_build_id_len: binary_build_id
+                .as_ref()
+                .map(|build_id| build_id.len())
+                .unwrap_or(0),
+            binary_build_id: binary_build_id
+                .map(|build_id| {
+                    // SAFETY: We know the pointer is valid because it
+                    //         came from a `Box`.
+                    unsafe {
+                        Box::into_raw(build_id.into_boxed_slice())
+                            .as_mut()
+                            .unwrap()
+                            .as_mut_ptr()
+                    }
+                })
+                .unwrap_or_else(ptr::null_mut),
+        }
+    }
+}
+
+impl From<blaze_user_addr_meta_archive> for Archive {
+    fn from(other: blaze_user_addr_meta_archive) -> Self {
+        let blaze_user_addr_meta_archive {
+            archive_path,
+            binary_path,
+            binary_build_id_len,
+            binary_build_id,
+        } = other;
+
+        Archive {
+            archive_path: PathBuf::from(OsString::from_vec(
+                unsafe { CString::from_raw(archive_path) }.into_bytes(),
+            )),
+            binary_path: PathBuf::from(OsString::from_vec(
+                unsafe { CString::from_raw(binary_path) }.into_bytes(),
+            )),
+            binary_build_id: (!binary_build_id.is_null()).then(|| unsafe {
+                Box::<[u8]>::from_raw(slice::from_raw_parts_mut(
+                    binary_build_id,
+                    binary_build_id_len,
+                ))
+                .into_vec()
+            }),
+            _non_exhaustive: (),
+        }
+    }
 }
 
 
@@ -173,6 +255,8 @@ impl From<blaze_user_addr_meta_unknown> for Unknown {
 /// The actual variant data in [`blaze_user_addr_meta`].
 #[repr(C)]
 pub union blaze_user_addr_meta_variant {
+    /// Valid on [`blaze_user_addr_meta_kind::BLAZE_USER_ADDR_ARCHIVE`].
+    pub archive: ManuallyDrop<blaze_user_addr_meta_archive>,
     /// Valid on [`blaze_user_addr_meta_kind::BLAZE_USER_ADDR_BINARY`].
     pub binary: ManuallyDrop<blaze_user_addr_meta_binary>,
     /// Valid on [`blaze_user_addr_meta_kind::BLAZE_USER_ADDR_UNKNOWN`].
@@ -200,6 +284,7 @@ pub struct blaze_user_addr_meta {
 impl From<UserAddrMeta> for blaze_user_addr_meta {
     fn from(other: UserAddrMeta) -> Self {
         match other {
+            UserAddrMeta::Archive(_archive) => todo!(),
             UserAddrMeta::Binary(binary) => Self {
                 kind: blaze_user_addr_meta_kind::BLAZE_USER_ADDR_BINARY,
                 variant: blaze_user_addr_meta_variant {
@@ -374,6 +459,11 @@ pub unsafe extern "C" fn blaze_user_addrs_free(addrs: *mut blaze_normalized_user
 
     for addr_meta in addr_metas {
         match addr_meta.kind {
+            blaze_user_addr_meta_kind::BLAZE_USER_ADDR_ARCHIVE => {
+                let _archive = Archive::from(ManuallyDrop::into_inner(unsafe {
+                    addr_meta.variant.archive
+                }));
+            }
             blaze_user_addr_meta_kind::BLAZE_USER_ADDR_BINARY => {
                 let _binary = Binary::from(ManuallyDrop::into_inner(unsafe {
                     addr_meta.variant.binary
@@ -397,13 +487,42 @@ mod tests {
     /// Check that we can convert an [`Unknown`] into a
     /// [`blaze_user_addr_meta_unknown`] and back.
     #[test]
-    fn unknown_convesion() {
+    fn unknown_conversion() {
         let unknown = Unknown {
             _non_exhaustive: (),
         };
 
         let unknown_new = Unknown::from(blaze_user_addr_meta_unknown::from(unknown.clone()));
         assert_eq!(unknown_new, unknown);
+    }
+
+    /// Check that we can convert an [`Archive`] into a
+    /// [`blaze_user_addr_meta_archive`] and back.
+    #[test]
+    fn archive_conversion() {
+        let archive = Archive {
+            archive_path: PathBuf::from("/tmp/archive.apk"),
+            binary_path: PathBuf::from("file.so"),
+            binary_build_id: Some(vec![0x01, 0x02, 0x03, 0x04]),
+            _non_exhaustive: (),
+        };
+
+        let archive_new = Archive::from(blaze_user_addr_meta_archive::from(archive.clone()));
+        assert_eq!(archive_new, archive);
+    }
+
+    /// Check that we can convert an [`Binary`] into a
+    /// [`blaze_user_addr_meta_binary`] and back.
+    #[test]
+    fn binary_conversion() {
+        let binary = Binary {
+            path: PathBuf::from("/tmp/file.so"),
+            build_id: Some(vec![0x01, 0x02, 0x03, 0x04]),
+            _non_exhaustive: (),
+        };
+
+        let binary_new = Binary::from(blaze_user_addr_meta_binary::from(binary.clone()));
+        assert_eq!(binary_new, binary);
     }
 
     /// Check that we correctly format the debug representation of a

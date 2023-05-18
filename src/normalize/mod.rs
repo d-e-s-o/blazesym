@@ -29,6 +29,7 @@
 mod meta;
 mod normalizer;
 
+pub use meta::Archive;
 pub use meta::Binary;
 pub use meta::Unknown;
 pub use meta::UserAddrMeta;

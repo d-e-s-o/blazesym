@@ -5,7 +5,23 @@ use std::path::PathBuf;
 type BuildId = Vec<u8>;
 
 
-/// Meta information about a user space binary (executable, shared object, APK,
+/// Meta information about a binary file inside an archive (e.g., an
+/// APK).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Archive {
+    /// The canonical absolute path to the archive, including its name.
+    pub archive_path: PathBuf,
+    /// The relative path to the binary inside the archive.
+    pub binary_path: PathBuf,
+    /// The binary's build ID, if available.
+    pub binary_build_id: Option<BuildId>,
+    /// The struct is non-exhaustive and open to extension.
+    #[doc(hidden)]
+    pub(crate) _non_exhaustive: (),
+}
+
+
+/// Meta information about a user space binary (executable, shared object,
 /// ...).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Binary {
@@ -40,16 +56,54 @@ impl From<Unknown> for UserAddrMeta {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum UserAddrMeta {
+    Archive(Archive),
     Binary(Binary),
     Unknown(Unknown),
 }
 
 impl UserAddrMeta {
+    /// Retrieve the [`Archive`] of this enum, if this variant is active.
+    pub fn archive(&self) -> Option<&Archive> {
+        match self {
+            Self::Archive(archive) => Some(archive),
+            _ => None,
+        }
+    }
+
     /// Retrieve the [`Binary`] of this enum, if this variant is active.
     pub fn binary(&self) -> Option<&Binary> {
         match self {
             Self::Binary(binary) => Some(binary),
             _ => None,
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    /// Check that we can access individual variants of a
+    /// [`UserAddrMeta`] via the accessor functions.
+    #[test]
+    fn user_addr_meta_accessors() {
+        let meta = UserAddrMeta::Archive(Archive {
+            archive_path: PathBuf::from("/tmp/archive.apk"),
+            binary_path: PathBuf::from("object.so"),
+            binary_build_id: None,
+            _non_exhaustive: (),
+        });
+        assert!(meta.archive().is_some());
+        assert!(meta.binary().is_none());
+
+        let meta = UserAddrMeta::Binary(Binary {
+            path: PathBuf::from("/tmp/executable.bin"),
+            build_id: None,
+            _non_exhaustive: (),
+        });
+        assert!(meta.archive().is_none());
+        assert!(meta.binary().is_some());
     }
 }
