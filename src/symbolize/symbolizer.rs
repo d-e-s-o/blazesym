@@ -207,6 +207,7 @@ impl Symbolizer {
 
     /// Symbolize the given list of user space addresses in the provided
     /// process.
+    // TODO: It may make sense to introduce a `*_sorted` variant of this method.
     fn symbolize_user_addrs(&self, addrs: &[Addr], pid: Pid) -> Result<Vec<Vec<SymbolizedResult>>> {
         struct SymbolizeHandler<'sym> {
             /// The "outer" `Symbolizer` instance.
@@ -216,6 +217,10 @@ impl Symbolizer {
         }
 
         impl SymbolizeHandler<'_> {
+            fn handle_apk_addr(&mut self, addr: Addr, entry: &PathMapsEntry) -> Result<()> {
+                todo!()
+            }
+
             fn handle_elf_addr(&mut self, addr: Addr, entry: &PathMapsEntry) -> Result<()> {
                 let path = &entry.path.maps_file;
                 let norm_addr = normalize_elf_addr(addr, entry)?;
@@ -238,7 +243,7 @@ impl Symbolizer {
                     .extension()
                     .unwrap_or_else(|| OsStr::new(""));
                 match ext.to_str() {
-                    Some("apk") | Some("zip") => todo!(),
+                    Some("apk") | Some("zip") => self.handle_apk_addr(addr, entry),
                     _ => self.handle_elf_addr(addr, entry),
                 }
             }

@@ -15,9 +15,11 @@ use crate::maps;
 use crate::maps::PathMapsEntry;
 use crate::util;
 use crate::util::ReadRaw as _;
+use crate::zip;
 use crate::Addr;
 use crate::Pid;
 
+use super::meta::Archive;
 use super::meta::Binary;
 use super::meta::Unknown;
 use super::meta::UserAddrMeta;
@@ -25,6 +27,28 @@ use super::meta::UserAddrMeta;
 
 /// A typedef for functions reading build IDs.
 type BuildIdFn = dyn Fn(&Path) -> Result<Option<Vec<u8>>>;
+
+
+fn create_apk_elf_path(apk: &Path, elf: &Path) -> Result<PathBuf> {
+    let mut extension = apk
+        .extension()
+        .unwrap_or_else(|| OsStr::new("apk"))
+        .to_os_string();
+    // Append '!' to indicate separation from archive internal contents
+    // that follow. This is an Android convention.
+    let () = extension.push("!");
+
+    let mut apk = apk.to_path_buf();
+    if !apk.set_extension(extension) {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            format!("path {} is not valid", apk.display()),
+        ))
+    }
+
+    let path = apk.join(elf);
+    Ok(path)
+}
 
 
 /// A type capturing normalized addresses along with captured meta data.
@@ -141,6 +165,23 @@ fn make_binary_meta(entry: &PathMapsEntry, get_build_id: &BuildIdFn) -> Result<U
 }
 
 
+/// Make a [`UserAddrMeta::Archive`] variant.
+fn make_archive_meta(
+    entry: &PathMapsEntry,
+    binary_path: PathBuf,
+    get_build_id: &BuildIdFn,
+) -> Result<UserAddrMeta> {
+    let archive = Archive {
+        archive_path: entry.path.symbolic_path.to_path_buf(),
+        binary_path,
+        binary_build_id: get_build_id(&entry.path.maps_file)?,
+        _non_exhaustive: (),
+    };
+    let meta = UserAddrMeta::Archive(archive);
+    Ok(meta)
+}
+
+
 /// Normalize a virtual address belonging to an ELF file represented by the
 /// provided [`PathMapsEntry`].
 pub(crate) fn normalize_elf_addr(virt_addr: Addr, entry: &PathMapsEntry) -> Result<Addr> {
@@ -158,6 +199,51 @@ pub(crate) fn normalize_elf_addr(virt_addr: Addr, entry: &PathMapsEntry) -> Resu
     })?;
 
     Ok(addr)
+}
+
+
+/// Normalize a virtual address belonging to an APK represented by the provided
+/// [`PathMapsEntry`].
+pub(crate) fn normalize_apk_addr(
+    virt_addr: Addr,
+    entry: &PathMapsEntry,
+) -> Result<(Addr, PathBuf)> {
+    let file_off = virt_addr - entry.range.start + entry.offset as usize;
+    // An APK is nothing but a fancy zip archive.
+    let apk = zip::Archive::open(&entry.path.maps_file)?;
+
+    // Find the APK entry covering the calculated file offset.
+    for apk_entry in apk.entries() {
+        let apk_entry = apk_entry?;
+        let bounds = apk_entry.data_offset..apk_entry.data_offset + apk_entry.data.len();
+
+        if bounds.contains(&file_off) {
+            let mmap = apk.mmap().constrain(bounds.clone()).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidInput,
+                    format!(
+                        "invalid APK entry data bounds ({bounds:?}) in {}",
+                        entry.path.symbolic_path.display()
+                    ),
+                )
+            })?;
+            let parser = ElfParser::from_mmap(mmap);
+            let elf_off = file_off - apk_entry.data_offset;
+            if let Some(addr) = normalize_elf_offset_with_parser(elf_off as u64, &parser)? {
+                return Ok((apk_entry.data_offset + addr, apk_entry.path.to_path_buf()))
+            }
+            break
+        }
+    }
+
+    Err(Error::new(
+        ErrorKind::InvalidInput,
+        format!(
+            "failed to find ELF entry in {} that contains file offset 0x{:x}",
+            entry.path.symbolic_path.display(),
+            file_off,
+        ),
+    ))
 }
 
 
@@ -249,6 +335,19 @@ impl NormalizationHandler {
         }
     }
 
+    /// Normalize a virtual address belonging to an APK and create and add the
+    /// correct [`UserAddrMeta`] meta information.
+    fn normalize_and_add_apk_addr(&mut self, virt_addr: Addr, entry: &PathMapsEntry) -> Result<()> {
+        let (norm_addr, binary_path) = normalize_apk_addr(virt_addr, entry)?;
+        let key = create_apk_elf_path(&entry.path.symbolic_path, &binary_path)?;
+        let () =
+            self.normalized
+                .add_normalized_addr(norm_addr, &key, &mut self.meta_lookup, || {
+                    make_archive_meta(entry, binary_path, &self.get_build_id)
+                })?;
+
+        Ok(())
+    }
 
     /// Normalize a virtual address belonging to an ELF file and create and add
     /// the correct [`UserAddrMeta`] meta information.
@@ -278,7 +377,7 @@ impl Handler for NormalizationHandler {
             .extension()
             .unwrap_or_else(|| OsStr::new(""));
         match ext.to_str() {
-            Some("apk") | Some("zip") => todo!(),
+            Some("apk") | Some("zip") => self.normalize_and_add_apk_addr(addr, entry),
             _ => self.normalize_and_add_elf_addr(addr, entry),
         }
     }
@@ -451,6 +550,10 @@ mod tests {
     use crate::inspect::FindAddrOpts;
     use crate::inspect::SymType;
     use crate::mmap::Mmap;
+    use crate::symbolize;
+    use crate::symbolize::Symbolizer;
+
+    use test_log::test;
 
 
     /// Check that we can read a binary's build ID.
@@ -562,12 +665,12 @@ mod tests {
             sym_type: SymType::Function,
             ..Default::default()
         };
-        let symbols = elf_parser.find_addr("the_answer", &opts).unwrap();
+        let syms = elf_parser.find_addr("the_answer", &opts).unwrap();
         // There is only one symbol with this address in there.
-        assert_eq!(symbols.len(), 1);
-        let symbol = symbols.first().unwrap();
+        assert_eq!(syms.len(), 1);
+        let sym = syms.first().unwrap();
 
-        let the_answer_addr = unsafe { mmap.as_ptr().add(symbol.addr) };
+        let the_answer_addr = unsafe { mmap.as_ptr().add(sym.addr) };
         // Now just double check that everything worked out and the function
         // is actually where it was meant to be.
         let the_answer_fn =
@@ -583,7 +686,7 @@ mod tests {
         assert_eq!(norm_addrs.meta.len(), 1);
 
         let norm_addr = norm_addrs.addrs[0];
-        assert_eq!(norm_addr.0, symbol.addr);
+        assert_eq!(norm_addr.0, sym.addr);
         let meta = &norm_addrs.meta[norm_addr.1];
         let so_path = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
@@ -594,6 +697,69 @@ mod tests {
             _non_exhaustive: (),
         };
         assert_eq!(meta, &UserAddrMeta::Binary(expected_binary));
+    }
+
+    /// Check that we can normalize user addresses in our own shared object inside a zip archive.
+    #[test]
+    fn user_address_normalization_custom_so_in_zip() {
+        let test_zip = Path::new(&env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join("test.zip");
+
+        let mmap = Mmap::builder().exec().open(&test_zip).unwrap();
+        let archive = zip::Archive::with_mmap(mmap.clone()).unwrap();
+        let so = archive
+            .entries()
+            .find_map(|entry| {
+                let entry = entry.unwrap();
+                (entry.path == Path::new("libtest-so.so")).then_some(entry)
+            })
+            .unwrap();
+
+        let elf_mmap = mmap
+            .constrain(so.data_offset..so.data_offset + so.data.len())
+            .unwrap();
+
+        // Look up the address of the `the_answer` function inside of the shared
+        // object.
+        let elf_parser = ElfParser::from_mmap(elf_mmap.clone());
+        let opts = FindAddrOpts {
+            sym_type: SymType::Function,
+            ..Default::default()
+        };
+        let syms = elf_parser.find_addr("the_answer", &opts).unwrap();
+        // There is only one symbol with this address in there.
+        assert_eq!(syms.len(), 1);
+        let sym = syms.first().unwrap();
+
+        let the_answer_addr = unsafe { elf_mmap.as_ptr().add(sym.addr) };
+        // Now just double check that everything worked out and the function
+        // is actually where it was meant to be.
+        let the_answer_fn =
+            unsafe { transmute::<_, extern "C" fn() -> libc::c_int>(the_answer_addr) };
+        let answer = the_answer_fn();
+        assert_eq!(answer, 42);
+
+        let normalizer = Normalizer::new();
+        let norm_addrs = normalizer
+            .normalize_user_addrs_sorted([the_answer_addr as Addr].as_slice(), Pid::Slf)
+            .unwrap();
+        assert_eq!(norm_addrs.addrs.len(), 1);
+        assert_eq!(norm_addrs.meta.len(), 1);
+
+        let norm_addr = norm_addrs.addrs[0];
+        assert_eq!(norm_addr.0, sym.addr + so.data_offset);
+        let meta = &norm_addrs.meta[norm_addr.1];
+        let so_path = Path::new(&env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join("libtest-so.so");
+        let expected = Archive {
+            archive_path: test_zip,
+            binary_path: PathBuf::from("libtest-so.so"),
+            binary_build_id: Some(read_build_id(&so_path).unwrap().unwrap()),
+            _non_exhaustive: (),
+        };
+        assert_eq!(meta, &UserAddrMeta::Archive(expected));
     }
 
     /// Check that we correctly handle normalization of an address not
@@ -658,5 +824,83 @@ mod tests {
         test(0x7fffffff1000);
         test(0x7fffffff1001);
         test(0x7fffffffffff);
+    }
+
+    /// Check that we can create a path to an ELF inside an APK as expected.
+    #[test]
+    fn elf_apk_path_creation() {
+        let apk = Path::new("/root/test.apk");
+        let elf = Path::new("subdir/libc.so");
+        let path = create_apk_elf_path(apk, elf).unwrap();
+        assert_eq!(path, Path::new("/root/test.apk!/subdir/libc.so"));
+    }
+
+    use crate::elf::ElfParser;
+
+    /// Check that we can symbolize an address residing in a zip archive.
+    #[test]
+    fn symbolize_zip() {
+        let test_zip = Path::new(&env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join("test.zip");
+
+        let mmap = Mmap::builder().exec().open(test_zip).unwrap();
+        let archive = zip::Archive::with_mmap(mmap.clone()).unwrap();
+        let so = archive
+            .entries()
+            .find_map(|entry| {
+                let entry = entry.unwrap();
+                (entry.path == Path::new("libtest-so.so")).then_some(entry)
+            })
+            .unwrap();
+
+        let elf_mmap = mmap
+            .constrain(so.data_offset..so.data_offset + so.data.len())
+            .unwrap();
+        // We found the ELF shared object inside the archive. Now look
+        // up the address of the `the_answer` function inside of it.
+        let elf_parser = ElfParser::from_mmap(elf_mmap.clone());
+        let opts = FindAddrOpts {
+            sym_type: SymType::Function,
+            ..Default::default()
+        };
+        let syms = elf_parser.find_addr("the_answer", &opts).unwrap();
+        // There is only one symbol with this address in the shared
+        // object.
+        assert_eq!(syms.len(), 1);
+        let sym = syms.first().unwrap();
+
+        let the_answer_addr = unsafe {
+            elf_mmap
+                .as_ptr()
+                // The address as reported by ELF is just an offset for
+                // our intents and purposes, because the symbol is
+                // relative to the beginning of the file.
+                .add(sym.addr)
+        };
+
+        // Now just double check that everything worked out and the function
+        // is actually where it was meant to be.
+        let the_answer_fn =
+            unsafe { transmute::<_, extern "C" fn() -> libc::c_int>(the_answer_addr) };
+        let answer = the_answer_fn();
+        assert_eq!(answer, 42);
+
+        // Now symbolize the address we just looked up. It should be
+        // correctly mapped to the `the_answer` function within our
+        // process.
+        let src = symbolize::Source::Process(symbolize::Process::new(Pid::Slf));
+        let symbolizer = Symbolizer::new();
+        let results = symbolizer
+            .symbolize(&src, &[the_answer_addr as Addr])
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(results.len(), 1);
+
+        let result = results.first().unwrap();
+        assert_eq!(result.symbol, "the_answer");
+        assert_eq!(result.addr, the_answer_addr as Addr);
     }
 }
