@@ -89,73 +89,31 @@ pub enum blaze_user_addr_meta_kind {
 pub struct blaze_user_addr_meta_archive {
     /// The canonical absolute path to the archive, including its name.
     /// This member is always present.
-    archive_path: *mut c_char,
-    /// The relative path to the binary inside the archive.
-    binary_path: *mut c_char,
-    /// The length of the build ID, in bytes.
-    binary_build_id_len: usize,
-    /// The optional build ID of the binary, if found.
-    binary_build_id: *mut u8,
+    path: *mut c_char,
 }
 
 impl From<Archive> for blaze_user_addr_meta_archive {
     fn from(other: Archive) -> Self {
         let Archive {
-            archive_path,
-            binary_path,
-            binary_build_id,
+            path,
             _non_exhaustive: (),
         } = other;
         Self {
-            archive_path: CString::new(archive_path.into_os_string().into_vec())
+            path: CString::new(path.into_os_string().into_vec())
                 .expect("encountered path with NUL bytes")
                 .into_raw(),
-            binary_path: CString::new(binary_path.into_os_string().into_vec())
-                .expect("encountered path with NUL bytes")
-                .into_raw(),
-            binary_build_id_len: binary_build_id
-                .as_ref()
-                .map(|build_id| build_id.len())
-                .unwrap_or(0),
-            binary_build_id: binary_build_id
-                .map(|build_id| {
-                    // SAFETY: We know the pointer is valid because it
-                    //         came from a `Box`.
-                    unsafe {
-                        Box::into_raw(build_id.into_boxed_slice())
-                            .as_mut()
-                            .unwrap()
-                            .as_mut_ptr()
-                    }
-                })
-                .unwrap_or_else(ptr::null_mut),
         }
     }
 }
 
 impl From<blaze_user_addr_meta_archive> for Archive {
     fn from(other: blaze_user_addr_meta_archive) -> Self {
-        let blaze_user_addr_meta_archive {
-            archive_path,
-            binary_path,
-            binary_build_id_len,
-            binary_build_id,
-        } = other;
+        let blaze_user_addr_meta_archive { path } = other;
 
         Archive {
-            archive_path: PathBuf::from(OsString::from_vec(
-                unsafe { CString::from_raw(archive_path) }.into_bytes(),
+            path: PathBuf::from(OsString::from_vec(
+                unsafe { CString::from_raw(path) }.into_bytes(),
             )),
-            binary_path: PathBuf::from(OsString::from_vec(
-                unsafe { CString::from_raw(binary_path) }.into_bytes(),
-            )),
-            binary_build_id: (!binary_build_id.is_null()).then(|| unsafe {
-                Box::<[u8]>::from_raw(slice::from_raw_parts_mut(
-                    binary_build_id,
-                    binary_build_id_len,
-                ))
-                .into_vec()
-            }),
             _non_exhaustive: (),
         }
     }
@@ -501,9 +459,7 @@ mod tests {
     #[test]
     fn archive_conversion() {
         let archive = Archive {
-            archive_path: PathBuf::from("/tmp/archive.apk"),
-            binary_path: PathBuf::from("file.so"),
-            binary_build_id: Some(vec![0x01, 0x02, 0x03, 0x04]),
+            path: PathBuf::from("/tmp/archive.apk"),
             _non_exhaustive: (),
         };
 

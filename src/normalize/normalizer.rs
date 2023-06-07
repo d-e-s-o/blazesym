@@ -166,15 +166,9 @@ fn make_binary_meta(entry: &PathMapsEntry, get_build_id: &BuildIdFn) -> Result<U
 
 
 /// Make a [`UserAddrMeta::Archive`] variant.
-fn make_archive_meta(
-    entry: &PathMapsEntry,
-    binary_path: PathBuf,
-    get_build_id: &BuildIdFn,
-) -> Result<UserAddrMeta> {
+fn make_archive_meta(entry: &PathMapsEntry) -> Result<UserAddrMeta> {
     let archive = Archive {
-        archive_path: entry.path.symbolic_path.to_path_buf(),
-        binary_path,
-        binary_build_id: get_build_id(&entry.path.maps_file)?,
+        path: entry.path.symbolic_path.to_path_buf(),
         _non_exhaustive: (),
     };
     let meta = UserAddrMeta::Archive(archive);
@@ -343,7 +337,7 @@ impl NormalizationHandler {
         let () =
             self.normalized
                 .add_normalized_addr(norm_addr, &key, &mut self.meta_lookup, || {
-                    make_archive_meta(entry, binary_path, &self.get_build_id)
+                    make_archive_meta(entry)
                 })?;
 
         Ok(())
@@ -750,13 +744,8 @@ mod tests {
         let norm_addr = norm_addrs.addrs[0];
         assert_eq!(norm_addr.0, sym.addr + so.data_offset);
         let meta = &norm_addrs.meta[norm_addr.1];
-        let so_path = Path::new(&env!("CARGO_MANIFEST_DIR"))
-            .join("data")
-            .join("libtest-so.so");
         let expected = Archive {
-            archive_path: test_zip,
-            binary_path: PathBuf::from("libtest-so.so"),
-            binary_build_id: Some(read_build_id(&so_path).unwrap().unwrap()),
+            path: test_zip,
             _non_exhaustive: (),
         };
         assert_eq!(meta, &UserAddrMeta::Archive(expected));

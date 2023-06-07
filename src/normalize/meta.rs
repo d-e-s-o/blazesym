@@ -5,16 +5,11 @@ use std::path::PathBuf;
 type BuildId = Vec<u8>;
 
 
-/// Meta information about a binary file inside an archive (e.g., an
-/// APK).
+/// Meta information about an archive (e.g., an APK).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Archive {
     /// The canonical absolute path to the archive, including its name.
-    pub archive_path: PathBuf,
-    /// The relative path to the binary inside the archive.
-    pub binary_path: PathBuf,
-    /// The binary's build ID, if available.
-    pub binary_build_id: Option<BuildId>,
+    pub path: PathBuf,
     /// The struct is non-exhaustive and open to extension.
     #[doc(hidden)]
     pub(crate) _non_exhaustive: (),
@@ -90,9 +85,7 @@ mod tests {
     #[test]
     fn user_addr_meta_accessors() {
         let meta = UserAddrMeta::Archive(Archive {
-            archive_path: PathBuf::from("/tmp/archive.apk"),
-            binary_path: PathBuf::from("object.so"),
-            binary_build_id: None,
+            path: PathBuf::from("/tmp/archive.apk"),
             _non_exhaustive: (),
         });
         assert!(meta.archive().is_some());
