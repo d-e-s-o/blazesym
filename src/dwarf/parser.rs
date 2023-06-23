@@ -30,7 +30,7 @@ type Endianess = gimli::BigEndian;
 
 /// The gimli reader type we currently use. Could be made generic if
 /// need be, but we keep things simple while we can.
-type R<'dat> = EndianSlice<'dat, Endianess>;
+pub(super) type R<'dat> = EndianSlice<'dat, Endianess>;
 
 
 fn format_offset(offset: UnitSectionOffset<usize>) -> String {
@@ -283,7 +283,7 @@ fn debug_info_parse_symbols_cu<'dat>(
 }
 
 
-fn load_section(parser: &ElfParser, id: SectionId) -> Result<R<'_>> {
+pub(super) fn load_section(parser: &ElfParser, id: SectionId) -> Result<R<'_>> {
     let result = parser.find_section(id.name());
     let data = match result {
         Ok(Some(idx)) => parser.section_data(idx)?,

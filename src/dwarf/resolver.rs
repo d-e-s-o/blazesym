@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 #[cfg(test)]
 use std::env;
 use std::ffi::OsStr;
@@ -6,8 +5,11 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::mem;
+use std::ops::Deref as _;
 use std::path::Path;
 use std::rc::Rc;
+
+use gimli::Dwarf;
 
 use crate::elf::ElfParser;
 use crate::inspect::FindAddrOpts;
@@ -23,6 +25,8 @@ use super::parser::debug_info_parse_symbols;
 use super::parser::parse_debug_line_elf_parser;
 use super::parser::AddrSrcInfo;
 use super::parser::DWSymInfo;
+use super::parser::R;
+use super::unit::Units;
 
 
 impl From<&DWSymInfo<'_>> for SymInfo {
@@ -210,14 +214,13 @@ impl Debug for Cache<'_> {
 }
 
 /// DwarfResolver provides abilities to query DWARF information of binaries.
-#[derive(Debug)]
 pub(crate) struct DwarfResolver {
-    /// A cache for relevant parts of the DWARF file.
+    /// The lazily parsed compilation units of the DWARF file.
     /// SAFETY: We must not hand out references with a 'static lifetime to
     ///         this member. Rather, they should never outlive `self`.
     ///         Furthermore, this member has to be listed before `parser`
     ///         to make sure we never end up with a dangling reference.
-    cache: RefCell<Cache<'static>>,
+    units: Units<R<'static>>,
     parser: Rc<ElfParser>,
     line_number_info: bool,
     enable_debug_info_syms: bool,
@@ -232,34 +235,29 @@ impl DwarfResolver {
         parser: Rc<ElfParser>,
         line_number_info: bool,
         debug_info_symbols: bool,
-    ) -> Self {
-        Self {
-            cache: RefCell::new(Cache::new(unsafe {
-                // SAFETY: We own the parser and never hand out any 'static
-                //         references to cache data.
-                mem::transmute::<_, &'static ElfParser>(parser.as_ref())
-            })),
+    ) -> Result<Self, Error> {
+        // SAFETY: XXX
+        let static_parser =
+            unsafe { mem::transmute::<&ElfParser, &'static ElfParser>(parser.deref()) };
+        let mut load_section = |section| super::parser::load_section(static_parser, section);
+        let dwarf = Dwarf::load(&mut load_section)?;
+        let units = Units::parse(dwarf)?;
+        let slf = Self {
+            units,
             parser,
             line_number_info,
             enable_debug_info_syms: debug_info_symbols,
-        }
+        };
+        Ok(slf)
     }
 
     /// Open a binary to load and parse .debug_line for later uses.
     ///
     /// `filename` is the name of an ELF binary/or shared object that
     /// has .debug_line section.
-    pub fn open(
-        filename: &Path,
-        debug_line_info: bool,
-        debug_info_symbols: bool,
-    ) -> Result<DwarfResolver> {
+    pub fn open(filename: &Path, debug_line_info: bool, debug_info_symbols: bool) -> Result<Self> {
         let parser = ElfParser::open(filename)?;
-        Ok(Self::from_parser(
-            Rc::new(parser),
-            debug_line_info,
-            debug_info_symbols,
-        ))
+        Self::from_parser(Rc::new(parser), debug_line_info, debug_info_symbols)
     }
 
     /// Find line information of an address.
@@ -270,19 +268,15 @@ impl DwarfResolver {
     // TODO: We likely want to return a more structured type.
     pub fn find_line(&self, addr: Addr) -> Result<Option<(&Path, &OsStr, usize)>> {
         if self.line_number_info {
-            let mut cache = self.cache.borrow_mut();
-            let addr_info = cache.ensure_addr_src_info()?;
-
-            let idx = find_lowest_match_by_key(addr_info, &addr, |info| info.addr);
-            if let Some(idx) = idx {
-                let info = &addr_info[idx];
-                // TODO: Should not unwrap.
-                let dir = info.dir.as_ref().unwrap();
-                let file = info.file.as_ref().unwrap();
-                Ok(Some((dir, file, info.line as usize)))
-            } else {
-                Ok(None)
-            }
+            let location = self.units.find_location(addr as u64)?.map(|location| {
+                // TODO: Incomplete & incorrect.
+                let dir = Path::new("");
+                // TODO: Must not unwrap.
+                let file = OsStr::new(location.file.unwrap());
+                let line = location.line.map(|line| line as usize).unwrap_or(0);
+                (dir, file, line)
+            });
+            Ok(location)
         } else {
             Ok(None)
         }
@@ -302,17 +296,18 @@ impl DwarfResolver {
 
     /// Lookup the symbol(s) at an address.
     pub(crate) fn find_syms(&self, addr: Addr) -> Result<Vec<(&str, Addr)>> {
-        let mut cache = self.cache.borrow_mut();
-        let () = self.ensure_debug_syms(&mut cache)?;
-        // SANITY: The above `ensure_debug_syms` ensures we have `debug_syms`
-        //         available.
-        let debug_syms = cache.debug_syms.as_ref().unwrap();
-        let syms = debug_syms
-            .find_by_addr(addr)
-            .map(|sym| (sym.name, sym.addr))
-            .collect();
+        todo!()
+        //let mut cache = self.cache.borrow_mut();
+        //let () = self.ensure_debug_syms(&mut cache)?;
+        //// SANITY: The above `ensure_debug_syms` ensures we have `debug_syms`
+        ////         available.
+        //let debug_syms = cache.debug_syms.as_ref().unwrap();
+        //let syms = debug_syms
+        //    .find_by_addr(addr)
+        //    .map(|sym| (sym.name, sym.addr))
+        //    .collect();
 
-        Ok(syms)
+        //Ok(syms)
     }
 
     /// Find the address of a symbol from DWARF.
@@ -322,18 +317,25 @@ impl DwarfResolver {
     /// * `name` - is the symbol name to find.
     /// * `opts` - is the context giving additional parameters.
     pub(crate) fn find_addr(&self, name: &str, opts: &FindAddrOpts) -> Result<Vec<SymInfo>> {
-        if let SymType::Variable = opts.sym_type {
-            return Err(Error::with_unsupported("not implemented"))
-        }
+        todo!()
+        //if let SymType::Variable = opts.sym_type {
+        //    return Err(Error::with_unsupported("not implemented"))
+        //}
 
-        let mut cache = self.cache.borrow_mut();
-        let () = self.ensure_debug_syms(&mut cache)?;
-        // SANITY: The above `ensure_debug_syms` ensures we have `debug_syms`
-        //         available.
-        let debug_syms = cache.debug_syms.as_ref().unwrap();
-        let syms = debug_syms.find_by_name(name).map(SymInfo::from).collect();
+        //let mut cache = self.cache.borrow_mut();
+        //let () = self.ensure_debug_syms(&mut cache)?;
+        //// SANITY: The above `ensure_debug_syms` ensures we have `debug_syms`
+        ////         available.
+        //let debug_syms = cache.debug_syms.as_ref().unwrap();
+        //let syms = debug_syms.find_by_name(name).map(SymInfo::from).collect();
 
-        Ok(syms)
+        //Ok(syms)
+    }
+}
+
+impl Debug for DwarfResolver {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.write_str(stringify!(DwarfResolver))
     }
 }
 

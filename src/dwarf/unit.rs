@@ -285,7 +285,7 @@ impl<R: gimli::Reader> Unit<R> {
 }
 
 
-struct Units<R: gimli::Reader> {
+pub(crate) struct Units<R: gimli::Reader> {
     /// The DWARF data.
     dwarf: gimli::Dwarf<R>,
     /// The ranges of the units encountered.
@@ -295,7 +295,7 @@ struct Units<R: gimli::Reader> {
 }
 
 impl<R: gimli::Reader> Units<R> {
-    fn parse(sections: gimli::Dwarf<R>) -> Result<Self, gimli::Error> {
+    pub(crate) fn parse(sections: gimli::Dwarf<R>) -> Result<Self, gimli::Error> {
         // Find all the references to compilation units in .debug_aranges.
         // Note that we always also iterate through all of .debug_info to
         // find compilation units, because .debug_aranges may be missing some.
