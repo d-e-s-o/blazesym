@@ -238,6 +238,7 @@ impl<'ctx> Iterator for LocationRangeUnitIter<'ctx> {
 struct Unit<R: gimli::Reader> {
     offset: gimli::DebugInfoOffset<R::Offset>,
     dw_unit: gimli::Unit<R>,
+    lang: Option<gimli::DwLang>,
     lines: LazyCell<Result<Lines, gimli::Error>>,
     funcs: LazyCell<Result<Functions<R>, gimli::Error>>,
 }
@@ -325,6 +326,7 @@ impl<R: gimli::Reader> Units<R> {
                 Err(_) => continue,
             };
 
+            let mut lang = None;
             let mut have_unit_range = false;
             {
                 let mut entries = dw_unit.entries_raw(None)?;
@@ -356,6 +358,11 @@ impl<R: gimli::Reader> Units<R> {
                         gimli::DW_AT_ranges => {
                             ranges.ranges_offset =
                                 sections.attr_ranges_offset(&dw_unit, attr.value())?;
+                        }
+                        gimli::DW_AT_language => {
+                            if let gimli::AttributeValue::Language(val) = attr.value() {
+                                lang = Some(val);
+                            }
                         }
                         _ => {}
                     }
@@ -435,6 +442,7 @@ impl<R: gimli::Reader> Units<R> {
             res_units.push(Unit {
                 offset,
                 dw_unit,
+                lang,
                 lines,
                 funcs: LazyCell::new(),
             });
