@@ -46,6 +46,8 @@ struct Unit<R: gimli::Reader> {
 }
 
 struct Units<R: gimli::Reader> {
+    /// The DWARF data.
+    dwarf: gimli::Dwarf<R>,
     /// The ranges of the units encountered.
     unit_ranges: Vec<UnitRange>,
     /// All units along with meta-data.
@@ -53,7 +55,7 @@ struct Units<R: gimli::Reader> {
 }
 
 impl<R: gimli::Reader> Units<R> {
-    fn parse(sections: &gimli::Dwarf<R>) -> Result<Self, gimli::Error> {
+    fn parse(sections: gimli::Dwarf<R>) -> Result<Self, gimli::Error> {
         // Find all the references to compilation units in .debug_aranges.
         // Note that we always also iterate through all of .debug_info to
         // find compilation units, because .debug_aranges may be missing some.
@@ -158,7 +160,7 @@ impl<R: gimli::Reader> Units<R> {
                         }
                     }
                 } else {
-                    have_unit_range |= ranges.for_each_range(sections, &dw_unit, |range| {
+                    have_unit_range |= ranges.for_each_range(&sections, &dw_unit, |range| {
                         unit_ranges.push(UnitRange {
                             range,
                             unit_id,
@@ -174,7 +176,7 @@ impl<R: gimli::Reader> Units<R> {
                 // Try to get some ranges from the line program sequences.
                 if let Some(ref ilnp) = dw_unit.line_program {
                     if let Ok(lines) = lines
-                        .borrow_with(|| Lines::parse(&dw_unit, ilnp.clone(), sections))
+                        .borrow_with(|| Lines::parse(&dw_unit, ilnp.clone(), &sections))
                         .as_ref()
                     {
                         for sequence in lines.sequences.iter() {
@@ -211,6 +213,7 @@ impl<R: gimli::Reader> Units<R> {
         }
 
         let slf = Self {
+            dwarf: sections,
             unit_ranges,
             units: res_units,
         };
