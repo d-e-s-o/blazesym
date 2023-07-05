@@ -173,20 +173,6 @@ impl<'mmap> Cache<'mmap> {
     }
 
     /// Extract the symbol information from DWARF if having not done it before.
-    // Note: This function should really return a reference to
-    //       `self.debug_syms`, but current borrow checker limitations
-    //       effectively prevent us from doing so.
-    fn ensure_debug_syms(&mut self) -> Result<()> {
-        if self.debug_syms.is_some() {
-            return Ok(())
-        }
-
-        let debug_syms = debug_info_parse_symbols(self.parser)?;
-        self.debug_syms = Some(DebugSyms::new(debug_syms));
-        Ok(())
-    }
-
-    /// Extract the symbol information from DWARF if having not done it before.
     fn ensure_addr_src_info(&mut self) -> Result<&[AddrSrcInfo<'mmap>]> {
         // Can't use `if let` here because of borrow checker woes.
         if self.addr_info.is_some() {
@@ -282,32 +268,24 @@ impl DwarfResolver {
         }
     }
 
-    /// Extract the symbol information from DWARf if having not done it before.
-    fn ensure_debug_syms(&self, cache: &mut Cache) -> Result<()> {
-        if self.enable_debug_info_syms {
-            let () = cache.ensure_debug_syms()?;
-            Ok(())
-        } else {
-            Err(Error::with_unsupported(
-                "debug info symbol information has been disabled",
-            ))
-        }
-    }
-
     /// Lookup the symbol(s) at an address.
-    pub(crate) fn find_syms(&self, addr: Addr) -> Result<Vec<(&str, Addr)>> {
-        todo!()
-        //let mut cache = self.cache.borrow_mut();
-        //let () = self.ensure_debug_syms(&mut cache)?;
-        //// SANITY: The above `ensure_debug_syms` ensures we have `debug_syms`
-        ////         available.
-        //let debug_syms = cache.debug_syms.as_ref().unwrap();
-        //let syms = debug_syms
-        //    .find_by_addr(addr)
-        //    .map(|sym| (sym.name, sym.addr))
-        //    .collect();
-
-        //Ok(syms)
+    pub(crate) fn find_syms(&self, addr: Addr) -> Result<Vec<(&str, Addr)>, Error> {
+        let function = self.units.find_function(addr as u64)?;
+        if let Some(function) = function {
+            // TODO: Should not unwrap.
+            let name = function
+                .name
+                .map(|name| name.to_string())
+                .unwrap_or_else(|| Ok(""))
+                .unwrap();
+            let addr = function
+                .bounds
+                .map(|range| range.begin as usize)
+                .unwrap_or(0);
+            Ok(vec![(name, addr)])
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     /// Find the address of a symbol from DWARF.

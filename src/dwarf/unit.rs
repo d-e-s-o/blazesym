@@ -28,6 +28,7 @@
 use std::cmp;
 use std::cmp::Ordering;
 
+use super::function::Function;
 use super::function::Functions;
 use super::lazy::LazyCell;
 use super::line::LineSequence;
@@ -282,6 +283,41 @@ impl<R: gimli::Reader> Unit<R> {
     ) -> Result<Option<LocationRangeUnitIter<'_>>, gimli::Error> {
         LocationRangeUnitIter::new(self, sections, probe_low, probe_high)
     }
+
+    fn parse_functions_dwarf_and_unit(
+        &self,
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<&Functions<R>, gimli::Error> {
+        self.funcs
+            .borrow_with(|| Functions::parse(unit, sections))
+            .as_ref()
+            .map_err(gimli::Error::clone)
+    }
+
+    fn find_function_or_location<'unit>(
+        &'unit self,
+        probe: u64,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<(Option<&'unit Function<R>>, Option<Location<'unit>>), gimli::Error> {
+        let unit = &self.dw_unit;
+        let functions = self.parse_functions_dwarf_and_unit(unit, sections)?;
+        let function = match functions.find_address(probe) {
+            Some(address) => {
+                let function_index = functions.addresses[address].function;
+                let (offset, ref function) = functions.functions[function_index];
+                Some(
+                    function
+                        .borrow_with(|| Function::parse(offset, unit, sections))
+                        .as_ref()
+                        .map_err(gimli::Error::clone)?,
+                )
+            }
+            None => None,
+        };
+        let location = self.find_location(probe, sections)?;
+        Ok((function, location))
+    }
 }
 
 
@@ -532,6 +568,27 @@ impl<R: gimli::Reader> Units<R> {
                 }
                 Some((&self.units[i.unit_id], &i.range))
             })
+    }
+
+    pub fn find_function(&self, probe: u64) -> Result<Option<&Function<R>>, gimli::Error> {
+        let mut units_iter = self.find_units(probe);
+        for unit in units_iter {
+            let result = unit.find_function_or_location(probe, &self.dwarf)?;
+            match result {
+                (Some(function), _) => {
+                    return Ok(Some(function))
+                },
+                (None, Some(_location)) => {
+                    // We found the address in the unit, we just couldn't get
+                    // any symbol information.
+                    return Ok(None)
+                },
+                (None, None) => {
+                    // No luck. Let's try another unit.
+                },
+            }
+        }
+        Ok(None)
     }
 
     /// Find the source file and line corresponding to the given virtual memory address.
