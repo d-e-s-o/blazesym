@@ -352,6 +352,6 @@ impl Normalizer {
     /// Normalized addresses are reported in the exact same order in
     /// which the non-normalized ones were provided.
     pub fn normalize_kernel_addrs(&self, addrs: &[Addr]) -> Result<KernelOutput<'_>> {
-        normalize_kernel_addrs(addrs).context("BLAH")
+        normalize_kernel_addrs(addrs)
     }
 }
