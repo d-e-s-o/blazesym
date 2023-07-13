@@ -9,6 +9,7 @@ type Elf64_Xword = u64;
 pub(crate) const ET_EXEC: u16 = 2;
 pub(crate) const ET_DYN: u16 = 3;
 
+#[derive(Clone)]
 #[repr(C)]
 pub(crate) struct Elf64_Ehdr {
     pub e_ident: [u8; EI_NIDENT], /* ELF "magic number" */
@@ -32,6 +33,7 @@ unsafe impl crate::util::Pod for Elf64_Ehdr {}
 
 pub(crate) const PT_LOAD: u32 = 1;
 
+#[derive(Clone)]
 #[repr(C)]
 pub(crate) struct Elf64_Phdr {
     pub p_type: Elf64_Word,
@@ -49,6 +51,7 @@ unsafe impl crate::util::Pod for Elf64_Phdr {}
 
 pub(crate) const PF_X: Elf64_Word = 1;
 
+#[derive(Clone)]
 #[repr(C)]
 pub(crate) struct Elf64_Shdr {
     pub sh_name: Elf64_Word,       /* Section name, index in string tbl */

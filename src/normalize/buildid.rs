@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::Error;
 use std::io::ErrorKind;
+use std::ops::Deref as _;
 use std::path::Path;
 
 use crate::elf;
@@ -39,7 +40,7 @@ fn read_build_id_from_notes(parser: &ElfParser) -> Result<Option<Vec<u8>>> {
         if shdr.sh_type == elf::types::SHT_NOTE {
             // SANITY: We just found the index so the section data should always
             //         be found.
-            let mut bytes = parser.section_data(idx).unwrap();
+            let mut bytes = parser.section_data(idx).unwrap().deref();
             let header = bytes.read_pod_ref::<BuildIdNote>().ok_or_else(|| {
                 Error::new(
                     ErrorKind::InvalidData,
@@ -74,7 +75,7 @@ fn read_build_id_from_section_name(parser: &ElfParser) -> Result<Option<Vec<u8>>
 
         // SANITY: We just found the index so the section should always be
         //         found.
-        let mut bytes = parser.section_data(idx).unwrap();
+        let mut bytes = parser.section_data(idx).unwrap().deref();
         let header = bytes.read_pod_ref::<BuildIdNote>().ok_or_else(|| {
             Error::new(
                 ErrorKind::InvalidData,

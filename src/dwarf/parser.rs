@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 #[cfg(test)]
 use std::env;
 use std::ffi::OsStr;
@@ -284,10 +285,10 @@ fn load_section(parser: &ElfParser, id: SectionId) -> Result<R<'_>> {
     let data = match result {
         Ok(Some(idx)) => parser.section_data(idx)?,
         // Make sure to return empty data if a section does not exist.
-        Ok(None) => &[],
+        Ok(None) => Cow::Borrowed([].as_slice()),
         Err(err) => return Err(err),
     };
-    let reader = EndianSlice::new(data, LittleEndian);
+    let reader = EndianSlice::new(&data, LittleEndian);
     Ok(reader)
 }
 
