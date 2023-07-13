@@ -50,26 +50,23 @@ fn symbol_name<'mmap>(strtab: &'mmap [u8], sym: &Elf64_Sym) -> Result<&'mmap str
 
 
 struct Cache<'mmap> {
-    /// A slice of the raw ELF data that we are about to parse.
-    elf_data: &'mmap [u8],
     /// The cached ELF header.
-    ehdr: Option<&'mmap Elf64_Ehdr>,
+    ehdr: Option<Cow<'mmap, Elf64_Ehdr>>,
     /// The cached ELF section headers.
-    shdrs: Option<&'mmap [Elf64_Shdr]>,
-    shstrtab: Option<&'mmap [u8]>,
+    shdrs: Option<Cow<'mmap, [Elf64_Shdr]>>,
+    shstrtab: Option<Cow<'mmap, [u8]>>,
     /// The cached ELF program headers.
-    phdrs: Option<&'mmap [Elf64_Phdr]>,
-    symtab: Option<Vec<&'mmap Elf64_Sym>>, // in address order
+    phdrs: Option<Cow<'mmap, [Elf64_Phdr]>>,
+    symtab: Option<Box<[Cow<'mmap, Elf64_Sym>]>>, // in address order
     /// The cached ELF string table.
-    strtab: Option<&'mmap [u8]>,
-    str2symtab: Option<Vec<(&'mmap str, usize)>>, // strtab offset to symtab in the dictionary order
+    strtab: Option<Cow<'mmap, [u8]>>,
+    str2symtab: Option<Box<[(&'mmap str, usize)]>>, // strtab offset to symtab in the dictionary order
 }
 
 impl<'mmap> Cache<'mmap> {
     /// Create a new `Cache` using the provided raw ELF object data.
-    fn new(elf_data: &'mmap [u8]) -> Self {
+    fn new() -> Self {
         Self {
-            elf_data,
             ehdr: None,
             shdrs: None,
             shstrtab: None,
@@ -82,30 +79,30 @@ impl<'mmap> Cache<'mmap> {
 
     /// Retrieve the raw section data for the ELF section at index
     /// `idx`.
-    fn section_data(&mut self, idx: usize) -> Result<&'mmap [u8]> {
-        let shdrs = self.ensure_shdrs()?;
+    fn section_data(
+        &mut self,
+        mut backend: &'mmap Backend,
+        idx: usize,
+    ) -> Result<Cow<'mmap, [u8]>> {
+        let shdrs = self.ensure_shdrs(backend)?;
         let section = shdrs
             .get(idx)
             .ok_or_invalid_input(|| format!("ELF section index ({idx}) out of bounds"))?;
 
-        let data = self
-            .elf_data
-            .get(section.sh_offset as usize..)
-            .ok_or_invalid_data(|| "failed to read section data: invalid offset")?
-            .read_slice(section.sh_size as usize)
-            .ok_or_invalid_data(|| "failed to read section data: invalid size")?;
+        let data = backend
+            .read_pod_slice::<u8>(section.sh_offset, section.sh_size as usize)
+            .context("failed to read section data: invalid size")?;
         Ok(data)
     }
 
-    fn ensure_ehdr(&mut self) -> Result<&'mmap Elf64_Ehdr> {
+    fn ensure_ehdr(&mut self, mut backend: &'mmap Backend) -> Result<&'mmap Elf64_Ehdr> {
         if let Some(ehdr) = self.ehdr {
-            return Ok(ehdr)
+            return Ok(&ehdr)
         }
 
-        let mut elf_data = self.elf_data;
-        let ehdr = elf_data
-            .read_pod_ref::<Elf64_Ehdr>()
-            .ok_or_invalid_data(|| "failed to read Elf64_Ehdr")?;
+        let ehdr = backend
+            .read_pod::<Elf64_Ehdr>(0)
+            .context("failed to read Elf64_Ehdr")?;
         if !(ehdr.e_ident[0] == 0x7f
             && ehdr.e_ident[1] == b'E'
             && ehdr.e_ident[2] == b'L'
@@ -117,57 +114,51 @@ impl<'mmap> Cache<'mmap> {
             )))
         }
         self.ehdr = Some(ehdr);
-        Ok(ehdr)
+        Ok(&ehdr)
     }
 
-    fn ensure_shdrs(&mut self) -> Result<&'mmap [Elf64_Shdr]> {
+    fn ensure_shdrs(&mut self, mut backend: &'mmap Backend) -> Result<&'mmap [Elf64_Shdr]> {
         if let Some(shdrs) = self.shdrs {
-            return Ok(shdrs)
+            return Ok(&shdrs)
         }
 
-        let ehdr = self.ensure_ehdr()?;
-        let shdrs = self
-            .elf_data
-            .get(ehdr.e_shoff as usize..)
-            .ok_or_invalid_data(|| "Elf64_Ehdr::e_shoff is invalid")?
-            .read_pod_slice_ref::<Elf64_Shdr>(ehdr.e_shnum.into())
-            .ok_or_invalid_data(|| "failed to read Elf64_Shdr")?;
+        let ehdr = self.ensure_ehdr(backend)?;
+        let shdrs = backend
+            .read_pod_slice::<Elf64_Shdr>(ehdr.e_shoff, ehdr.e_shnum.into())
+            .context("failed to read Elf64_Shdr")?;
         self.shdrs = Some(shdrs);
-        Ok(shdrs)
+        Ok(&shdrs)
     }
 
-    fn ensure_phdrs(&mut self) -> Result<&'mmap [Elf64_Phdr]> {
+    fn ensure_phdrs(&mut self, mut backend: &'mmap Backend) -> Result<&'mmap [Elf64_Phdr]> {
         if let Some(phdrs) = self.phdrs {
-            return Ok(phdrs)
+            return Ok(&phdrs)
         }
 
-        let ehdr = self.ensure_ehdr()?;
-        let phdrs = self
-            .elf_data
-            .get(ehdr.e_phoff as usize..)
-            .ok_or_invalid_data(|| "Elf64_Ehdr::e_phoff is invalid")?
-            .read_pod_slice_ref::<Elf64_Phdr>(ehdr.e_phnum.into())
-            .ok_or_invalid_data(|| "failed to read Elf64_Phdr")?;
+        let ehdr = self.ensure_ehdr(backend)?;
+        let phdrs = backend
+            .read_pod_slice::<Elf64_Phdr>(ehdr.e_phoff, ehdr.e_phnum.into())
+            .context("failed to read Elf64_Phdr")?;
         self.phdrs = Some(phdrs);
-        Ok(phdrs)
+        Ok(&phdrs)
     }
 
-    fn ensure_shstrtab(&mut self) -> Result<&'mmap [u8]> {
+    fn ensure_shstrtab(&mut self, mut backend: &'mmap Backend) -> Result<&'mmap [u8]> {
         if let Some(shstrtab) = self.shstrtab {
-            return Ok(shstrtab)
+            return Ok(&shstrtab)
         }
 
-        let ehdr = self.ensure_ehdr()?;
+        let ehdr = self.ensure_ehdr(backend)?;
         let shstrndx = ehdr.e_shstrndx;
-        let shstrtab = self.section_data(shstrndx as usize)?;
+        let shstrtab = self.section_data(backend, shstrndx as usize)?;
         self.shstrtab = Some(shstrtab);
-        Ok(shstrtab)
+        Ok(&shstrtab)
     }
 
     /// Get the name of the section at a given index.
-    fn section_name(&mut self, idx: usize) -> Result<&'mmap str> {
-        let shdrs = self.ensure_shdrs()?;
-        let shstrtab = self.ensure_shstrtab()?;
+    fn section_name(&mut self, mut backend: &'mmap Backend, idx: usize) -> Result<&'mmap str> {
+        let shdrs = self.ensure_shdrs(backend)?;
+        let shstrtab = self.ensure_shstrtab(backend)?;
 
         let sect = shdrs
             .get(idx)
@@ -199,10 +190,10 @@ impl<'mmap> Cache<'mmap> {
     /// Find the section of a given name.
     ///
     /// This function return the index of the section if found.
-    fn find_section(&mut self, name: &str) -> Result<Option<usize>> {
-        let ehdr = self.ensure_ehdr()?;
+    fn find_section(&mut self, mut backend: &'mmap Backend, name: &str) -> Result<Option<usize>> {
+        let ehdr = self.ensure_ehdr(backend)?;
         for i in 1..ehdr.e_shnum.into() {
-            if self.section_name(i)? == name {
+            if self.section_name(backend, i)? == name {
                 return Ok(Some(i))
             }
         }
@@ -212,21 +203,21 @@ impl<'mmap> Cache<'mmap> {
     // Note: This function should really return a reference to
     //       `self.symtab`, but current borrow checker limitations
     //       effectively prevent us from doing so.
-    fn ensure_symtab(&mut self) -> Result<()> {
+    fn ensure_symtab(&mut self, mut backend: &'mmap Backend) -> Result<()> {
         if self.symtab.is_some() {
             return Ok(())
         }
 
-        let idx = if let Some(idx) = self.find_section(".symtab")? {
+        let idx = if let Some(idx) = self.find_section(backend, ".symtab")? {
             idx
-        } else if let Some(idx) = self.find_section(".dynsym")? {
+        } else if let Some(idx) = self.find_section(backend, ".dynsym")? {
             idx
         } else {
             // Neither symbol table exists. Fake an empty one.
-            self.symtab = Some(Vec::new());
+            self.symtab = Some(Box::new([]));
             return Ok(())
         };
-        let mut symtab = self.section_data(idx)?;
+        let mut symtab = self.section_data(backend, idx)?;
 
         if symtab.len() % mem::size_of::<Elf64_Sym>() != 0 {
             return Err(Error::with_invalid_data(
@@ -235,11 +226,24 @@ impl<'mmap> Cache<'mmap> {
         }
 
         let count = symtab.len() / mem::size_of::<Elf64_Sym>();
-        let mut symtab = symtab
-            .read_pod_slice_ref::<Elf64_Sym>(count)
-            .ok_or_invalid_data(|| "failed to read symbol table contents")?
-            .iter()
-            .collect::<Vec<&Elf64_Sym>>();
+
+        let mut symtab = match symtab {
+            Cow::Borrowed(symtab) => symtab
+                .read_pod_slice_ref::<Elf64_Sym>(count)
+                .ok_or_invalid_data(|| "failed to read symbol table contents")?
+                .iter()
+                .map(Cow::Borrowed)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            Cow::Owned(symtab) => {
+                let raw = Box::into_raw(symtab.into_boxed_slice());
+                unsafe { Vec::from_raw_parts(raw.cast::<Elf64_Sym>(), count, count) }
+                    .into_iter()
+                    .map(Cow::Owned)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice()
+            }
+        };
         // Order symbols by address and those with equal address descending by
         // size.
         let () = symtab.sort_by(|sym1, sym2| {
@@ -252,33 +256,33 @@ impl<'mmap> Cache<'mmap> {
         Ok(())
     }
 
-    fn ensure_strtab(&mut self) -> Result<&'mmap [u8]> {
+    fn ensure_strtab(&mut self, mut backend: &'mmap Backend) -> Result<&'mmap [u8]> {
         if let Some(strtab) = self.strtab {
-            return Ok(strtab)
+            return Ok(&strtab)
         }
 
-        let strtab = if let Some(idx) = self.find_section(".strtab")? {
-            self.section_data(idx)?
-        } else if let Some(idx) = self.find_section(".dynstr")? {
-            self.section_data(idx)?
+        let strtab = if let Some(idx) = self.find_section(backend, ".strtab")? {
+            self.section_data(backend, idx)?
+        } else if let Some(idx) = self.find_section(backend, ".dynstr")? {
+            self.section_data(backend, idx)?
         } else {
-            &[]
+            Cow::Borrowed([].as_slice())
         };
 
         self.strtab = Some(strtab);
-        Ok(strtab)
+        Ok(&strtab)
     }
 
     // Note: This function should really return a reference to
     //       `self.str2symtab`, but current borrow checker limitations
     //       effectively prevent us from doing so.
-    fn ensure_str2symtab(&mut self) -> Result<()> {
+    fn ensure_str2symtab(&mut self, mut backend: &'mmap Backend) -> Result<()> {
         if self.str2symtab.is_some() {
             return Ok(())
         }
 
-        let strtab = self.ensure_strtab()?;
-        let () = self.ensure_symtab()?;
+        let strtab = self.ensure_strtab(backend)?;
+        let () = self.ensure_symtab(backend)?;
         // SANITY: The above `ensure_symtab` ensures we have `symtab`
         //         available.
         let symtab = self.symtab.as_ref().unwrap();
@@ -297,7 +301,8 @@ impl<'mmap> Cache<'mmap> {
                     .context("invalid symbol name")?;
                 Ok((name, i))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?
+            .into_boxed_slice();
 
         let () = str2symtab.sort_by_key(|&(name, _i)| name);
 
@@ -398,10 +403,16 @@ pub(crate) struct ElfParser<B = Mmap> {
     ///         to make sure we never end up with a dangling reference.
     cache: RefCell<Cache<'static>>,
     /// The backend used.
-    _backend: B,
+    backend: B,
 }
 
 impl ElfParser<Mmap> {
+    fn backend(&self) -> &'static Mmap {
+        // SAFETY: We never hand out any 'static references to cache
+        //         data.
+        unsafe { mem::transmute::<&Backend, &Backend>(&self.backend) }
+    }
+
     /// Create an `ElfParser` from an open file.
     pub fn open_file(file: File) -> Result<ElfParser> {
         Mmap::map(&file).map(Self::from_mmap)
@@ -409,15 +420,9 @@ impl ElfParser<Mmap> {
 
     /// Create an `ElfParser` from mmap'ed data.
     pub fn from_mmap(mmap: Mmap) -> ElfParser {
-        // We transmute the mmap's lifetime to static here as that is a
-        // necessity for self-referentiality.
-        // SAFETY: We never hand out any 'static references to cache
-        //         data.
-        let elf_data = unsafe { mem::transmute(mmap.deref()) };
-
         let parser = ElfParser {
-            _backend: mmap,
-            cache: RefCell::new(Cache::new(elf_data)),
+            backend: mmap,
+            cache: RefCell::new(Cache::new()),
         };
         parser
     }
@@ -436,9 +441,9 @@ impl ElfParser<Mmap> {
 
 impl<B> ElfParser<B> {
     /// Retrieve the data corresponding to the ELF section at index `idx`.
-    pub fn section_data(&self, idx: usize) -> Result<&[u8]> {
+    pub fn section_data(&self, idx: usize) -> Result<Cow<'_, [u8]>> {
         let mut cache = self.cache.borrow_mut();
-        cache.section_data(idx)
+        cache.section_data(self.backend(), idx)
     }
 
     /// Find the section of a given name.
@@ -446,14 +451,14 @@ impl<B> ElfParser<B> {
     /// This function return the index of the section if found.
     pub fn find_section(&self, name: &str) -> Result<Option<usize>> {
         let mut cache = self.cache.borrow_mut();
-        let index = cache.find_section(name)?;
+        let index = cache.find_section(self.backend(), name)?;
         Ok(index)
     }
 
     pub fn find_sym(&self, addr: Addr, st_type: u8) -> Result<Option<(&str, Addr)>> {
         let mut cache = self.cache.borrow_mut();
-        let strtab = cache.ensure_strtab()?;
-        let () = cache.ensure_symtab()?;
+        let strtab = cache.ensure_strtab(self.backend())?;
+        let () = cache.ensure_symtab(self.backend())?;
         // SANITY: The above `ensure_symtab` ensures we have `symtab`
         //         available.
         let symtab = cache.symtab.as_ref().unwrap();
@@ -489,8 +494,8 @@ impl<B> ElfParser<B> {
         }
 
         let mut cache = self.cache.borrow_mut();
-        let () = cache.ensure_symtab()?;
-        let () = cache.ensure_str2symtab()?;
+        let () = cache.ensure_symtab(self.backend())?;
+        let () = cache.ensure_str2symtab(self.backend())?;
         // SANITY: The above `ensure_symtab` ensures we have `symtab`
         //         available.
         let symtab = cache.symtab.as_ref().unwrap();
@@ -498,7 +503,7 @@ impl<B> ElfParser<B> {
         //         `str2symtab` available.
         let str2symtab = cache.str2symtab.as_ref().unwrap();
 
-        let r = find_match_or_lower_bound_by_key(str2symtab, name, |&(name, _i)| name);
+        let r = find_match_or_lower_bound_by_key(str2symtab, name, |&(name, _i)| &name);
         match r {
             Some(idx) => {
                 let mut found = vec![];
@@ -529,7 +534,7 @@ impl<B> ElfParser<B> {
     #[cfg(test)]
     fn get_symbol_name(&self, idx: usize) -> Result<&str> {
         let mut cache = self.cache.borrow_mut();
-        let strtab = cache.ensure_strtab()?;
+        let strtab = cache.ensure_strtab(self.backend())?;
         let sym = cache.symbol(idx)?;
         let name = symbol_name(strtab, sym)?;
         Ok(name)
@@ -537,20 +542,20 @@ impl<B> ElfParser<B> {
 
     pub(crate) fn section_headers(&self) -> Result<&[Elf64_Shdr]> {
         let mut cache = self.cache.borrow_mut();
-        let phdrs = cache.ensure_shdrs()?;
+        let phdrs = cache.ensure_shdrs(self.backend())?;
         Ok(phdrs)
     }
 
     pub(crate) fn program_headers(&self) -> Result<&[Elf64_Phdr]> {
         let mut cache = self.cache.borrow_mut();
-        let phdrs = cache.ensure_phdrs()?;
+        let phdrs = cache.ensure_phdrs(self.backend())?;
         Ok(phdrs)
     }
 
     #[cfg(test)]
     fn pick_symtab_addr(&self) -> (&str, Addr) {
         let mut cache = self.cache.borrow_mut();
-        let () = cache.ensure_symtab().unwrap();
+        let () = cache.ensure_symtab(self.backend()).unwrap();
         let symtab = cache.symtab.as_ref().unwrap();
 
         let mut idx = symtab.len() / 2;
