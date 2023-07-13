@@ -244,7 +244,7 @@ pub(crate) trait ReadRaw<'data> {
         }
     }
 
-    /// Read a reference to something implementing `Pod`.
+    /// Read a slice of references to something implementing `Pod`.
     #[inline]
     fn read_pod_slice_ref<T>(&mut self, count: usize) -> Option<&'data [T]>
     where
