@@ -1,17 +1,24 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::fs::File;
+use std::io::Read as _;
+use std::io::Seek as _;
+use std::io::SeekFrom;
 use std::mem;
+use std::mem::MaybeUninit;
 use std::ops::Deref as _;
 use std::path::Path;
+use std::slice;
 
 use crate::inspect::FindAddrOpts;
 use crate::inspect::SymInfo;
 use crate::inspect::SymType;
 use crate::mmap::Mmap;
 use crate::util::find_match_or_lower_bound_by_key;
+use crate::util::Pod;
 use crate::util::ReadRaw as _;
 use crate::Addr;
 use crate::Error;
@@ -302,6 +309,81 @@ impl<'mmap> Cache<'mmap> {
 impl Debug for Cache<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "Cache")
+    }
+}
+
+
+trait Backend<'r> {
+    fn read_pod<T>(&mut self, offset: u64) -> Result<Cow<'r, T>, Error>
+    where
+        T: Clone + Pod;
+
+    fn read_pod_slice<T>(&mut self, offset: u64, count: usize) -> Result<Cow<'r, [T]>, Error>
+    where
+        T: Clone + Pod;
+}
+
+impl<'r> Backend<'r> for &'r Mmap {
+    fn read_pod<T>(&mut self, offset: u64) -> Result<Cow<'r, T>, Error>
+    where
+        T: Clone + Pod,
+    {
+        let value = self
+            .get(offset as _..)
+            .unwrap()
+            .read_pod_ref::<T>()
+            .ok_or_invalid_data(|| "failed to read value from mmap")?;
+        Ok(Cow::Borrowed(value))
+    }
+
+    fn read_pod_slice<T>(&mut self, offset: u64, count: usize) -> Result<Cow<'r, [T]>, Error>
+    where
+        T: Clone + Pod,
+    {
+        let value = self
+            .get(offset as _..)
+            .unwrap()
+            .read_pod_slice_ref::<T>(count)
+            .ok_or_invalid_data(|| "failed to read slice from mmap")?;
+        Ok(Cow::Borrowed(value))
+    }
+}
+
+impl<'r> Backend<'r> for &'r File {
+    fn read_pod<T>(&mut self, offset: u64) -> Result<Cow<'r, T>, Error>
+    where
+        T: Clone + Pod,
+    {
+        let _pos = self.seek(SeekFrom::Start(offset))?;
+
+        let mut value = MaybeUninit::<T>::zeroed();
+        // SAFETY: `value` is a buffer of `size_of::<T>` bytes.
+        // TODO: Are we UB here because we create a mut reference?
+        let slice = unsafe {
+            slice::from_raw_parts_mut(value.as_mut_ptr().cast::<u8>(), mem::size_of::<T>())
+        };
+        let () = self.read_exact(slice)?;
+        // SAFETY: `T` is a `Pod` and hence valid for any bit pattern,
+        //         including all zeroes.
+        Ok(Cow::Owned(unsafe { value.assume_init() }))
+    }
+
+    fn read_pod_slice<T>(&mut self, offset: u64, count: usize) -> Result<Cow<'r, [T]>, Error>
+    where
+        T: Clone + Pod,
+    {
+        let _pos = self.seek(SeekFrom::Start(offset))?;
+        let mut vec = Vec::<T>::new();
+        // SAFETY: `T` is a `Pod` and hence valid for any bit pattern,
+        //         including all zeroes.
+        let () = vec.resize(count, unsafe { mem::zeroed() });
+
+        // TODO: Are we UB here because we create a mut reference?
+        let slice = unsafe {
+            slice::from_raw_parts_mut(vec.as_mut_ptr().cast::<u8>(), count * mem::size_of::<T>())
+        };
+        let () = self.read_exact(slice)?;
+        Ok(Cow::Owned(vec))
     }
 }
 
