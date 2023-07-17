@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::Read as _;
 use std::io::Seek as _;
 use std::io::SeekFrom;
+use std::marker::PhantomData;
 use std::mem;
 use std::mem::MaybeUninit;
 use std::ops::Deref as _;
@@ -49,7 +50,7 @@ fn symbol_name<'mmap>(strtab: &'mmap [u8], sym: &Elf64_Sym) -> Result<&'mmap str
 }
 
 
-struct Cache<'mmap> {
+struct Cache<'mmap, B> {
     /// The cached ELF header.
     ehdr: Option<Cow<'mmap, Elf64_Ehdr>>,
     /// The cached ELF section headers.
@@ -61,9 +62,13 @@ struct Cache<'mmap> {
     /// The cached ELF string table.
     strtab: Option<Cow<'mmap, [u8]>>,
     str2symtab: Option<Box<[(&'mmap str, usize)]>>, // strtab offset to symtab in the dictionary order
+    _phantom: PhantomData<B>,
 }
 
-impl<'mmap> Cache<'mmap> {
+impl<'mmap, B> Cache<'mmap, B>
+where
+    B: Backend<'mmap>,
+{
     /// Create a new `Cache` using the provided raw ELF object data.
     fn new() -> Self {
         Self {
@@ -74,16 +79,13 @@ impl<'mmap> Cache<'mmap> {
             symtab: None,
             strtab: None,
             str2symtab: None,
+            _phantom: PhantomData,
         }
     }
 
     /// Retrieve the raw section data for the ELF section at index
     /// `idx`.
-    fn section_data(
-        &mut self,
-        mut backend: &'mmap Backend,
-        idx: usize,
-    ) -> Result<Cow<'mmap, [u8]>> {
+    fn section_data(&mut self, mut backend: &'mmap B, idx: usize) -> Result<B::SliceOutput<u8>> {
         let shdrs = self.ensure_shdrs(backend)?;
         let section = shdrs
             .get(idx)
@@ -95,7 +97,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(data)
     }
 
-    fn ensure_ehdr(&mut self, mut backend: &'mmap Backend) -> Result<&'mmap Elf64_Ehdr> {
+    fn ensure_ehdr(&mut self, mut backend: &'mmap B) -> Result<&'mmap Elf64_Ehdr> {
         if let Some(ehdr) = self.ehdr {
             return Ok(&ehdr)
         }
@@ -117,7 +119,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(&ehdr)
     }
 
-    fn ensure_shdrs(&mut self, mut backend: &'mmap Backend) -> Result<&'mmap [Elf64_Shdr]> {
+    fn ensure_shdrs(&mut self, mut backend: &'mmap B) -> Result<&'mmap [Elf64_Shdr]> {
         if let Some(shdrs) = self.shdrs {
             return Ok(&shdrs)
         }
@@ -130,7 +132,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(&shdrs)
     }
 
-    fn ensure_phdrs(&mut self, mut backend: &'mmap Backend) -> Result<&'mmap [Elf64_Phdr]> {
+    fn ensure_phdrs(&mut self, mut backend: &'mmap B) -> Result<&'mmap [Elf64_Phdr]> {
         if let Some(phdrs) = self.phdrs {
             return Ok(&phdrs)
         }
@@ -143,7 +145,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(&phdrs)
     }
 
-    fn ensure_shstrtab(&mut self, mut backend: &'mmap Backend) -> Result<&'mmap [u8]> {
+    fn ensure_shstrtab(&mut self, mut backend: &'mmap B) -> Result<&'mmap [u8]> {
         if let Some(shstrtab) = self.shstrtab {
             return Ok(&shstrtab)
         }
@@ -156,7 +158,7 @@ impl<'mmap> Cache<'mmap> {
     }
 
     /// Get the name of the section at a given index.
-    fn section_name(&mut self, mut backend: &'mmap Backend, idx: usize) -> Result<&'mmap str> {
+    fn section_name(&mut self, mut backend: &'mmap B, idx: usize) -> Result<&'mmap str> {
         let shdrs = self.ensure_shdrs(backend)?;
         let shstrtab = self.ensure_shstrtab(backend)?;
 
@@ -190,7 +192,7 @@ impl<'mmap> Cache<'mmap> {
     /// Find the section of a given name.
     ///
     /// This function return the index of the section if found.
-    fn find_section(&mut self, mut backend: &'mmap Backend, name: &str) -> Result<Option<usize>> {
+    fn find_section(&mut self, mut backend: &'mmap B, name: &str) -> Result<Option<usize>> {
         let ehdr = self.ensure_ehdr(backend)?;
         for i in 1..ehdr.e_shnum.into() {
             if self.section_name(backend, i)? == name {
@@ -203,7 +205,7 @@ impl<'mmap> Cache<'mmap> {
     // Note: This function should really return a reference to
     //       `self.symtab`, but current borrow checker limitations
     //       effectively prevent us from doing so.
-    fn ensure_symtab(&mut self, mut backend: &'mmap Backend) -> Result<()> {
+    fn ensure_symtab(&mut self, mut backend: &'mmap B) -> Result<()> {
         if self.symtab.is_some() {
             return Ok(())
         }
@@ -256,7 +258,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(())
     }
 
-    fn ensure_strtab(&mut self, mut backend: &'mmap Backend) -> Result<&'mmap [u8]> {
+    fn ensure_strtab(&mut self, mut backend: &'mmap B) -> Result<&'mmap [u8]> {
         if let Some(strtab) = self.strtab {
             return Ok(&strtab)
         }
@@ -276,7 +278,7 @@ impl<'mmap> Cache<'mmap> {
     // Note: This function should really return a reference to
     //       `self.str2symtab`, but current borrow checker limitations
     //       effectively prevent us from doing so.
-    fn ensure_str2symtab(&mut self, mut backend: &'mmap Backend) -> Result<()> {
+    fn ensure_str2symtab(&mut self, mut backend: &'mmap B) -> Result<()> {
         if self.str2symtab.is_some() {
             return Ok(())
         }
@@ -311,7 +313,7 @@ impl<'mmap> Cache<'mmap> {
     }
 }
 
-impl Debug for Cache<'_> {
+impl<B> Debug for Cache<'_, B> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "Cache")
     }
@@ -319,45 +321,62 @@ impl Debug for Cache<'_> {
 
 
 trait Backend<'r> {
-    fn read_pod<T>(&mut self, offset: u64) -> Result<Cow<'r, T>, Error>
-    where
-        T: Clone + Pod;
+    type Output<T: 'r>;
+    type SliceOutput<T: 'r>;
 
-    fn read_pod_slice<T>(&mut self, offset: u64, count: usize) -> Result<Cow<'r, [T]>, Error>
+    fn read_pod<T>(&mut self, offset: u64) -> Result<Self::Output<T>, Error>
     where
-        T: Clone + Pod;
+        T: Clone + Pod + 'r;
+
+    fn read_pod_slice<T>(
+        &mut self,
+        offset: u64,
+        count: usize,
+    ) -> Result<Self::SliceOutput<T>, Error>
+    where
+        T: Clone + Pod + 'r;
 }
 
 impl<'r> Backend<'r> for &'r Mmap {
-    fn read_pod<T>(&mut self, offset: u64) -> Result<Cow<'r, T>, Error>
+    type Output<T: 'r> = &'r T;
+    type SliceOutput<T: 'r> = &'r [T];
+
+    fn read_pod<T>(&mut self, offset: u64) -> Result<Self::Output<T>, Error>
     where
-        T: Clone + Pod,
+        T: Clone + Pod + 'r,
     {
         let value = self
             .get(offset as _..)
             .unwrap()
             .read_pod_ref::<T>()
             .ok_or_invalid_data(|| "failed to read value from mmap")?;
-        Ok(Cow::Borrowed(value))
+        Ok(value)
     }
 
-    fn read_pod_slice<T>(&mut self, offset: u64, count: usize) -> Result<Cow<'r, [T]>, Error>
+    fn read_pod_slice<T>(
+        &mut self,
+        offset: u64,
+        count: usize,
+    ) -> Result<Self::SliceOutput<T>, Error>
     where
-        T: Clone + Pod,
+        T: Clone + Pod + 'r,
     {
         let value = self
             .get(offset as _..)
             .unwrap()
             .read_pod_slice_ref::<T>(count)
             .ok_or_invalid_data(|| "failed to read slice from mmap")?;
-        Ok(Cow::Borrowed(value))
+        Ok(value)
     }
 }
 
 impl<'r> Backend<'r> for &'r File {
-    fn read_pod<T>(&mut self, offset: u64) -> Result<Cow<'r, T>, Error>
+    type Output<T: 'r> = T;
+    type SliceOutput<T: 'r> = Vec<T>;
+
+    fn read_pod<T>(&mut self, offset: u64) -> Result<Self::Output<T>, Error>
     where
-        T: Clone + Pod,
+        T: Clone + Pod + 'r,
     {
         let _pos = self.seek(SeekFrom::Start(offset))?;
 
@@ -373,9 +392,13 @@ impl<'r> Backend<'r> for &'r File {
         Ok(Cow::Owned(unsafe { value.assume_init() }))
     }
 
-    fn read_pod_slice<T>(&mut self, offset: u64, count: usize) -> Result<Cow<'r, [T]>, Error>
+    fn read_pod_slice<T>(
+        &mut self,
+        offset: u64,
+        count: usize,
+    ) -> Result<Self::SliceOutput<T>, Error>
     where
-        T: Clone + Pod,
+        T: Clone + Pod + 'r,
     {
         let _pos = self.seek(SeekFrom::Start(offset))?;
         let mut vec = Vec::<T>::new();
@@ -401,7 +424,7 @@ pub(crate) struct ElfParser<B = Mmap> {
     ///         this member. Rather, they should never outlive `self`.
     ///         Furthermore, this member has to be listed before `mmap`
     ///         to make sure we never end up with a dangling reference.
-    cache: RefCell<Cache<'static>>,
+    cache: RefCell<Cache<'static, B>>,
     /// The backend used.
     backend: B,
 }
@@ -410,7 +433,7 @@ impl ElfParser<Mmap> {
     fn backend(&self) -> &'static Mmap {
         // SAFETY: We never hand out any 'static references to cache
         //         data.
-        unsafe { mem::transmute::<&Backend, &Backend>(&self.backend) }
+        unsafe { mem::transmute::<&Mmap, &Mmap>(&self.backend) }
     }
 
     /// Create an `ElfParser` from an open file.
@@ -439,9 +462,12 @@ impl ElfParser<Mmap> {
     }
 }
 
-impl<B> ElfParser<B> {
+impl<'r, B> ElfParser<B>
+where
+    B: Backend<'r>,
+{
     /// Retrieve the data corresponding to the ELF section at index `idx`.
-    pub fn section_data(&self, idx: usize) -> Result<Cow<'_, [u8]>> {
+    pub fn section_data(&self, idx: usize) -> Result<B::SliceOutput<u8>> {
         let mut cache = self.cache.borrow_mut();
         cache.section_data(self.backend(), idx)
     }
