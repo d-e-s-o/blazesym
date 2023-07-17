@@ -390,18 +390,18 @@ impl<'r> Backend<'r> for &'r File {
 
 /// A parser for ELF64 files.
 #[derive(Debug)]
-pub(crate) struct ElfParser {
+pub(crate) struct ElfParser<B = Mmap> {
     /// A cache for relevant parts of the ELF file.
     /// SAFETY: We must not hand out references with a 'static lifetime to
     ///         this member. Rather, they should never outlive `self`.
     ///         Furthermore, this member has to be listed before `mmap`
     ///         to make sure we never end up with a dangling reference.
     cache: RefCell<Cache<'static>>,
-    /// The memory mapped file.
-    _mmap: Mmap,
+    /// The backend used.
+    _backend: B,
 }
 
-impl ElfParser {
+impl ElfParser<Mmap> {
     /// Create an `ElfParser` from an open file.
     pub fn open_file(file: File) -> Result<ElfParser> {
         Mmap::map(&file).map(Self::from_mmap)
@@ -416,7 +416,7 @@ impl ElfParser {
         let elf_data = unsafe { mem::transmute(mmap.deref()) };
 
         let parser = ElfParser {
-            _mmap: mmap,
+            _backend: mmap,
             cache: RefCell::new(Cache::new(elf_data)),
         };
         parser
@@ -432,7 +432,9 @@ impl ElfParser {
             parser
         }
     }
+}
 
+impl<B> ElfParser<B> {
     /// Retrieve the data corresponding to the ELF section at index `idx`.
     pub fn section_data(&self, idx: usize) -> Result<&[u8]> {
         let mut cache = self.cache.borrow_mut();
