@@ -835,20 +835,20 @@ impl<'bcknd> BackendImpl<'bcknd> for &File {
 
 /// A parser for ELF64 files.
 #[derive(Debug)]
-pub(crate) struct ElfParser {
+pub(crate) struct ElfParser<B = Mmap> {
     /// A cache for relevant parts of the ELF file.
     // SAFETY: We must not hand out references with a 'static lifetime to
     //         this member. Rather, they should never outlive `self`.
     //         Furthermore, this member has to be listed before `_mmap`
     //         to make sure we never end up with a dangling reference.
     cache: Cache<'static>,
-    /// The memory mapped file.
-    _mmap: Mmap,
     /// The path to the ELF file being worked on, if available.
     path: Option<PathBuf>,
+    /// The backend used.
+    _backend: B,
 }
 
-impl ElfParser {
+impl ElfParser<Mmap> {
     /// Create an `ElfParser` from an open file.
     pub(crate) fn open_file<P>(file: &File, path: P) -> Result<Self>
     where
@@ -867,7 +867,7 @@ impl ElfParser {
         let elf_data = unsafe { mem::transmute::<&[u8], &'static [u8]>(mmap.deref()) };
 
         let parser = ElfParser {
-            _mmap: mmap,
+            _backend: mmap,
             cache: Cache::new(elf_data),
             path,
         };
@@ -880,7 +880,9 @@ impl ElfParser {
             File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
         Self::open_file(&file, path)
     }
+}
 
+impl<B> ElfParser<B> {
     /// Retrieve the data corresponding to the ELF section at index
     /// `idx`, optionally decompressing it if it is compressed.
     pub(crate) fn section_data(&self, idx: usize) -> Result<&[u8]> {
