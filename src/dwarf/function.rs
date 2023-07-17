@@ -26,6 +26,9 @@
 // > DEALINGS IN THE SOFTWARE.
 
 use std::cmp::Ordering;
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::fmt::Result as FmtResult;
 use std::iter;
 use std::vec;
 
@@ -65,6 +68,21 @@ pub(crate) struct Function<R: gimli::Reader> {
     inlined_functions: Box<[InlinedFunction<R>]>,
     /// List of `DW_TAG_inlined_subroutine` address ranges in this function.
     inlined_addresses: Box<[InlinedFunctionAddress]>,
+}
+
+impl Debug for Function<super::parser::R<'_>> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_struct(stringify!(Function))
+            .field("dw_die_offset", &self.dw_die_offset)
+            .field(
+                "name",
+                match self.name.as_ref().and_then(|r| r.to_string().ok()) {
+                    Some(ref s) => s,
+                    None => &self.name,
+                },
+            )
+            .finish()
+    }
 }
 
 pub(crate) struct InlinedFunctionAddress {

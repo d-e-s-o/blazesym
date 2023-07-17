@@ -25,6 +25,7 @@
 // > IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // > DEALINGS IN THE SOFTWARE.
 
+use std::borrow::Cow;
 use std::cmp;
 use std::cmp::Ordering;
 
@@ -295,6 +296,21 @@ impl<R: gimli::Reader> Unit<R> {
             .map_err(gimli::Error::clone)
     }
 
+    fn parse_inlined_functions(
+        &self,
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<&Functions<R>, gimli::Error> {
+        self.funcs
+            .borrow_with(|| {
+              let funcs = Functions::parse(unit, sections)?;
+              let () = funcs.parse_inlined_functions(unit, sections)?;
+              Ok(funcs)
+            })
+            .as_ref()
+            .map_err(gimli::Error::clone)
+    }
+
     fn find_function_or_location<'unit>(
         &'unit self,
         probe: u64,
@@ -317,6 +333,24 @@ impl<R: gimli::Reader> Unit<R> {
         };
         let location = self.find_location(probe, sections)?;
         Ok((function, location))
+    }
+
+    fn find_name<'unit>(
+        &'unit self,
+        name: &str,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<Option<&'unit Function<R>>, gimli::Error> {
+        let unit = &self.dw_unit;
+        let functions = self.parse_inlined_functions(unit, sections)?;
+        for (__offset, func) in functions.functions.iter() {
+          let result = func.borrow().unwrap().as_ref().map_err(gimli::Error::clone);
+          let func = result?;
+          let name = Some(Ok(Cow::Borrowed(name.as_bytes())));
+          if func.name.as_ref().map(|r| r.to_slice()) == name {
+            return Ok(Some(func))
+          }
+        }
+        Ok(None)
     }
 }
 
@@ -610,5 +644,14 @@ impl<R: gimli::Reader> Units<R> {
     ) -> Result<LocationRangeIter<'_, R>, gimli::Error> {
         let unit_iter = self.find_units_range(probe_low, probe_high);
         LocationRangeIter::new(unit_iter, &self.dwarf, probe_low, probe_high)
+    }
+
+    pub fn find_name<'dwarf>(
+        &'dwarf self,
+        name: &'dwarf str,
+    ) -> impl Iterator<Item = Result<&'dwarf Function<R>, gimli::Error>> + 'dwarf {
+        self.units
+            .iter()
+            .filter_map(|unit| unit.find_name(name, &self.dwarf).transpose())
     }
 }

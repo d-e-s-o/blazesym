@@ -341,6 +341,21 @@ mod tests {
     use test::Bencher;
 
 
+    #[test]
+    fn xxxxxxxxxxxxxxxxxxxxxxxxx() {
+        let test_dwarf = Path::new(&env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join("test-stable-addresses-dwarf-only.bin");
+        let parser = ElfParser::open(&test_dwarf).unwrap();
+        let mut load_section = |section| self::load_section(&parser, section);
+        let dwarf = Dwarf::<R>::load(&mut load_section).unwrap();
+
+        let units = crate::dwarf::unit::Units::parse(dwarf).unwrap();
+        let mut funcs = units.find_name("factorial");
+        println!("FOUND: {:?}", funcs.next().unwrap());
+        assert!(funcs.next().is_none());
+    }
+
     /// Check that we can parse debug line information.
     #[test]
     fn debug_line_parsing() {
