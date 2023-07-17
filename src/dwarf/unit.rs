@@ -327,7 +327,7 @@ pub(crate) struct Units<R: gimli::Reader> {
     /// The ranges of the units encountered.
     unit_ranges: Vec<UnitRange>,
     /// All units along with meta-data.
-    units: Vec<Unit<R>>,
+    units: Box<[Unit<R>]>,
 }
 
 impl<R: gimli::Reader> Units<R> {
@@ -498,7 +498,7 @@ impl<R: gimli::Reader> Units<R> {
         let slf = Self {
             dwarf: sections,
             unit_ranges,
-            units: res_units,
+            units: res_units.into_boxed_slice(),
         };
         Ok(slf)
     }
