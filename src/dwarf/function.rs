@@ -40,12 +40,7 @@ use super::range::RangeAttributes;
 
 pub(crate) struct Functions<R: gimli::Reader> {
     /// List of all `DW_TAG_subprogram` details in the unit.
-    pub(crate) functions: Box<
-        [(
-            gimli::UnitOffset<R::Offset>,
-            LazyCell<Result<Function<R>, Error>>,
-        )],
-    >,
+    pub(crate) functions: Box<[Function<R>]>,
     /// List of `DW_TAG_subprogram` address ranges in the unit.
     pub(crate) addresses: Box<[FunctionAddress]>,
 }
@@ -63,11 +58,11 @@ pub(crate) struct FunctionAddress {
 
 pub(crate) struct Function<R: gimli::Reader> {
     pub(crate) dw_die_offset: gimli::UnitOffset<R::Offset>,
+    /// The function's name, if present.
     pub(crate) name: Option<R>,
-    /// List of all `DW_TAG_inlined_subroutine` details in this function.
-    inlined_functions: Box<[InlinedFunction<R>]>,
-    /// List of `DW_TAG_inlined_subroutine` address ranges in this function.
-    inlined_addresses: Box<[InlinedFunctionAddress]>,
+    /// The bounds (address and size) of the function.
+    pub(crate) bounds: Option<gimli::Range>,
+    pub(crate) inlined_functions: LazyCell<Result<InlinedFunctions<R>, Error>>,
 }
 
 impl Debug for Function<super::parser::R<'_>> {
@@ -84,6 +79,105 @@ impl Debug for Function<super::parser::R<'_>> {
             .finish()
     }
 }
+
+
+pub(crate) struct InlinedFunctions<R: gimli::Reader> {
+    /// List of all `DW_TAG_inlined_subroutine` details in this function.
+    inlined_functions: Box<[InlinedFunction<R>]>,
+    /// List of `DW_TAG_inlined_subroutine` address ranges in this function.
+    inlined_addresses: Box<[InlinedFunctionAddress]>,
+}
+
+impl<R: gimli::Reader> InlinedFunctions<R> {
+    pub(crate) fn parse(
+        dw_die_offset: gimli::UnitOffset<R::Offset>,
+        unit: &gimli::Unit<R>,
+        sections: &gimli::Dwarf<R>,
+    ) -> Result<Self, Error> {
+        let mut entries = unit.entries_raw(Some(dw_die_offset))?;
+        let depth = entries.next_depth();
+
+        let mut inlined_functions = Vec::new();
+        let mut inlined_addresses = Vec::new();
+        Function::parse_children(
+            &mut entries,
+            depth,
+            unit,
+            sections,
+            &mut inlined_functions,
+            &mut inlined_addresses,
+            0,
+        )?;
+
+        // Sort ranges in "breadth-first traversal order", i.e. first by call_depth
+        // and then by range.begin. This allows finding the range containing an
+        // address at a certain depth using binary search.
+        // Note: Using DFS order, i.e. ordering by range.begin first and then by
+        // call_depth, would not work! Consider the two examples
+        // "[0..10 at depth 0], [0..2 at depth 1], [6..8 at depth 1]"  and
+        // "[0..5 at depth 0], [0..2 at depth 1], [5..10 at depth 0], [6..8 at depth 1]".
+        // In this example, if you want to look up address 7 at depth 0, and you
+        // encounter [0..2 at depth 1], are you before or after the target range?
+        // You don't know.
+        inlined_addresses.sort_by(|r1, r2| {
+            if r1.call_depth < r2.call_depth {
+                Ordering::Less
+            } else if r1.call_depth > r2.call_depth {
+                Ordering::Greater
+            } else if r1.range.begin < r2.range.begin {
+                Ordering::Less
+            } else if r1.range.begin > r2.range.begin {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
+        });
+
+        Ok(Self {
+            inlined_functions: inlined_functions.into_boxed_slice(),
+            inlined_addresses: inlined_addresses.into_boxed_slice(),
+        })
+    }
+
+    /// Build the list of inlined functions that contain `probe`.
+    pub(crate) fn find_inlined_functions(
+        &self,
+        probe: u64,
+    ) -> iter::Rev<vec::IntoIter<&InlinedFunction<R>>> {
+        // `inlined_functions` is ordered from outside to inside.
+        let mut inlined_functions = Vec::new();
+        let mut inlined_addresses = &self.inlined_addresses[..];
+        loop {
+            let current_depth = inlined_functions.len();
+            // Look up (probe, current_depth) in inline_ranges.
+            // `inlined_addresses` is sorted in "breadth-first traversal order", i.e.
+            // by `call_depth` first, and then by `range.begin`. See the comment at
+            // the sort call for more information about why.
+            let search = inlined_addresses.binary_search_by(|range| {
+                if range.call_depth > current_depth {
+                    Ordering::Greater
+                } else if range.call_depth < current_depth {
+                    Ordering::Less
+                } else if range.range.begin > probe {
+                    Ordering::Greater
+                } else if range.range.end <= probe {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                }
+            });
+            if let Ok(index) = search {
+                let function_index = inlined_addresses[index].function;
+                inlined_functions.push(&self.inlined_functions[function_index]);
+                inlined_addresses = &inlined_addresses[index + 1..];
+            } else {
+                break;
+            }
+        }
+        inlined_functions.into_iter().rev()
+    }
+}
+
 
 pub(crate) struct InlinedFunctionAddress {
     range: gimli::Range,
@@ -112,11 +206,27 @@ impl<R: gimli::Reader> Functions<R> {
             let dw_die_offset = entries.next_offset();
             if let Some(abbrev) = entries.read_abbreviation()? {
                 if abbrev.tag() == gimli::DW_TAG_subprogram {
+                    let mut name = None;
                     let mut ranges = RangeAttributes::default();
                     for spec in abbrev.attributes() {
                         match entries.read_attribute(*spec) {
                             Ok(ref attr) => {
                                 match attr.name() {
+                                    gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
+                                        if let Ok(val) = sections.attr_string(unit, attr.value()) {
+                                            name = Some(val);
+                                        }
+                                    },
+                                    gimli::DW_AT_name => {
+                                        if name.is_none() {
+                                            name = sections.attr_string(unit, attr.value()).ok();
+                                        }
+                                    },
+                                    gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
+                                        if name.is_none() {
+                                            name = name_attr(attr.value(), unit, sections, 16)?;
+                                        }
+                                    },
                                     gimli::DW_AT_low_pc => match attr.value() {
                                         gimli::AttributeValue::Addr(val) => {
                                             ranges.low_pc = Some(val)
@@ -156,7 +266,13 @@ impl<R: gimli::Reader> Functions<R> {
                             function: function_index,
                         });
                     })? {
-                        functions.push((dw_die_offset, LazyCell::new()));
+                        let function = Function {
+                            dw_die_offset,
+                            name,
+                            bounds: ranges.bounds(),
+                            inlined_functions: LazyCell::new(),
+                        };
+                        functions.push(function);
                     }
                 } else {
                     entries.skip_attributes(abbrev.attributes())?;
@@ -187,8 +303,8 @@ impl<R: gimli::Reader> Functions<R> {
     ) -> Result<(), Error> {
         for function in &*self.functions {
             function
-                .1
-                .borrow_with(|| Function::parse(function.0, unit, sections))
+                .inlined_functions
+                .borrow_with(|| InlinedFunctions::parse(function.dw_die_offset, unit, sections))
                 .as_ref()
                 .map_err(Error::clone)?;
         }
@@ -211,87 +327,6 @@ impl<R: gimli::Reader> Functions<R> {
 }
 
 impl<R: gimli::Reader> Function<R> {
-    pub(crate) fn parse(
-        dw_die_offset: gimli::UnitOffset<R::Offset>,
-        unit: &gimli::Unit<R>,
-        sections: &gimli::Dwarf<R>,
-    ) -> Result<Self, Error> {
-        let mut entries = unit.entries_raw(Some(dw_die_offset))?;
-        let depth = entries.next_depth();
-        let abbrev = entries.read_abbreviation()?.unwrap();
-        debug_assert_eq!(abbrev.tag(), gimli::DW_TAG_subprogram);
-
-        let mut name = None;
-        for spec in abbrev.attributes() {
-            match entries.read_attribute(*spec) {
-                Ok(ref attr) => {
-                    match attr.name() {
-                        gimli::DW_AT_linkage_name | gimli::DW_AT_MIPS_linkage_name => {
-                            if let Ok(val) = sections.attr_string(unit, attr.value()) {
-                                name = Some(val);
-                            }
-                        }
-                        gimli::DW_AT_name => {
-                            if name.is_none() {
-                                name = sections.attr_string(unit, attr.value()).ok();
-                            }
-                        }
-                        gimli::DW_AT_abstract_origin | gimli::DW_AT_specification => {
-                            if name.is_none() {
-                                name = name_attr(attr.value(), unit, sections, 16)?;
-                            }
-                        }
-                        _ => {}
-                    };
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        let mut inlined_functions = Vec::new();
-        let mut inlined_addresses = Vec::new();
-        Function::parse_children(
-            &mut entries,
-            depth,
-            unit,
-            sections,
-            &mut inlined_functions,
-            &mut inlined_addresses,
-            0,
-        )?;
-
-        // Sort ranges in "breadth-first traversal order", i.e. first by call_depth
-        // and then by range.begin. This allows finding the range containing an
-        // address at a certain depth using binary search.
-        // Note: Using DFS order, i.e. ordering by range.begin first and then by
-        // call_depth, would not work! Consider the two examples
-        // "[0..10 at depth 0], [0..2 at depth 1], [6..8 at depth 1]"  and
-        // "[0..5 at depth 0], [0..2 at depth 1], [5..10 at depth 0], [6..8 at depth 1]".
-        // In this example, if you want to look up address 7 at depth 0, and you
-        // encounter [0..2 at depth 1], are you before or after the target range?
-        // You don't know.
-        inlined_addresses.sort_by(|r1, r2| {
-            if r1.call_depth < r2.call_depth {
-                Ordering::Less
-            } else if r1.call_depth > r2.call_depth {
-                Ordering::Greater
-            } else if r1.range.begin < r2.range.begin {
-                Ordering::Less
-            } else if r1.range.begin > r2.range.begin {
-                Ordering::Greater
-            } else {
-                Ordering::Equal
-            }
-        });
-
-        Ok(Function {
-            dw_die_offset,
-            name,
-            inlined_functions: inlined_functions.into_boxed_slice(),
-            inlined_addresses: inlined_addresses.into_boxed_slice(),
-        })
-    }
-
     fn parse_children(
         entries: &mut gimli::EntriesRaw<'_, '_, R>,
         depth: isize,
@@ -346,44 +381,6 @@ impl<R: gimli::Reader> Function<R> {
             }
         }
         Ok(())
-    }
-
-    /// Build the list of inlined functions that contain `probe`.
-    pub(crate) fn find_inlined_functions(
-        &self,
-        probe: u64,
-    ) -> iter::Rev<vec::IntoIter<&InlinedFunction<R>>> {
-        // `inlined_functions` is ordered from outside to inside.
-        let mut inlined_functions = Vec::new();
-        let mut inlined_addresses = &self.inlined_addresses[..];
-        loop {
-            let current_depth = inlined_functions.len();
-            // Look up (probe, current_depth) in inline_ranges.
-            // `inlined_addresses` is sorted in "breadth-first traversal order", i.e.
-            // by `call_depth` first, and then by `range.begin`. See the comment at
-            // the sort call for more information about why.
-            let search = inlined_addresses.binary_search_by(|range| {
-                if range.call_depth > current_depth {
-                    Ordering::Greater
-                } else if range.call_depth < current_depth {
-                    Ordering::Less
-                } else if range.range.begin > probe {
-                    Ordering::Greater
-                } else if range.range.end <= probe {
-                    Ordering::Less
-                } else {
-                    Ordering::Equal
-                }
-            });
-            if let Ok(index) = search {
-                let function_index = inlined_addresses[index].function;
-                inlined_functions.push(&self.inlined_functions[function_index]);
-                inlined_addresses = &inlined_addresses[index + 1..];
-            } else {
-                break;
-            }
-        }
-        inlined_functions.into_iter().rev()
     }
 }
 

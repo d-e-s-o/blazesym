@@ -321,13 +321,10 @@ impl<R: gimli::Reader> Unit<R> {
         let function = match functions.find_address(probe) {
             Some(address) => {
                 let function_index = functions.addresses[address].function;
-                let (offset, ref function) = functions.functions[function_index];
-                Some(
-                    function
-                        .borrow_with(|| Function::parse(offset, unit, sections))
-                        .as_ref()
-                        .map_err(gimli::Error::clone)?,
-                )
+                let function = &functions.functions[function_index];
+                // TODO: The original code parsed inline functions here. But
+                //       it's not exactly clear why that is necessary?
+                Some(function)
             }
             None => None,
         };
@@ -341,10 +338,8 @@ impl<R: gimli::Reader> Unit<R> {
         sections: &gimli::Dwarf<R>,
     ) -> Result<Option<&'unit Function<R>>, gimli::Error> {
         let unit = &self.dw_unit;
-        let functions = self.parse_inlined_functions(unit, sections)?;
-        for (__offset, func) in functions.functions.iter() {
-          let result = func.borrow().unwrap().as_ref().map_err(gimli::Error::clone);
-          let func = result?;
+        let functions = self.parse_functions_dwarf_and_unit(unit, sections)?;
+        for func in functions.functions.iter() {
           let name = Some(Ok(Cow::Borrowed(name.as_bytes())));
           if func.name.as_ref().map(|r| r.to_slice()) == name {
             return Ok(Some(func))

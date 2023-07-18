@@ -72,4 +72,17 @@ impl<R: gimli::Reader> RangeAttributes<R> {
         }
         Ok(added_any)
     }
+
+    pub(crate) fn bounds(&self) -> Option<gimli::Range> {
+        if let (Some(begin), Some(end)) = (self.low_pc, self.high_pc) {
+            Some(gimli::Range { begin, end })
+        } else if let (Some(begin), Some(size)) = (self.low_pc, self.size) {
+            Some(gimli::Range {
+                begin,
+                end: begin + size,
+            })
+        } else {
+            None
+        }
+    }
 }
