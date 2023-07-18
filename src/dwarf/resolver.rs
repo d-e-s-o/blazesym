@@ -295,19 +295,46 @@ impl DwarfResolver {
     /// * `name` - is the symbol name to find.
     /// * `opts` - is the context giving additional parameters.
     pub(crate) fn find_addr(&self, name: &str, opts: &FindAddrOpts) -> Result<Vec<SymInfo>> {
-        todo!()
-        //if let SymType::Variable = opts.sym_type {
-        //    return Err(Error::with_unsupported("not implemented"))
-        //}
+        if let SymType::Variable = opts.sym_type {
+            return Err(Error::with_unsupported("not implemented"))
+        }
 
-        //let mut cache = self.cache.borrow_mut();
-        //let () = self.ensure_debug_syms(&mut cache)?;
-        //// SANITY: The above `ensure_debug_syms` ensures we have `debug_syms`
-        ////         available.
-        //let debug_syms = cache.debug_syms.as_ref().unwrap();
-        //let syms = debug_syms.find_by_name(name).map(SymInfo::from).collect();
+        let syms = self
+            .units
+            .find_name(name)
+            .map(|result| {
+                match result {
+                    Ok(function) => {
+                        // SANITY: We found the function by name, so it must have the
+                        //         name attribute set.
+                        let name = function.name.unwrap().to_string().unwrap().to_string();
+                        let addr = function
+                            .bounds
+                            .as_ref()
+                            .map(|bounds| bounds.begin as Addr)
+                            .unwrap_or(0);
+                        let size = function
+                            .bounds
+                            .as_ref()
+                            .and_then(|bounds| bounds.end.checked_sub(bounds.begin))
+                            .map(|size| size as usize)
+                            .unwrap_or(0);
+                        let info = SymInfo {
+                            name,
+                            addr,
+                            size,
+                            sym_type: SymType::Function,
+                            file_offset: 0,
+                            obj_file_name: None,
+                        };
+                        Ok(info)
+                    }
+                    Err(err) => Err(Error::from(err)),
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        //Ok(syms)
+        Ok(syms)
     }
 }
 
