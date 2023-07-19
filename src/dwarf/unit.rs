@@ -26,7 +26,6 @@
 // > DEALINGS IN THE SOFTWARE.
 
 use std::borrow::Cow;
-use std::cmp;
 use std::cmp::Ordering;
 use std::ffi::OsStr;
 use std::path::Path;
@@ -56,76 +55,6 @@ pub struct Location<'a> {
     pub line: Option<u32>,
     /// The column number.
     pub column: Option<u32>,
-}
-
-/// Iterator over `Location`s in a range of addresses, returned by `Context::find_location_range`.
-pub struct LocationRangeIter<'ctx, R: gimli::Reader> {
-    unit_iter: Box<dyn Iterator<Item = (&'ctx Unit<R>, &'ctx gimli::Range)> + 'ctx>,
-    iter: Option<LocationRangeUnitIter<'ctx>>,
-
-    probe_low: u64,
-    probe_high: u64,
-    sections: &'ctx gimli::Dwarf<R>,
-}
-
-impl<'ctx, R: gimli::Reader> LocationRangeIter<'ctx, R> {
-    #[inline]
-    fn new<I>(
-        unit_iter: I,
-        sections: &'ctx gimli::Dwarf<R>,
-        probe_low: u64,
-        probe_high: u64,
-    ) -> Result<Self, gimli::Error>
-    where
-        I: Iterator<Item = (&'ctx Unit<R>, &'ctx gimli::Range)> + 'ctx,
-    {
-        Ok(Self {
-            unit_iter: Box::new(unit_iter),
-            iter: None,
-            probe_low,
-            probe_high,
-            sections,
-        })
-    }
-
-    fn next_loc(&mut self) -> Result<Option<(u64, u64, Location<'ctx>)>, gimli::Error> {
-        loop {
-            let iter = self.iter.take();
-            match iter {
-                None => match self.unit_iter.next() {
-                    Some((unit, range)) => {
-                        self.iter = unit.find_location_range(
-                            cmp::max(self.probe_low, range.begin),
-                            cmp::min(self.probe_high, range.end),
-                            self.sections,
-                        )?;
-                    }
-                    None => return Ok(None),
-                },
-                Some(mut iter) => {
-                    if let item @ Some(_) = iter.next() {
-                        self.iter = Some(iter);
-                        return Ok(item);
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl<'ctx, R> Iterator for LocationRangeIter<'ctx, R>
-where
-    R: gimli::Reader + 'ctx,
-{
-    type Item = (u64, u64, Location<'ctx>);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.next_loc() {
-            Err(_) => None,
-            Ok(loc) => loc,
-        }
-    }
 }
 
 
@@ -631,17 +560,6 @@ impl<R: gimli::Reader> Units<R> {
             }
         }
         Ok(None)
-    }
-
-    /// Return source file and lines for a range of addresses. For each location it also
-    /// returns the address and size of the range of the underlying instructions.
-    pub fn find_location_range(
-        &self,
-        probe_low: u64,
-        probe_high: u64,
-    ) -> Result<LocationRangeIter<'_, R>, gimli::Error> {
-        let unit_iter = self.find_units_range(probe_low, probe_high);
-        LocationRangeIter::new(unit_iter, &self.dwarf, probe_low, probe_high)
     }
 
     pub fn find_name<'dwarf>(
