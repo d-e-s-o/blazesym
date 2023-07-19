@@ -28,6 +28,8 @@
 use std::borrow::Cow;
 use std::cmp;
 use std::cmp::Ordering;
+use std::ffi::OsStr;
+use std::path::Path;
 
 use super::function::Function;
 use super::function::Functions;
@@ -46,8 +48,10 @@ struct UnitRange {
 
 /// A source location.
 pub struct Location<'a> {
+    /// The directory.
+    pub dir: &'a Path,
     /// The file name.
-    pub file: Option<&'a str>,
+    pub file: &'a OsStr,
     /// The line number.
     pub line: Option<u32>,
     /// The column number.
@@ -198,11 +202,9 @@ impl<'ctx> Iterator for LocationRangeUnitIter<'ctx> {
                         break;
                     }
 
-                    let file = self
-                        .lines
-                        .files
-                        .get(row.file_index as usize)
-                        .map(String::as_str);
+                    // SANITY: We always have a file present for each
+                    //         `file_index`.
+                    let (dir, file) = self.lines.files.get(row.file_index as usize).unwrap();
                     let nextaddr = seq
                         .rows
                         .get(self.row_idx + 1)
@@ -213,6 +215,7 @@ impl<'ctx> Iterator for LocationRangeUnitIter<'ctx> {
                         row.address,
                         nextaddr - row.address,
                         Location {
+                            dir,
                             file,
                             line: if row.line != 0 { Some(row.line) } else { None },
                             column: if row.column != 0 {

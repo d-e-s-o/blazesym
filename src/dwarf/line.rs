@@ -25,25 +25,36 @@
 // > IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // > DEALINGS IN THE SOFTWARE.
 
+use std::borrow::Cow;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::mem;
 use std::num::NonZeroU64;
+use std::os::unix::ffi::OsStrExt as _;
+use std::os::unix::ffi::OsStringExt as _;
+use std::path::Path;
+use std::path::PathBuf;
 
 
-/// Check if the path in the given string has a unix style root
-fn has_unix_root(p: &str) -> bool {
-    p.starts_with('/')
+fn path_push<'p>(path: &mut Cow<'p, Path>, p: Cow<'p, Path>) {
+    if p.is_absolute() {
+        *path = p;
+    } else {
+        path.to_mut().push(p)
+    }
 }
 
-fn path_push(path: &mut String, p: &str) {
-    if has_unix_root(p) {
-        *path = p.to_string();
-    } else {
-        let dir_separator = '/';
+fn r_to_osstr<R: gimli::Reader>(r: &R) -> Result<Cow<'_, OsStr>, gimli::Error> {
+    match r.to_slice()? {
+        Cow::Borrowed(slice) => Ok(Cow::Borrowed(OsStr::from_bytes(slice))),
+        Cow::Owned(vec) => Ok(Cow::Owned(OsString::from_vec(vec))),
+    }
+}
 
-        if !path.is_empty() && !path.ends_with(dir_separator) {
-            path.push(dir_separator);
-        }
-        *path += p;
+fn r_to_path<R: gimli::Reader>(r: &R) -> Result<Cow<'_, Path>, gimli::Error> {
+    match r_to_osstr(r)? {
+        Cow::Borrowed(osstr) => Ok(Cow::Borrowed(Path::new(osstr))),
+        Cow::Owned(osstring) => Ok(Cow::Owned(PathBuf::from(osstring))),
     }
 }
 
@@ -52,35 +63,25 @@ fn render_file<R: gimli::Reader>(
     file: &gimli::FileEntry<R, R::Offset>,
     header: &gimli::LineProgramHeader<R, R::Offset>,
     sections: &gimli::Dwarf<R>,
-) -> Result<String, gimli::Error> {
-    let mut path = if let Some(ref comp_dir) = dw_unit.comp_dir {
-        comp_dir.to_string_lossy()?.into_owned()
+) -> Result<(PathBuf, OsString), gimli::Error> {
+    let mut dir = if let Some(ref comp_dir) = dw_unit.comp_dir {
+        r_to_path(comp_dir)?
     } else {
-        String::new()
+        Cow::Borrowed(Path::new(""))
     };
 
+    let d;
     // The directory index 0 is defined to correspond to the compilation unit directory.
     if file.directory_index() != 0 {
         if let Some(directory) = file.directory(header) {
-            path_push(
-                &mut path,
-                sections
-                    .attr_string(dw_unit, directory)?
-                    .to_string_lossy()?
-                    .as_ref(),
-            );
+            d = sections.attr_string(dw_unit, directory)?;
+            path_push(&mut dir, r_to_path(&d)?);
         }
     }
 
-    path_push(
-        &mut path,
-        sections
-            .attr_string(dw_unit, file.path_name())?
-            .to_string_lossy()?
-            .as_ref(),
-    );
-
-    Ok(path)
+    let f = sections.attr_string(dw_unit, file.path_name())?;
+    let file = r_to_osstr(&f)?;
+    Ok((dir.into_owned(), file.into_owned()))
 }
 
 
@@ -98,7 +99,7 @@ pub(crate) struct LineRow {
 }
 
 pub(crate) struct Lines {
-    pub(crate) files: Box<[String]>,
+    pub(crate) files: Box<[(PathBuf, OsString)]>,
     pub(crate) sequences: Box<[LineSequence]>,
 }
 
@@ -156,7 +157,7 @@ impl Lines {
         let header = rows.header();
         match header.file(0) {
             Some(file) => files.push(render_file(dw_unit, file, header, sections)?),
-            None => files.push(String::from("")), // DWARF version <= 4 may not have 0th index
+            None => files.push(Default::default()), // DWARF version <= 4 may not have 0th index
         }
         let mut index = 1;
         while let Some(file) = header.file(index) {

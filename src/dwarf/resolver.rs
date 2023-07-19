@@ -255,10 +255,8 @@ impl DwarfResolver {
     pub fn find_line(&self, addr: Addr) -> Result<Option<(&Path, &OsStr, usize)>> {
         if self.line_number_info {
             let location = self.units.find_location(addr as u64)?.map(|location| {
-                // TODO: Incomplete & incorrect.
-                let dir = Path::new("");
-                // TODO: Must not unwrap.
-                let file = OsStr::new(location.file.unwrap());
+                let dir = location.dir;
+                let file = location.file;
                 let line = location.line.map(|line| line as usize).unwrap_or(0);
                 (dir, file, line)
             });
