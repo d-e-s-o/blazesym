@@ -207,16 +207,6 @@ impl<R: gimli::Reader> Unit<R> {
         }
     }
 
-    #[inline]
-    fn find_location_range(
-        &self,
-        probe_low: u64,
-        probe_high: u64,
-        sections: &gimli::Dwarf<R>,
-    ) -> Result<Option<LocationRangeUnitIter<'_>>, gimli::Error> {
-        LocationRangeUnitIter::new(self, sections, probe_low, probe_high)
-    }
-
     fn parse_functions_dwarf_and_unit(
         &self,
         unit: &gimli::Unit<R>,
