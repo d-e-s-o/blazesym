@@ -560,4 +560,41 @@ mod tests {
         assert_eq!(syms[1].name, "factorial_wrapper");
         assert_ne!(syms[0].addr, syms[1].addr);
     }
+
+    #[test]
+    fn lookup_symbols_exhaustive() {
+        let bin_name = env::current_exe().unwrap();
+        //let bin_name = Path::new("/usr/lib64/libc.so.6");
+
+        let parser = ElfParser::open(bin_name.as_ref()).unwrap();
+        let mut cache = parser.cache.borrow_mut();
+        let () = cache.ensure_symtab().unwrap();
+        let symtab = cache.symtab.as_ref().unwrap();
+        let sym_cnt = symtab.len();
+        drop(cache);
+
+        for idx in 0..sym_cnt {
+            let cache = parser.cache.borrow_mut();
+            let symtab = cache.symtab.as_ref().unwrap();
+            if symtab[idx].type_() != STT_FUNC || symtab[idx].st_shndx == SHN_UNDEF {
+                continue
+            }
+
+            let sym = symtab[idx];
+            let typ = symtab[idx].type_();
+            drop(cache);
+
+            for addr in sym.st_value..sym.st_value + sym.st_size {
+                let (found_sym, found_addr) = parser.find_sym(addr as Addr, typ).unwrap().unwrap();
+                assert_eq!(found_addr, sym.st_value as Addr);
+
+                let mut cache = parser.cache.borrow_mut();
+                let strtab = cache.ensure_strtab().unwrap();
+                let sym_name = symbol_name(strtab, sym).unwrap();
+                if sym_name != found_sym {
+                    println!("'{sym_name}' vs '{found_sym}'");
+                }
+            }
+        }
+    }
 }
