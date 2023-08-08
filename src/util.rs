@@ -177,6 +177,32 @@ where
 }
 
 
+/// A version of C++'s `std::upper_bound()` (https://en.cppreference.com/w/cpp/algorithm/upper_bound).
+pub(crate) fn upper_bound_by<T, F>(slice: &[T], mut f: F) -> usize
+where
+    F: FnMut(&T) -> Ordering,
+{
+    slice
+        .binary_search_by(|element| match f(element) {
+            // Since we try to find position right after searched value, we
+            // treat all equal values as less to move right.
+            Ordering::Equal => Ordering::Less,
+            ord => ord,
+        })
+        // Since `std::upper_bound` always return position which doesn't point
+        // to searched value, we would always get `Err` value from
+        // `binary_search`.
+        .unwrap_err()
+}
+
+pub(crate) fn upper_bound<T>(slice: &[T], item: T) -> usize
+where
+    T: Ord,
+{
+    upper_bound_by(slice, |elem| elem.cmp(&item))
+}
+
+
 /// A marker trait for "plain old data" data types.
 ///
 /// # Safety
@@ -693,5 +719,23 @@ mod tests {
         assert_eq!(find_match_or_lower_bound(&data, 99), Some(4));
         assert_eq!(find_match_or_lower_bound(&data, 100), Some(4));
         assert_eq!(find_match_or_lower_bound(&data, 1337), Some(4));
+    }
+
+    /// Check that `upper_bound` works as expected.
+    #[test]
+    fn search_upper_bound() {
+        let data = [];
+        assert_eq!(upper_bound(&data, 1u16), 0);
+
+        let data = [1];
+        assert_eq!(upper_bound(&data, 0u16), 0);
+        assert_eq!(upper_bound(&data, 1u16), 1);
+
+        let data = [1, 3];
+        assert_eq!(upper_bound(&data, 0u16), 0);
+        assert_eq!(upper_bound(&data, 1u16), 1);
+        assert_eq!(upper_bound(&data, 2u16), 1);
+        assert_eq!(upper_bound(&data, 3u16), 2);
+        assert_eq!(upper_bound(&data, 4u16), 2);
     }
 }

@@ -17,6 +17,7 @@ use crate::Result;
 use crate::SrcLang;
 use crate::SymResolver;
 
+use super::inline::InlineInfo;
 use super::linetab::run_op;
 use super::linetab::LineTableHeader;
 use super::linetab::LineTableRow;
@@ -218,6 +219,7 @@ impl SymResolver for GsymResolver<'_> {
         }
 
         let mut line_tab_info = None;
+        let mut inline_info = Vec::new();
         let addrdatas = parse_address_data(addrinfo.data);
         for addr_ent in addrdatas {
             match addr_ent.typ {
@@ -230,7 +232,34 @@ impl SymResolver for GsymResolver<'_> {
                         line_tab_info = self.parse_line_tab_info(&mut data, symaddr, addr)?;
                     }
                 }
-                INFO_TYPE_INLINE_INFO => (),
+                INFO_TYPE_INLINE_INFO => {
+                    let mut data = addr_ent.data;
+
+                    if let Some(info) =
+                        InlineInfo::parse(&mut data, symaddr as u64, Some(addr as u64))?
+                    {
+                        let stack = info.inline_stack(addr as u64);
+                        let () = inline_info.reserve(stack.len());
+
+                        for frame in stack {
+                            let name = self
+                                .ctx
+                                .get_str(frame.name as usize)
+                                .and_then(|s| s.to_str())
+                                .ok_or_invalid_data(|| {
+                                    format!("failed to read string table entry at offset {}", frame.name)
+                                })?;
+
+                            let frame = if let Some(file) = frame.call_file {
+                                let frame = self.query_frame_src_info(file, frame.call_line)?;
+                                Some(frame)
+                            } else {
+                                None
+                            };
+                            let () = inline_info.push((name, frame));
+                        }
+                    }
+                }
                 typ => {
                     warn!("encountered unknown info type: {typ}; ignoring...");
                     continue
@@ -241,10 +270,13 @@ impl SymResolver for GsymResolver<'_> {
         if let Some(line_tab_info) = line_tab_info {
             let info = AddrSrcInfo {
                 direct: line_tab_info,
-                inlined: Vec::new(),
+                inlined: inline_info,
             };
             Ok(Some(info))
         } else {
+            if !inline_info.is_empty() {
+                warn!("failed to find line table information for {addr:#x} but got inline information; ignoring...");
+            }
             Ok(None)
         }
     }
