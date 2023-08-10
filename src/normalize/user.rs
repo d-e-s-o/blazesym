@@ -324,6 +324,7 @@ where
         Err(err) => Some(Err(err)),
     });
 
+    // TODO: This seems arbitrary to special case.
     let mut entry = entries.next().ok_or_else(|| {
         Error::new(
             ErrorKind::UnexpectedEof,
