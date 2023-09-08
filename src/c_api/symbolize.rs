@@ -348,13 +348,14 @@ fn convert_symbolizedresults_to_c(results: Vec<Vec<Sym>>) -> *const blaze_result
     let mut csym_last = unsafe {
         raw_buf.add(mem::size_of::<blaze_result>() + mem::size_of::<blaze_entry>() * results.len())
     } as *mut blaze_sym;
-    let mut cstr_last = unsafe {
+    let cstr_start = unsafe {
         raw_buf.add(
             mem::size_of::<blaze_result>()
                 + mem::size_of::<blaze_entry>() * results.len()
                 + mem::size_of::<blaze_sym>() * all_csym_size,
         )
     } as *mut c_char;
+    let mut cstr_last = cstr_start;
 
     let mut make_cstr = |src: &OsStr| {
         let cstr = cstr_last;
@@ -395,6 +396,7 @@ fn convert_symbolizedresults_to_c(results: Vec<Vec<Sym>>) -> *const blaze_result
             csym_ref.line = r.line.unwrap_or(0);
             csym_ref.column = r.column.unwrap_or(0);
 
+            debug_assert!(csym_last.cast() < cstr_start);
             csym_last = unsafe { csym_last.add(1) };
         }
     }
@@ -573,6 +575,8 @@ pub unsafe extern "C" fn blaze_result_free(results: *const blaze_result) {
 mod tests {
     use super::*;
 
+    use std::hint::black_box;
+
 
     /// Exercise the `Debug` representation of various types.
     #[test]
@@ -669,5 +673,116 @@ mod tests {
         let kernel = Kernel::from(&kernel);
         assert_eq!(kernel.kallsyms, Some(PathBuf::from("/proc/kallsyms")));
         assert_eq!(kernel.kernel_image, Some(PathBuf::from("/boot/image")));
+    }
+
+    #[test]
+    fn foobar() {
+        fn touch_cstr(s: *const c_char) {
+            let s = unsafe { CStr::from_ptr(s) }.to_bytes();
+            let _x = black_box(s);
+        }
+
+        /// Touch all "members" of a [`blaze_result`].
+        fn touch(result: *const blaze_result) {
+            let result = unsafe { &*result };
+            for i in 0..result.size {
+                let entry = unsafe { &*result.entries.as_slice().as_ptr().add(i) };
+                for j in 0..entry.size {
+                    let sym = unsafe { &*entry.syms.add(j) };
+                    let blaze_sym {
+                        name,
+                        addr,
+                        offset,
+                        dir,
+                        file,
+                        line,
+                        column,
+                    } = sym;
+                    let () = touch_cstr(name.clone());
+                    let _x = black_box(addr);
+                    let _x = black_box(offset);
+                    let _x = black_box(dir);
+                    let _x = black_box(file);
+                    let _x = black_box(line);
+                    let _x = black_box(column);
+                }
+            }
+        }
+
+        let results = vec![];
+        let result = convert_symbolizedresults_to_c(results);
+        let () = touch(result);
+        let () = unsafe { blaze_result_free(result) };
+
+        let results = vec![vec![]];
+        let result = convert_symbolizedresults_to_c(results);
+        let () = touch(result);
+        let () = unsafe { blaze_result_free(result) };
+
+        let results = vec![vec![Sym {
+            name: "test".to_string(),
+            addr: 0x1337,
+            offset: 0x1338,
+            dir: None,
+            file: None,
+            line: Some(42),
+            column: Some(43),
+            _non_exhaustive: (),
+        }]];
+        let result = convert_symbolizedresults_to_c(results);
+        let () = touch(result);
+        let () = unsafe { blaze_result_free(result) };
+
+        let results = vec![vec![
+            Sym {
+                name: "test".to_string(),
+                addr: 0x1337,
+                offset: 0x1338,
+                dir: None,
+                file: None,
+                line: Some(42),
+                column: Some(43),
+                _non_exhaustive: (),
+            },
+            Sym {
+                name: "test2".to_string(),
+                addr: 0x1339,
+                offset: 0x133a,
+                dir: None,
+                file: None,
+                line: Some(44),
+                column: Some(45),
+                _non_exhaustive: (),
+            },
+        ]];
+        let result = convert_symbolizedresults_to_c(results);
+        let () = touch(result);
+        let () = unsafe { blaze_result_free(result) };
+
+        let results = vec![
+            vec![Sym {
+                name: "test".to_string(),
+                addr: 0x1337,
+                offset: 0x1338,
+                dir: None,
+                file: None,
+                line: Some(42),
+                column: Some(43),
+                _non_exhaustive: (),
+            }],
+            vec![Sym {
+                name: "test2".to_string(),
+                addr: 0x1339,
+                offset: 0x133a,
+                dir: None,
+                file: None,
+                line: Some(44),
+                column: Some(45),
+                _non_exhaustive: (),
+            }],
+        ];
+        let result = convert_symbolizedresults_to_c(results);
+        let () = touch(result);
+        let () = unsafe { blaze_result_free(result) };
     }
 }
