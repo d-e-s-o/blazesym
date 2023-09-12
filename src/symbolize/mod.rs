@@ -86,9 +86,16 @@ pub use symbolizer::Sym;
 pub use symbolizer::Symbolizer;
 
 
-pub(crate) struct AddrSrcInfo<'src> {
+pub(crate) struct FrameSrcInfo<'src> {
     pub dir: &'src Path,
     pub file: &'src OsStr,
     pub line: Option<u32>,
     pub column: Option<u16>,
+}
+
+pub(crate) struct AddrSrcInfo<'src> {
+    /// Source information about the top-level frame belonging to an address.
+    pub direct: FrameSrcInfo<'src>,
+    /// Source information about inlined functions, along with their names.
+    pub inlined: Vec<(&'src str, Option<FrameSrcInfo<'src>>)>,
 }

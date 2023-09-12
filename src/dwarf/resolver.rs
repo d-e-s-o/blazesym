@@ -15,6 +15,7 @@ use crate::inspect::FindAddrOpts;
 use crate::inspect::SymInfo;
 use crate::inspect::SymType;
 use crate::symbolize::AddrSrcInfo;
+use crate::symbolize::FrameSrcInfo;
 use crate::Addr;
 use crate::Error;
 use crate::IntSym;
@@ -110,10 +111,13 @@ impl DwarfResolver {
                 } = location;
 
                 AddrSrcInfo {
-                    dir,
-                    file,
-                    line,
-                    column: column.map(|col| col.try_into().unwrap_or(u16::MAX)),
+                    direct: FrameSrcInfo {
+                        dir,
+                        file,
+                        line,
+                        column: column.map(|col| col.try_into().unwrap_or(u16::MAX)),
+                    },
+                    inlined: Vec::new(),
                 }
             });
             Ok(location)
@@ -249,11 +253,11 @@ mod tests {
             .join("test-stable-addresses.bin");
         let resolver = DwarfResolver::open(bin_name.as_ref(), true, false).unwrap();
 
-        let line_info = resolver.find_line_info(0x2000100).unwrap().unwrap();
-        assert_ne!(line_info.dir, PathBuf::new());
-        assert_eq!(line_info.file, "test-stable-addresses.c");
-        assert_eq!(line_info.line, Some(8));
-        assert!(line_info.column.is_some());
+        let info = resolver.find_line_info(0x2000100).unwrap().unwrap();
+        assert_ne!(info.direct.dir, PathBuf::new());
+        assert_eq!(info.direct.file, "test-stable-addresses.c");
+        assert_eq!(info.direct.line, Some(8));
+        assert!(info.direct.column.is_some());
     }
 
     /// Check that we can look up a symbol in DWARF debug information.

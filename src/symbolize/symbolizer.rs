@@ -238,10 +238,10 @@ impl Symbolizer {
                     name: self.maybe_demangle(name, lang),
                     addr: sym_addr,
                     offset: addr - sym_addr,
-                    dir: Some(linfo.dir.to_path_buf()),
-                    file: Some(linfo.file.to_os_string()),
-                    line: linfo.line,
-                    column: linfo.column,
+                    dir: Some(linfo.direct.dir.to_path_buf()),
+                    file: Some(linfo.direct.file.to_os_string()),
+                    line: linfo.direct.line,
+                    column: linfo.direct.column,
                     _non_exhaustive: (),
                 });
             } else {
