@@ -76,7 +76,7 @@ jobs:
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@cargo-llvm-cov
     - name: Test and gather coverage
-      run: cargo llvm-cov --all-targets --features=generate-large-test-files --lcov --output-path lcov.info
+      run: cargo -vvvv llvm-cov --all-targets --features=generate-large-test-files --lcov --output-path lcov.info
     - name: Upload code coverage results
       uses: codecov/codecov-action@v3
       with:
@@ -113,7 +113,7 @@ jobs:
         RUSTFLAGS: "-Zsanitizer=${{ matrix.sanitizer }}"
         ASAN_OPTIONS: "detect_odr_violation=0:detect_leaks=0"
         LSAN_OPTIONS: ""
-      run: cargo test --lib --tests --target x86_64-unknown-linux-gnu
+      run: cargo -vvvv test --lib --tests --target x86_64-unknown-linux-gnu
   test-release:
     name: Test with release build
     runs-on: ubuntu-22.04
@@ -128,7 +128,7 @@ jobs:
         toolchain: stable
         profile: minimal
         override: true
-    - run: cargo test --workspace --release
+    - run: cargo -vvvv test --workspace --release
   c-header:
     name: Check generated C header
     runs-on: ubuntu-latest

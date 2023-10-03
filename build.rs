@@ -308,6 +308,12 @@ fn prepare_test_files(crate_root: &Path) {
             "symbol-mangling-version=v0",
         ],
     );
+    let output = Command::new("readelf")
+        .args(["--syms", "--wide", "data/test-rs.bin"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    println!("cargo-warning={}", String::from_utf8_lossy(&output.stdout));
 
     let src = crate_root.join("data").join("test-so.c");
     cc(
