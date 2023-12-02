@@ -49,7 +49,7 @@ impl Builder {
         let len = libc::size_t::try_from(file.metadata()?.len())
             .map_err(Error::with_invalid_data)
             .context("file is too large to mmap")?;
-        let offset = 0;
+        let offset = ((21u64) & (libc::MAP_HUGE_MASK as u64)) << libc::MAP_HUGE_SHIFT;
 
         // SAFETY: `mmap` with the provided arguments is always safe to call.
         let ptr = unsafe {
@@ -57,9 +57,9 @@ impl Builder {
                 null_mut(),
                 len,
                 self.protection,
-                libc::MAP_PRIVATE,
+                libc::MAP_PRIVATE | libc::MAP_HUGETLB | libc::MAP_HUGE_2MB,
                 file.as_raw_fd(),
-                offset,
+                offset as _,
             )
         };
 
