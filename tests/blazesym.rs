@@ -7,9 +7,13 @@
 use std::collections::HashSet;
 use std::ffi::CString;
 use std::ffi::OsStr;
+use std::fs::copy;
+use std::fs::metadata;
 use std::fs::read as read_file;
+use std::fs::set_permissions;
 use std::io::Error;
 use std::os::unix::ffi::OsStringExt as _;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 
 use blazesym::helper::read_elf_build_id;
@@ -19,8 +23,20 @@ use blazesym::normalize::Normalizer;
 use blazesym::symbolize;
 use blazesym::symbolize::Symbolizer;
 use blazesym::Addr;
+use blazesym::ErrorExt as _;
 use blazesym::ErrorKind;
+use blazesym::IntoError as _;
 use blazesym::Pid;
+use blazesym::Result;
+
+use libc::exit;
+use libc::fork;
+use libc::seteuid;
+use libc::waitpid;
+use libc::WEXITSTATUS;
+use libc::WIFEXITED;
+
+use tempfile::NamedTempFile;
 
 use test_log::test;
 
@@ -122,6 +138,88 @@ fn symbolize_elf_dwarf_gsym() {
     let data = read_file(&path).unwrap();
     let src = symbolize::Source::from(symbolize::GsymData::new(&data));
     test(src, true);
+}
+
+/// Check that we fail symbolization as expected when we don't have the
+/// permission to open the symbolization source.
+#[test]
+// This test uses fork() from a (likely) multi-threaded program and relies on
+// a nobody user with UID 65534 being present. Ugh. The cfg_attr dance is
+// necessary because the bencher benchmarking infrastructure doesn't work
+// properly with the --include-ignored argument, at least not when invoked via
+// cargo-llvm-cov. Ugh^2.
+#[cfg_attr(
+    not(feature = "nightly"),
+    ignore = "test does some nasty things that could conceivably not pan out"
+)]
+fn symbolize_no_permission() {
+    // We run as root. Even if we limit permissions for a root-owned file we can
+    // still access it (unlike the behavior for regular users). As such, we have
+    // to work as a different user to check handling of permission denied
+    // errors. Because such a change is process-wide, though, we can't do that
+    // directly but have to fork first.
+
+    fn test() -> Result<()> {
+        let src = Path::new(&env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join("test-stable-addresses-no-dwarf.bin");
+
+        let tmpfile = NamedTempFile::new()?;
+        let path = tmpfile.path();
+        let _bytes = copy(src, path)?;
+
+        let mut permissions = metadata(path)?.permissions();
+        // Clear all permissions.
+        let () = permissions.set_mode(0o0);
+        let () = set_permissions(path, permissions)?;
+
+        let nobody = 65534;
+        if unsafe { seteuid(nobody) } == -1 {
+            return Err(
+                Error::last_os_error().with_context(|| format!("failed to seteuid({nobody})"))
+            )
+        }
+
+        let src = symbolize::Source::Elf(symbolize::Elf::new(tmpfile.path()));
+        let symbolizer = Symbolizer::new();
+        let result = symbolizer.symbolize_single(&src, symbolize::Input::VirtOffset(0x2000100));
+
+        if matches!(result, Err(ref err) if err.kind() == ErrorKind::PermissionDenied) {
+            Ok(())
+        } else {
+            None.ok_or_invalid_data(|| {
+                format!("received unexpected symbolization result: {result:?}")
+            })
+        }
+    }
+
+    let pid = unsafe { fork() };
+    match pid {
+        -1 => panic!("failed to fork: {}", Error::last_os_error()),
+        0 => {
+            // Run the actual test. Note that it is insufficient for us to rely
+            // on panics to convey failures to the parent process. The test
+            // binary ends up just exiting with 0 even if a panic occurred.
+            // Hence, we force a hard exit here directly.
+            if let Err(err) = test() {
+                eprintln!("{}", err);
+                unsafe { exit(1) };
+            }
+        }
+        pid => {
+            let mut status = 0;
+            let options = 0;
+            if unsafe { waitpid(pid, &mut status, options) } == -1 {
+                panic!("failed to waitpid({pid}): {}", Error::last_os_error())
+            }
+
+            if WIFEXITED(status) {
+                assert_eq!(WEXITSTATUS(status), 0, "{status:#x}");
+            } else {
+                panic!("child process {pid} terminated unexpectedly (status: {status:#x})")
+            }
+        }
+    }
 }
 
 /// Make sure that we report (enabled) or don't report (disabled) inlined
