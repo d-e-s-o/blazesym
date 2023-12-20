@@ -5,6 +5,7 @@ use std::ffi::CStr;
 use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::mem;
+use std::mem::transmute;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
@@ -54,6 +55,19 @@ pub struct blaze_symbolize_src_elf {
     /// Whether or not to consult debug symbols to satisfy the request
     /// (if present).
     pub debug_syms: bool,
+    /// A marker for the last field of the type.
+    _last_field: (),
+}
+
+impl Default for blaze_symbolize_src_elf {
+    fn default() -> Self {
+        let buf = [0u8; mem::size_of::<Self>()];
+        // SAFETY: `blaze_symbolize_src_elf` is repr(C) and valid for
+        //         any bit pattern.
+        let mut slf = unsafe { transmute::<_, Self>(buf) };
+        slf._size = mem::size_of::<Self>();
+        slf
+    }
 }
 
 impl From<&blaze_symbolize_src_elf> for Elf {
@@ -62,6 +76,7 @@ impl From<&blaze_symbolize_src_elf> for Elf {
             _size: _,
             path,
             debug_syms,
+            _last_field: (),
         } = elf;
         Self {
             path: unsafe { from_cstr(*path) },
@@ -105,6 +120,19 @@ pub struct blaze_symbolize_src_kernel {
     /// Whether or not to consult debug symbols from `kernel_image`
     /// to satisfy the request (if present).
     pub debug_syms: bool,
+    /// A marker for the last field of the type.
+    _last_field: (),
+}
+
+impl Default for blaze_symbolize_src_kernel {
+    fn default() -> Self {
+        let buf = [0u8; mem::size_of::<Self>()];
+        // SAFETY: `blaze_symbolize_src_kernel` is repr(C) and valid for
+        //         any bit pattern.
+        let mut slf = unsafe { transmute::<_, Self>(buf) };
+        slf._size = mem::size_of::<Self>();
+        slf
+    }
 }
 
 impl From<&blaze_symbolize_src_kernel> for Kernel {
@@ -114,6 +142,7 @@ impl From<&blaze_symbolize_src_kernel> for Kernel {
             kallsyms,
             kernel_image,
             debug_syms,
+            _last_field: (),
         } = kernel;
         Self {
             kallsyms: (!kallsyms.is_null()).then(|| unsafe { from_cstr(*kallsyms) }),
@@ -152,6 +181,19 @@ pub struct blaze_symbolize_src_process {
     /// Whether to incorporate a process' perf map file into the symbolization
     /// procedure.
     pub perf_map: bool,
+    /// A marker for the last field of the type.
+    _last_field: (),
+}
+
+impl Default for blaze_symbolize_src_process {
+    fn default() -> Self {
+        let buf = [0u8; mem::size_of::<Self>()];
+        // SAFETY: `blaze_symbolize_src_process` is repr(C) and valid
+        //         for any bit pattern.
+        let mut slf = unsafe { transmute::<_, Self>(buf) };
+        slf._size = mem::size_of::<Self>();
+        slf
+    }
 }
 
 impl From<&blaze_symbolize_src_process> for Process {
@@ -161,6 +203,7 @@ impl From<&blaze_symbolize_src_process> for Process {
             pid,
             debug_syms,
             perf_map,
+            _last_field: (),
         } = process;
         Self {
             pid: (*pid).into(),
@@ -189,6 +232,19 @@ pub struct blaze_symbolize_src_gsym_data {
     pub data: *const u8,
     /// The size of the Gsym data.
     pub data_len: usize,
+    /// A marker for the last field of the type.
+    _last_field: (),
+}
+
+impl Default for blaze_symbolize_src_gsym_data {
+    fn default() -> Self {
+        let buf = [0u8; mem::size_of::<Self>()];
+        // SAFETY: `blaze_symbolize_src_gsym_data` is repr(C) and valid
+        //         for any bit pattern.
+        let mut slf = unsafe { transmute::<_, Self>(buf) };
+        slf._size = mem::size_of::<Self>();
+        slf
+    }
 }
 
 impl From<&blaze_symbolize_src_gsym_data> for GsymData<'_> {
@@ -197,6 +253,7 @@ impl From<&blaze_symbolize_src_gsym_data> for GsymData<'_> {
             _size: _,
             data,
             data_len,
+            _last_field: (),
         } = gsym;
         Self {
             data: unsafe { slice_from_user_array(*data, *data_len) },
@@ -221,11 +278,28 @@ pub struct blaze_symbolize_src_gsym_file {
     pub _size: usize,
     /// The path to a gsym file.
     pub path: *const c_char,
+    /// A marker for the last field of the type.
+    _last_field: (),
+}
+
+impl Default for blaze_symbolize_src_gsym_file {
+    fn default() -> Self {
+        let buf = [0u8; mem::size_of::<Self>()];
+        // SAFETY: `blaze_symbolize_src_gsym_file` is repr(C) and valid
+        //         for any bit pattern.
+        let mut slf = unsafe { transmute::<_, Self>(buf) };
+        slf._size = mem::size_of::<Self>();
+        slf
+    }
 }
 
 impl From<&blaze_symbolize_src_gsym_file> for GsymFile {
     fn from(gsym: &blaze_symbolize_src_gsym_file) -> Self {
-        let blaze_symbolize_src_gsym_file { _size: _, path } = gsym;
+        let blaze_symbolize_src_gsym_file {
+            _size: _,
+            path,
+            _last_field: (),
+        } = gsym;
         Self {
             path: unsafe { from_cstr(*path) },
             _non_exhaustive: (),
@@ -361,6 +435,17 @@ pub struct blaze_symbolizer_opts {
     /// languages are Rust and C++ and the flag will have no effect if
     /// the underlying language does not mangle symbols (such as C).
     pub demangle: bool,
+    /// A marker for the last field of the type.
+    _last_field: (),
+}
+
+impl Default for blaze_symbolizer_opts {
+    fn default() -> Self {
+        let buf = [0u8; mem::size_of::<Self>()];
+        let mut slf = unsafe { transmute::<_, Self>(buf) };
+        slf._size = mem::size_of::<Self>();
+        slf
+    }
 }
 
 
@@ -380,6 +465,10 @@ pub extern "C" fn blaze_symbolizer_new() -> *mut blaze_symbolizer {
 pub unsafe extern "C" fn blaze_symbolizer_new_opts(
     opts: *const blaze_symbolizer_opts,
 ) -> *mut blaze_symbolizer {
+    if !input_zeroed!(opts, blaze_symbolizer_opts) {
+        return ptr::null_mut()
+    }
+
     // SAFETY: The caller ensures that the pointer is valid.
     let opts = unsafe { &*opts };
     let blaze_symbolizer_opts {
@@ -387,6 +476,7 @@ pub unsafe extern "C" fn blaze_symbolizer_new_opts(
         code_info,
         inlined_fns,
         demangle,
+        _last_field: (),
     } = opts;
 
     let symbolizer = Symbolizer::builder()
@@ -609,6 +699,10 @@ pub unsafe extern "C" fn blaze_symbolize_process_abs_addrs(
     abs_addrs: *const Addr,
     abs_addr_cnt: usize,
 ) -> *const blaze_result {
+    if !input_zeroed!(src, blaze_symbolize_src_process) {
+        return ptr::null_mut()
+    }
+
     // SAFETY: The caller ensures that the pointer is valid.
     let src = Source::from(Process::from(unsafe { &*src }));
     unsafe { blaze_symbolize_impl(symbolizer, src, Input::AbsAddr(abs_addrs), abs_addr_cnt) }
@@ -633,6 +727,10 @@ pub unsafe extern "C" fn blaze_symbolize_kernel_abs_addrs(
     abs_addrs: *const Addr,
     abs_addr_cnt: usize,
 ) -> *const blaze_result {
+    if !input_zeroed!(src, blaze_symbolize_src_kernel) {
+        return ptr::null_mut()
+    }
+
     // SAFETY: The caller ensures that the pointer is valid.
     let src = Source::from(Kernel::from(unsafe { &*src }));
     unsafe { blaze_symbolize_impl(symbolizer, src, Input::AbsAddr(abs_addrs), abs_addr_cnt) }
@@ -657,6 +755,10 @@ pub unsafe extern "C" fn blaze_symbolize_elf_virt_offsets(
     virt_offsets: *const Addr,
     virt_offset_cnt: usize,
 ) -> *const blaze_result {
+    if !input_zeroed!(src, blaze_symbolize_src_elf) {
+        return ptr::null_mut()
+    }
+
     // SAFETY: The caller ensures that the pointer is valid.
     let src = Source::from(Elf::from(unsafe { &*src }));
     unsafe {
@@ -688,6 +790,10 @@ pub unsafe extern "C" fn blaze_symbolize_gsym_data_virt_offsets(
     virt_offsets: *const Addr,
     virt_offset_cnt: usize,
 ) -> *const blaze_result {
+    if !input_zeroed!(src, blaze_symbolize_src_gsym_data) {
+        return ptr::null_mut()
+    }
+
     // SAFETY: The caller ensures that the pointer is valid. The `GsymData`
     //         lifetime is entirely conjured up, but the object only needs to be
     //         valid for the call.
@@ -721,6 +827,10 @@ pub unsafe extern "C" fn blaze_symbolize_gsym_file_virt_offsets(
     virt_offsets: *const Addr,
     virt_offset_cnt: usize,
 ) -> *const blaze_result {
+    if !input_zeroed!(src, blaze_symbolize_src_gsym_file) {
+        return ptr::null_mut()
+    }
+
     // SAFETY: The caller ensures that the pointer is valid.
     let src = Source::from(GsymFile::from(unsafe { &*src }));
     unsafe {
@@ -774,10 +884,11 @@ mod tests {
             _size: 24,
             path: ptr::null(),
             debug_syms: false,
+            _last_field: (),
         };
         assert_eq!(
             format!("{elf:?}"),
-            "blaze_symbolize_src_elf { _size: 24, path: 0x0, debug_syms: false }"
+            "blaze_symbolize_src_elf { _size: 24, path: 0x0, debug_syms: false, _last_field: () }"
         );
 
         let kernel = blaze_symbolize_src_kernel {
@@ -785,10 +896,11 @@ mod tests {
             kallsyms: ptr::null(),
             kernel_image: ptr::null(),
             debug_syms: true,
+            _last_field: (),
         };
         assert_eq!(
             format!("{kernel:?}"),
-            "blaze_symbolize_src_kernel { _size: 32, kallsyms: 0x0, kernel_image: 0x0, debug_syms: true }"
+            "blaze_symbolize_src_kernel { _size: 32, kallsyms: 0x0, kernel_image: 0x0, debug_syms: true, _last_field: () }"
         );
 
         let process = blaze_symbolize_src_process {
@@ -796,29 +908,32 @@ mod tests {
             pid: 1337,
             debug_syms: true,
             perf_map: false,
+            _last_field: (),
         };
         assert_eq!(
             format!("{process:?}"),
-            "blaze_symbolize_src_process { _size: 16, pid: 1337, debug_syms: true, perf_map: false }"
+            "blaze_symbolize_src_process { _size: 16, pid: 1337, debug_syms: true, perf_map: false, _last_field: () }"
         );
 
         let gsym_data = blaze_symbolize_src_gsym_data {
-            _size: mem::size_of::<blaze_symbolize_src_gsym_data>(),
+            _size: 24,
             data: ptr::null(),
             data_len: 0,
+            _last_field: (),
         };
         assert_eq!(
             format!("{gsym_data:?}"),
-            "blaze_symbolize_src_gsym_data { _size: 24, data: 0x0, data_len: 0 }"
+            "blaze_symbolize_src_gsym_data { _size: 24, data: 0x0, data_len: 0, _last_field: () }"
         );
 
         let gsym_file = blaze_symbolize_src_gsym_file {
             _size: 16,
             path: ptr::null(),
+            _last_field: (),
         };
         assert_eq!(
             format!("{gsym_file:?}"),
-            "blaze_symbolize_src_gsym_file { _size: 16, path: 0x0 }"
+            "blaze_symbolize_src_gsym_file { _size: 16, path: 0x0, _last_field: () }"
         );
 
         let sym = blaze_sym {
@@ -861,10 +976,11 @@ mod tests {
             code_info: false,
             inlined_fns: false,
             demangle: true,
+            _last_field: (),
         };
         assert_eq!(
             format!("{opts:?}"),
-            "blaze_symbolizer_opts { _size: 16, code_info: false, inlined_fns: false, demangle: true }"
+            "blaze_symbolizer_opts { _size: 16, code_info: false, inlined_fns: false, demangle: true, _last_field: () }"
         );
     }
 
@@ -872,22 +988,16 @@ mod tests {
     /// reference into a [`Kernel`].
     #[test]
     fn kernel_conversion() {
-        let kernel = blaze_symbolize_src_kernel {
-            _size: mem::size_of::<blaze_symbolize_src_kernel>(),
-            kallsyms: ptr::null(),
-            kernel_image: ptr::null(),
-            debug_syms: true,
-        };
+        let kernel = blaze_symbolize_src_kernel::default();
         let kernel = Kernel::from(&kernel);
         assert_eq!(kernel.kallsyms, None);
         assert_eq!(kernel.kernel_image, None);
 
-        let kernel = blaze_symbolize_src_kernel {
-            _size: mem::size_of::<blaze_symbolize_src_kernel>(),
-            kallsyms: b"/proc/kallsyms\0" as *const _ as *const c_char,
-            kernel_image: b"/boot/image\0" as *const _ as *const c_char,
-            debug_syms: false,
-        };
+        let mut kernel = blaze_symbolize_src_kernel::default();
+        kernel.kallsyms = b"/proc/kallsyms\0" as *const _ as *const c_char;
+        kernel.kernel_image = b"/boot/image\0" as *const _ as *const c_char;
+        kernel.debug_syms = false;
+
         let kernel = Kernel::from(&kernel);
         assert_eq!(kernel.kallsyms, Some(PathBuf::from("/proc/kallsyms")));
         assert_eq!(kernel.kernel_image, Some(PathBuf::from("/boot/image")));
@@ -1022,12 +1132,9 @@ mod tests {
     /// provided options.
     #[test]
     fn symbolizer_creation_with_opts() {
-        let opts = blaze_symbolizer_opts {
-            _size: mem::size_of::<blaze_symbolizer_opts>(),
-            code_info: false,
-            inlined_fns: false,
-            demangle: true,
-        };
+        let mut opts = blaze_symbolizer_opts::default();
+        opts.demangle = true;
+
         let symbolizer = unsafe { blaze_symbolizer_new_opts(&opts) };
         let () = unsafe { blaze_symbolizer_free(symbolizer) };
     }
@@ -1080,11 +1187,10 @@ mod tests {
             .join("data")
             .join("test-stable-addresses-no-dwarf.bin");
         let path_c = CString::new(path.to_str().unwrap()).unwrap();
-        let elf_src = blaze_symbolize_src_elf {
-            _size: mem::size_of::<blaze_symbolize_src_elf>(),
-            path: path_c.as_ptr(),
-            debug_syms: true,
-        };
+        let mut elf_src = blaze_symbolize_src_elf::default();
+        elf_src.path = path_c.as_ptr();
+        elf_src.debug_syms = true;
+
         let symbolize = |symbolizer, addrs, addr_cnt| unsafe {
             blaze_symbolize_elf_virt_offsets(symbolizer, &elf_src, addrs, addr_cnt)
         };
@@ -1095,11 +1201,10 @@ mod tests {
             .join("data")
             .join("test-stable-addresses-dwarf-only.bin");
         let path_c = CString::new(path.to_str().unwrap()).unwrap();
-        let elf_src = blaze_symbolize_src_elf {
-            _size: mem::size_of::<blaze_symbolize_src_elf>(),
-            path: path_c.as_ptr(),
-            debug_syms: true,
-        };
+        let mut elf_src = blaze_symbolize_src_elf::default();
+        elf_src.path = path_c.as_ptr();
+        elf_src.debug_syms = true;
+
         let symbolize = |symbolizer, addrs, addr_cnt| unsafe {
             blaze_symbolize_elf_virt_offsets(symbolizer, &elf_src, addrs, addr_cnt)
         };
@@ -1110,10 +1215,9 @@ mod tests {
             .join("data")
             .join("test-stable-addresses.gsym");
         let path_c = CString::new(path.to_str().unwrap()).unwrap();
-        let gsym_src = blaze_symbolize_src_gsym_file {
-            _size: mem::size_of::<blaze_symbolize_src_gsym_file>(),
-            path: path_c.as_ptr(),
-        };
+        let mut gsym_src = blaze_symbolize_src_gsym_file::default();
+        gsym_src.path = path_c.as_ptr();
+
         let symbolize = |symbolizer, addrs, addr_cnt| unsafe {
             blaze_symbolize_gsym_file_virt_offsets(symbolizer, &gsym_src, addrs, addr_cnt)
         };
@@ -1124,11 +1228,10 @@ mod tests {
             .join("data")
             .join("test-stable-addresses.gsym");
         let data = read_file(path).unwrap();
-        let gsym_src = blaze_symbolize_src_gsym_data {
-            _size: mem::size_of::<blaze_symbolize_src_gsym_data>(),
-            data: data.as_ptr(),
-            data_len: data.len(),
-        };
+        let mut gsym_src = blaze_symbolize_src_gsym_data::default();
+        gsym_src.data = data.as_ptr();
+        gsym_src.data_len = data.len();
+
         let symbolize = |symbolizer, addrs, addr_cnt| unsafe {
             blaze_symbolize_gsym_data_virt_offsets(symbolizer, &gsym_src, addrs, addr_cnt)
         };
@@ -1140,19 +1243,15 @@ mod tests {
     #[test]
     fn symbolize_dwarf_demangle() {
         fn test(path: &Path, addr: Addr) -> Result<(), ()> {
-            let opts = blaze_symbolizer_opts {
-                _size: mem::size_of::<blaze_symbolizer_opts>(),
-                code_info: true,
-                inlined_fns: true,
-                demangle: false,
-            };
+            let mut opts = blaze_symbolizer_opts::default();
+            opts.code_info = true;
+            opts.inlined_fns = true;
 
             let path_c = CString::new(path.to_str().unwrap()).unwrap();
-            let elf_src = blaze_symbolize_src_elf {
-                _size: mem::size_of::<blaze_symbolize_src_elf>(),
-                path: path_c.as_ptr(),
-                debug_syms: true,
-            };
+            let mut elf_src = blaze_symbolize_src_elf::default();
+            elf_src.path = path_c.as_ptr();
+            elf_src.debug_syms = true;
+
             let symbolizer = unsafe { blaze_symbolizer_new_opts(&opts) };
             let addrs = [addr];
             let result = unsafe {
@@ -1189,12 +1288,10 @@ mod tests {
             let () = unsafe { blaze_symbolizer_free(symbolizer) };
 
             // Do it again, this time with demangling enabled.
-            let opts = blaze_symbolizer_opts {
-                _size: mem::size_of::<blaze_symbolizer_opts>(),
-                code_info: true,
-                inlined_fns: true,
-                demangle: true,
-            };
+            let mut opts = blaze_symbolizer_opts::default();
+            opts.code_info = true;
+            opts.inlined_fns = true;
+            opts.demangle = true;
 
             let symbolizer = unsafe { blaze_symbolizer_new_opts(&opts) };
             let addrs = [addr];
@@ -1262,12 +1359,10 @@ mod tests {
     /// Make sure that we can symbolize an address in a process.
     #[test]
     fn symbolize_in_process() {
-        let process_src = blaze_symbolize_src_process {
-            _size: mem::size_of::<blaze_symbolize_src_process>(),
-            pid: 0,
-            debug_syms: true,
-            perf_map: true,
-        };
+        let mut process_src = blaze_symbolize_src_process::default();
+        process_src.pid = 0;
+        process_src.debug_syms = true;
+        process_src.perf_map = true;
 
         let symbolizer = blaze_symbolizer_new();
         let addrs = [blaze_symbolizer_new as Addr];

@@ -3,6 +3,8 @@ use std::ffi::OsString;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
+use std::mem::size_of;
+use std::mem::transmute;
 use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStringExt as _;
@@ -41,6 +43,17 @@ pub struct blaze_normalizer_opts {
     /// Whether to read and report build IDs as part of the normalization
     /// process.
     pub build_ids: bool,
+    /// A marker for the last field of the type.
+    _last_field: (),
+}
+
+impl Default for blaze_normalizer_opts {
+    fn default() -> Self {
+        let buf = [0u8; size_of::<Self>()];
+        let mut slf = unsafe { transmute::<_, Self>(buf) };
+        slf._size = size_of::<Self>();
+        slf
+    }
 }
 
 
@@ -68,11 +81,16 @@ pub extern "C" fn blaze_normalizer_new() -> *mut blaze_normalizer {
 pub unsafe extern "C" fn blaze_normalizer_new_opts(
     opts: *const blaze_normalizer_opts,
 ) -> *mut blaze_normalizer {
+    if !input_zeroed!(opts, blaze_normalizer_opts) {
+        return ptr::null_mut()
+    }
+
     // SAFETY: The caller ensures that the pointer is valid.
     let opts = unsafe { &*opts };
     let blaze_normalizer_opts {
         _size: _,
         build_ids,
+        _last_field: (),
     } = opts;
 
     let normalizer = Normalizer::builder().enable_build_ids(*build_ids).build();
@@ -499,7 +517,6 @@ mod tests {
 
     use std::ffi::CStr;
     use std::io;
-    use std::mem::size_of;
     use std::path::Path;
 
     use blazesym::helper::read_elf_build_id;
@@ -694,10 +711,9 @@ mod tests {
             let the_answer_addr = unsafe { libc::dlsym(handle, "the_answer\0".as_ptr().cast()) };
             assert!(!the_answer_addr.is_null());
 
-            let opts = blaze_normalizer_opts {
-                _size: size_of::<blaze_normalizer_opts>(),
-                build_ids: read_build_ids,
-            };
+            let mut opts = blaze_normalizer_opts::default();
+            opts.build_ids = read_build_ids;
+
             let normalizer = unsafe { blaze_normalizer_new_opts(&opts) };
             assert!(!normalizer.is_null());
 
