@@ -7,6 +7,7 @@ use std::io::ErrorKind;
 use std::io::Result;
 use std::ops::Deref as _;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 
@@ -79,6 +80,38 @@ where
     }
 }
 
+fn adjust_mtime(path: &Path) -> Result<()> {
+    // Note that `OUT_DIR` is only present at runtime.
+    let out_dir = env::var("OUT_DIR").unwrap();
+    // The $OUT_DIR/output file is (in current versions of Cargo [as of
+    // 1.69]) the file containing the reference time stamp that Cargo
+    // checks to determine whether something is considered outdated and
+    // in need to be rebuild. It's an implementation detail, yes, but we
+    // don't rely on it for anything essential.
+    let output = Path::new(&out_dir)
+        .parent()
+        .ok_or_else(|| Error::new(ErrorKind::Other, "OUT_DIR has no parent"))?
+        .join("output");
+
+    if !output.exists() {
+        // The file may not exist for legitimate reasons, e.g., when we
+        // build for the very first time. If there is not reference there
+        // is nothing for us to do, so just bail.
+        return Ok(())
+    }
+
+    let () = run(
+        "touch",
+        [
+            "-m".as_ref(),
+            "--reference".as_ref(),
+            output.as_os_str(),
+            path.as_os_str(),
+        ],
+    )?;
+    Ok(())
+}
+
 /// Compile `src` into `dst` using the provided compiler.
 fn compile(compiler: &str, src: &Path, dst: &str, options: &[&str]) {
     let dst = src.with_file_name(dst);
@@ -93,28 +126,29 @@ fn compile(compiler: &str, src: &Path, dst: &str, options: &[&str]) {
             .chain([src.as_os_str(), "-o".as_ref(), dst.as_os_str()]),
     )
     .unwrap_or_else(|err| panic!("failed to run `{compiler}`: {err}"));
+
+    let () = adjust_mtime(&dst).unwrap();
 }
 
 /// Compile `src` into `dst` using `cc`.
-#[cfg_attr(not(feature = "generate-c-header"), allow(dead_code))]
 fn cc(src: &Path, dst: &str, options: &[&str]) {
     compile("cc", src, dst, options)
 }
 
 fn main() {
+    let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+
     #[cfg(feature = "generate-c-header")]
     {
         use std::fs::copy;
         use std::fs::write;
-
-        let crate_dir = env::var_os("CARGO_MANIFEST_DIR").unwrap();
 
         cbindgen::Builder::new()
             .with_crate(&crate_dir)
             .with_config(cbindgen::Config::from_root_or_default(&crate_dir))
             .generate()
             .expect("Unable to generate bindings")
-            .write_to_file(Path::new(&crate_dir).join("include").join("blazesym.h"));
+            .write_to_file(crate_dir.join("include").join("blazesym.h"));
 
         // Generate a C program that just included blazesym.h as a basic
         // smoke test that cbindgen didn't screw up completely.
@@ -144,7 +178,7 @@ int main() {
                 "-Wextra",
                 "-Werror",
                 "-I",
-                Path::new(&crate_dir).join("include").to_str().unwrap(),
+                crate_dir.join("include").to_str().unwrap(),
             ],
         );
 
@@ -161,10 +195,19 @@ int main() {
                         "-Wextra",
                         "-Werror",
                         "-I",
-                        Path::new(&crate_dir).join("include").to_str().unwrap(),
+                        crate_dir.join("include").to_str().unwrap(),
                     ],
                 );
             }
         }
+    }
+
+    if cfg!(feature = "check-doc-snippets") {
+        let src = crate_dir.join("examples").join("input-struct-init.c");
+        cc(
+            &src,
+            "input-struct-init.o",
+            &["-I", crate_dir.join("include").to_str().unwrap(), "-c"],
+        );
     }
 }

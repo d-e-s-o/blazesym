@@ -1,10 +1,20 @@
 //! C API bindings for the library.
+//!
+//! # Compatibility
+//! The library aims to provide forward compatibility with newer versions and
+//! backward compatibility with older ones. To make that happen, users should
+//! make sure to use the `BLAZE_INPUT` to initialize structured types that are
+//! being passed to the library:
+//! ```c
+#![doc = include_str!("../examples/input-struct-init.c")]
+//! ```
 
 #![allow(
     clippy::collapsible_if,
     clippy::fn_to_numeric_cast,
     clippy::let_and_return,
-    clippy::let_unit_value
+    clippy::let_unit_value,
+    clippy::manual_non_exhaustive
 )]
 #![deny(unsafe_op_in_unsafe_fn)]
 

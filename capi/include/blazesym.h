@@ -6,6 +6,28 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+/* Helper macro to declare and initialize a blazesym input struct
+ *
+ * This dance with uninitialized declaration, followed by memset to zero,
+ * followed by assignment using compound literal syntax is done to preserve
+ * ability to use a nice struct field initialization syntax and **hopefully**
+ * have all the padding bytes initialized to zero. It's not guaranteed though,
+ * when copying literal, that compiler won't copy garbage in literal's padding
+ * bytes, but that's the best way I've found and it seems to work in practice.
+ *
+ * Macro declares opts struct of given type and name, zero-initializes,
+ * including any extra padding, it with memset() and then assigns initial
+ * values provided by users in struct initializer-syntax as varargs.
+ */
+#define BLAZE_INPUT(TYPE, NAME, ...)        \
+  struct TYPE NAME = ({                     \
+    memset(&NAME, 0, sizeof(struct TYPE));  \
+    (struct TYPE) {                         \
+      ._size = sizeof(struct TYPE),         \
+      __VA_ARGS__                           \
+    };                                      \
+  })
+
 
 /**
  * The type of a symbol.
@@ -86,8 +108,19 @@ typedef struct blaze_inspector blaze_inspector;
  * An object representing an ELF inspection source.
  *
  * C ABI compatible version of [`inspect::Elf`].
+ *
+ * # Notes
+ * For [compatibility reasons][crate#Compatibility], please use `BLAZE_INPUT`
+ * macro for initialization.
  */
 typedef struct blaze_inspect_elf_src {
+  /**
+   * The size of the object.
+   *
+   * Make sure to initialize it to `sizeof(<type>)`. This member is used to
+   * ensure compatibility in the presence of member additions.
+   */
+  size_t _size;
   /**
    * The path to the ELF file. This member is always present.
    */
@@ -106,8 +139,19 @@ typedef struct blaze_normalizer blaze_normalizer;
 
 /**
  * Options for configuring [`blaze_normalizer`] objects.
+ *
+ * # Notes
+ * For [compatibility reasons][crate#Compatibility], please use `BLAZE_INPUT`
+ * macro for initialization.
  */
 typedef struct blaze_normalizer_opts {
+  /**
+   * The size of the object.
+   *
+   * Make sure to initialize it to `sizeof(<type>)`. This member is used to
+   * ensure compatibility in the presence of member additions.
+   */
+  size_t _size;
   /**
    * Whether to read and report build IDs as part of the normalization
    * process.
@@ -236,8 +280,19 @@ typedef struct blaze_symbolizer blaze_symbolizer;
 
 /**
  * Options for configuring [`blaze_symbolizer`] objects.
+ *
+ * # Notes
+ * For [compatibility reasons][crate#Compatibility], please use `BLAZE_INPUT`
+ * macro for initialization.
  */
 typedef struct blaze_symbolizer_opts {
+  /**
+   * The size of the object.
+   *
+   * Make sure to initialize it to `sizeof(<type>)`. This member is used to
+   * ensure compatibility in the presence of member additions.
+   */
+  size_t _size;
   /**
    * Whether to attempt to gather source code location information.
    *
@@ -372,8 +427,19 @@ typedef struct blaze_result {
  *
  * Load all ELF files in a process as the sources of symbols and debug
  * information.
+ *
+ * # Notes
+ * For [compatibility reasons][crate#Compatibility], please use `BLAZE_INPUT`
+ * macro for initialization.
  */
 typedef struct blaze_symbolize_src_process {
+  /**
+   * The size of the object.
+   *
+   * Make sure to initialize it to `sizeof(<type>)`. This member is used to
+   * ensure compatibility in the presence of member additions.
+   */
+  size_t _size;
   /**
    * It is the PID of a process to symbolize.
    *
@@ -398,8 +464,19 @@ typedef struct blaze_symbolize_src_process {
  *
  * Use a kernel image and a snapshot of its kallsyms as a source of symbols and
  * debug information.
+ *
+ * # Notes
+ * For [compatibility reasons][crate#Compatibility], please use `BLAZE_INPUT`
+ * macro for initialization.
  */
 typedef struct blaze_symbolize_src_kernel {
+  /**
+   * The size of the object.
+   *
+   * Make sure to initialize it to `sizeof(<type>)`. This member is used to
+   * ensure compatibility in the presence of member additions.
+   */
+  size_t _size;
   /**
    * The path of a copy of kallsyms.
    *
@@ -430,8 +507,19 @@ typedef struct blaze_symbolize_src_kernel {
  *
  * Describes the path and address of an ELF file loaded in a
  * process.
+ *
+ * # Notes
+ * For [compatibility reasons][crate#Compatibility], please use `BLAZE_INPUT`
+ * macro for initialization.
  */
 typedef struct blaze_symbolize_src_elf {
+  /**
+   * The size of the object.
+   *
+   * Make sure to initialize it to `sizeof(<type>)`. This member is used to
+   * ensure compatibility in the presence of member additions.
+   */
+  size_t _size;
   /**
    * The path to the ELF file.
    *
@@ -450,8 +538,19 @@ typedef struct blaze_symbolize_src_elf {
 
 /**
  * The parameters to load symbols and debug information from "raw" Gsym data.
+ *
+ * # Notes
+ * For [compatibility reasons][crate#Compatibility], please use `BLAZE_INPUT`
+ * macro for initialization.
  */
 typedef struct blaze_symbolize_src_gsym_data {
+  /**
+   * The size of the object.
+   *
+   * Make sure to initialize it to `sizeof(<type>)`. This member is used to
+   * ensure compatibility in the presence of member additions.
+   */
+  size_t _size;
   /**
    * The Gsym data.
    */
@@ -464,8 +563,19 @@ typedef struct blaze_symbolize_src_gsym_data {
 
 /**
  * The parameters to load symbols and debug information from a Gsym file.
+ *
+ * # Notes
+ * For [compatibility reasons][crate#Compatibility], please use `BLAZE_INPUT`
+ * macro for initialization.
  */
 typedef struct blaze_symbolize_src_gsym_file {
+  /**
+   * The size of the object.
+   *
+   * Make sure to initialize it to `sizeof(<type>)`. This member is used to
+   * ensure compatibility in the presence of member additions.
+   */
+  size_t _size;
   /**
    * The path to a gsym file.
    */
