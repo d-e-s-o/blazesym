@@ -167,6 +167,8 @@ pub struct blaze_sym_info {
     pub obj_file_name: *const c_char,
     /// See [`inspect::SymInfo::sym_type`].
     pub sym_type: blaze_sym_type,
+    /// Unused member available for future expansion.
+    pub _unused: u64,
 }
 
 
@@ -237,6 +239,7 @@ fn convert_syms_list_to_c(syms_list: Vec<Vec<SymInfo>>) -> *const *const blaze_s
                     sym_type: sym_type.into(),
                     file_offset: file_offset.unwrap_or(0),
                     obj_file_name,
+                    _unused: 0,
                 }
             };
             sym_ptr = unsafe { sym_ptr.add(1) };
@@ -249,6 +252,7 @@ fn convert_syms_list_to_c(syms_list: Vec<Vec<SymInfo>>) -> *const *const blaze_s
                 sym_type: blaze_sym_type::BLAZE_SYM_UNDEF,
                 file_offset: 0,
                 obj_file_name: ptr::null(),
+                _unused: 0,
             }
         };
         sym_ptr = unsafe { sym_ptr.add(1) };
@@ -389,6 +393,7 @@ mod tests {
             file_offset: 31,
             obj_file_name: ptr::null(),
             sym_type: blaze_sym_type::BLAZE_SYM_VAR,
+            _unused: 0,
         };
         assert_eq!(
             format!("{info:?}"),

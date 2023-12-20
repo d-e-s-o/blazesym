@@ -333,6 +333,8 @@ pub struct blaze_symbolize_code_info {
     /// The column number of the symbolized instruction in the source
     /// code.
     pub column: u16,
+    /// Unused member available for future expansion.
+    pub _unused: u64,
 }
 
 
@@ -344,6 +346,8 @@ pub struct blaze_symbolize_inlined_fn {
     pub name: *const c_char,
     /// Source code location information for the inlined function.
     pub code_info: blaze_symbolize_code_info,
+    /// Unused member available for future expansion.
+    pub _unused: u64,
 }
 
 
@@ -380,6 +384,8 @@ pub struct blaze_sym {
     pub inlined_cnt: usize,
     /// An array of `inlined_cnt` symbolized inlined function calls.
     pub inlined: *const blaze_symbolize_inlined_fn,
+    /// Unused member available for future expansion.
+    pub _unused: u64,
 }
 
 /// `blaze_result` is the result of symbolization for C API.
@@ -945,9 +951,11 @@ mod tests {
                 file: ptr::null(),
                 line: 42,
                 column: 1,
+                _unused: 0,
             },
             inlined_cnt: 0,
             inlined: ptr::null(),
+            _unused: 0,
         };
         assert_eq!(
             format!("{sym:?}"),
@@ -961,7 +969,9 @@ mod tests {
                 file: ptr::null(),
                 line: 42,
                 column: 1,
+                _unused: 0,
             },
+            _unused: 0,
         };
         assert_eq!(
             format!("{inlined:?}"),
@@ -1024,6 +1034,7 @@ mod tests {
                 file,
                 line,
                 column,
+                _unused: _,
             } = code_info;
 
             let _x = touch_cstr(*dir);
@@ -1044,6 +1055,7 @@ mod tests {
                     code_info,
                     inlined_cnt,
                     inlined,
+                    _unused: _,
                 } = sym;
 
                 let () = touch_cstr(*name);
@@ -1053,7 +1065,11 @@ mod tests {
 
                 for j in 0..*inlined_cnt {
                     let inlined_fn = unsafe { &*inlined.add(j) };
-                    let blaze_symbolize_inlined_fn { name, code_info } = inlined_fn;
+                    let blaze_symbolize_inlined_fn {
+                        name,
+                        code_info,
+                        _unused: _,
+                    } = inlined_fn;
                     let () = touch_cstr(*name);
                     let () = touch_code_info(code_info);
                 }
