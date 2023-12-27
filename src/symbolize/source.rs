@@ -342,7 +342,7 @@ impl From<GsymFile> for Source<'static> {
 ///
 /// The source of symbols and debug information can be an ELF file, kernel
 /// image, or process.
-#[derive(Clone)]
+#[derive(Clone, blazesym_cfg::CfgBlz)]
 #[non_exhaustive]
 pub enum Source<'dat> {
     /// A single APK file.
@@ -354,6 +354,9 @@ pub enum Source<'dat> {
     /// Information about a process.
     Process(Process),
     /// A Gsym file.
+    #[gsym]
+    //#[cfg_attr(docsrs, doc(cfg(feature = "gsym")))]
+    //#[cfg(feature = "gsym")]
     Gsym(Gsym<'dat>),
 }
 

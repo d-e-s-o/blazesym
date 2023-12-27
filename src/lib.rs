@@ -34,6 +34,7 @@
     clippy::absolute_paths,
     rustdoc::broken_intra_doc_links
 )]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(feature = "nightly", feature(test))]
 #![cfg_attr(not(feature = "dwarf"), allow(dead_code))]
 

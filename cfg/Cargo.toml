@@ -1,0 +1,8 @@
+[package]
+name = "blazesym-cfg"
+version = "0.0.0"
+authors = ["Daniel Mueller <deso@posteo.net>"]
+edition = "2021"
+
+[lib]
+proc-macro = true

@@ -216,8 +216,8 @@ jobs:
     name: Generate documentation
     runs-on: ubuntu-latest
     env:
-      RUSTDOCFLAGS: '-D warnings'
+      RUSTDOCFLAGS: '--cfg docsrs -D warnings'
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
       - run: cargo doc --workspace --no-deps
