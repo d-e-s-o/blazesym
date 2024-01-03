@@ -419,13 +419,14 @@ fn convert_symbolizedresults_to_c(results: Vec<Symbolized>) -> *const blaze_resu
     let mut inlined_last = unsafe {
         raw_buf.add(mem::size_of::<blaze_result>() + mem::size_of::<blaze_sym>() * results.len())
     } as *mut blaze_symbolize_inlined_fn;
-    let mut cstr_last = unsafe {
+    let cstr_start = unsafe {
         raw_buf.add(
             mem::size_of::<blaze_result>()
                 + mem::size_of::<blaze_sym>() * results.len()
                 + mem::size_of::<blaze_symbolize_inlined_fn>() * inlined_fn_cnt,
         )
     } as *mut c_char;
+    let mut cstr_last = cstr_start;
 
     let mut make_cstr = |src: &OsStr| {
         let cstr = cstr_last;
@@ -475,6 +476,7 @@ fn convert_symbolizedresults_to_c(results: Vec<Symbolized>) -> *const blaze_resu
             }
         }
 
+        debug_assert!(syms_last.cast() < cstr_start);
         syms_last = unsafe { syms_last.add(1) };
     }
 
