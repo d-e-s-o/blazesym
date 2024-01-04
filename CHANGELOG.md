@@ -1,5 +1,6 @@
 Unreleased
 ----------
+- Added support for Breakpad format
 - Introduced `symbolize::Reason` enum to provide best guess at
   why symbolization was not successful as part of the
   `symbolize::Symbolized::Unknown` variant
