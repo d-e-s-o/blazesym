@@ -5,6 +5,8 @@ mod args;
 use anyhow::Context;
 use anyhow::Result;
 
+use blazesym::inspect;
+use blazesym::inspect::Inspector;
 use blazesym::normalize;
 use blazesym::normalize::Normalizer;
 use blazesym::symbolize;
@@ -20,6 +22,27 @@ use tracing_subscriber::fmt::time::SystemTime;
 use tracing_subscriber::FmtSubscriber;
 
 const ADDR_WIDTH: usize = 16;
+
+
+fn inspect(inspect: args::Inspect) -> Result<()> {
+    let inspector = Inspector::new();
+    match inspect {
+        args::Inspect::Lookup(args::Lookup::Elf(args::Elf2 { path, ref names })) => {
+            let src = inspect::Source::from(inspect::Elf::new(path));
+            let names = names.iter().map(|s| s.as_ref()).collect::<Vec<&str>>();
+            let _result = inspector.lookup(&src, &names)?;
+            println!("{_result:#x?}");
+            Ok(())
+        }
+        args::Inspect::Dump(args::Dump::Elf(args::Elf3 { path })) => {
+            let src = inspect::Source::from(inspect::Elf::new(path));
+            let _result = inspector.for_each(&src, (), |(), sym| {
+                println!("{sym:#x?}");
+            })?;
+            Ok(())
+        }
+    }
+}
 
 
 fn format_build_id_bytes(build_id: &[u8]) -> String {
@@ -190,6 +213,7 @@ fn main() -> Result<()> {
         set_global_subscriber(subscriber).with_context(|| "failed to set tracing subscriber")?;
 
     match args.command {
+        args::Command::Inspect(inspect) => self::inspect(inspect),
         args::Command::Normalize(normalize) => self::normalize(normalize),
         args::Command::Symbolize(symbolize) => self::symbolize(symbolize),
     }

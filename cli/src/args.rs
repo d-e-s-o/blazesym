@@ -47,12 +47,56 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Inspect a symbol source.
+    #[command(subcommand)]
+    Inspect(Inspect),
     /// Normalize one or more addresses.
     #[command(subcommand)]
     Normalize(Normalize),
     /// Symbolize one or more addresses.
     #[command(subcommand)]
     Symbolize(Symbolize),
+}
+
+/// A type representing the `inspect` command.
+#[derive(Debug, Subcommand)]
+pub enum Inspect {
+    #[command(subcommand)]
+    Dump(Dump),
+    #[command(subcommand)]
+    Lookup(Lookup),
+}
+
+/// A type representing the `inspect lookup` sub-command.
+#[derive(Debug, Subcommand)]
+pub enum Lookup {
+    /// Lookup a symbol by name.
+    Elf(Elf2),
+}
+
+
+/// A type representing the `inspect dump` sub-command.
+#[derive(Debug, Subcommand)]
+pub enum Dump {
+    /// Lookup a symbol by name.
+    Elf(Elf3),
+}
+
+
+#[derive(Debug, Arguments)]
+pub struct Elf2 {
+    /// The path to the ELF file.
+    #[clap(short, long)]
+    pub path: PathBuf,
+    /// A list of names of symbols.
+    pub names: Vec<String>,
+}
+
+#[derive(Debug, Arguments)]
+pub struct Elf3 {
+    /// The path to the ELF file.
+    #[clap(short, long)]
+    pub path: PathBuf,
 }
 
 
