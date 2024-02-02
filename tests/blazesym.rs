@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::env::current_exe;
 use std::ffi::CString;
 use std::ffi::OsStr;
 use std::fs::read as read_file;
@@ -440,6 +441,28 @@ fn symbolize_dwarf_complex() {
     assert_eq!(result.name, "abort_creds");
     assert_eq!(result.addr, 0xffffffff8110ecb0);
     assert_eq!(result.code_info.as_ref().unwrap().line, Some(534));
+}
+
+
+#[test]
+fn symbolize_exhaustive() {
+    let bin_name = current_exe().unwrap();
+    let inspect_src = inspect::Source::Elf(inspect::Elf::new(&bin_name));
+    let inspector = Inspector::new();
+
+    let symbolize_src = symbolize::Source::Elf(symbolize::Elf::new(bin_name));
+    let symbolizer = Symbolizer::new();
+
+    let () = inspector
+        .for_each(&inspect_src, (), |(), sym| {
+            let resolved = symbolizer
+                .symbolize_single(&symbolize_src, symbolize::Input::VirtOffset(sym.addr))
+                .unwrap()
+                .into_sym()
+                .unwrap();
+            assert!(!resolved.name.is_empty(), "{sym:#x?} => {resolved:#x?}");
+        })
+        .unwrap();
 }
 
 
