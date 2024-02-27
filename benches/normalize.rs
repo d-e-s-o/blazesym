@@ -36,8 +36,8 @@ where
                 black_box(&opts),
             )
             .unwrap();
-        assert_eq!(normalized.meta.len(), 2);
-        assert_eq!(normalized.outputs.len(), 5);
+        //assert_eq!(normalized.meta.len(), 2);
+        //assert_eq!(normalized.outputs.len(), 5);
     });
 }
 

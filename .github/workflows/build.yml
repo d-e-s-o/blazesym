@@ -1,6 +1,7 @@
 name: Build
 
 on:
+  push:
   workflow_call:
   workflow_dispatch:
 
@@ -24,8 +25,13 @@ jobs:
         with:
           target: ${{ matrix.target }}
       - run: |
-          cargo install --path=cli --root=. --target ${{ matrix.target }}
+          export RUSTFLAGS='--cfg has_procmap_query_ioctl'
+          cmd="cargo bench --bench=main --no-run --features=dont-generate-unit-test-files"
+          ${cmd}
+          bin=$(${cmd} 2>&1 | grep Executable | sed 's@.*(\(.*\))@\1@')
+          mkdir -p bin
+          mv "${bin}" bin/benches
       - uses: actions/upload-artifact@v4
         with:
-          name: blazecli-${{ matrix.target }}
-          path: bin/blazecli
+          name: benches-${{ matrix.target }}
+          path: bin/benches
