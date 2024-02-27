@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::path::Path;
+use std::rc::Rc;
 
 
 /// A GNU build ID, as raw bytes.
@@ -14,6 +15,7 @@ type BuildId = Vec<u8>;
 /// [`Apk`][crate::symbolize::Source::Apk] symbolization source in order to
 /// symbolize the offset:
 /// ```no_run
+/// # use std::ops::Deref as _;
 /// # use std::path::Path;
 /// # use blazesym::Pid;
 /// # use blazesym::normalize;
@@ -30,7 +32,7 @@ type BuildId = Vec<u8>;
 ///
 /// // We assume that we have the APK lying around at the same path as on the
 /// // "remote" system.
-/// let src = symbolize::Source::from(symbolize::Apk::new(&apk.path));
+/// let src = symbolize::Source::from(symbolize::Apk::new(apk.path.deref()));
 /// let symbolizer = symbolize::Symbolizer::new();
 /// let sym = symbolizer
 ///   .symbolize_single(&src, symbolize::Input::FileOffset(output))
@@ -41,7 +43,7 @@ type BuildId = Vec<u8>;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Apk {
     /// The canonical absolute path to the APK, including its name.
-    pub path: PathBuf,
+    pub path: Rc<Path>,
     /// The struct is non-exhaustive and open to extension.
     #[doc(hidden)]
     pub _non_exhaustive: (),
@@ -54,7 +56,7 @@ pub struct Apk {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Elf {
     /// The canonical absolute path to the ELF file, including its name.
-    pub path: PathBuf,
+    pub path: Rc<Path>,
     /// The ELF file's build ID, if available.
     pub build_id: Option<BuildId>,
     /// The struct is non-exhaustive and open to extension.
@@ -133,7 +135,7 @@ mod tests {
     #[test]
     fn user_addr_meta_accessors() {
         let meta = UserMeta::Apk(Apk {
-            path: PathBuf::from("/tmp/archive.apk"),
+            path: Path::new("/tmp/archive.apk").into(),
             _non_exhaustive: (),
         });
         assert!(meta.apk().is_some());
@@ -141,7 +143,7 @@ mod tests {
         assert!(meta.unknown().is_none());
 
         let meta = UserMeta::Elf(Elf {
-            path: PathBuf::from("/tmp/executable.bin"),
+            path: Path::new("/tmp/executable.bin").into(),
             build_id: None,
             _non_exhaustive: (),
         });

@@ -6,6 +6,7 @@ use std::fmt::Result as FmtResult;
 use std::mem::size_of;
 use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
+use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::PathBuf;
 use std::ptr;
@@ -176,7 +177,7 @@ impl blaze_user_meta_apk {
         } = other;
 
         let slf = Self {
-            path: CString::new(path.into_os_string().into_vec())
+            path: CString::new(path.as_os_str().as_bytes())
                 .expect("encountered path with NUL bytes")
                 .into_raw(),
             reserved: [0u8; 8],
@@ -190,7 +191,8 @@ impl blaze_user_meta_apk {
         let _apk = Apk {
             path: PathBuf::from(OsString::from_vec(
                 unsafe { CString::from_raw(path) }.into_bytes(),
-            )),
+            ))
+            .into(),
             _non_exhaustive: (),
         };
     }
@@ -220,7 +222,7 @@ impl blaze_user_meta_elf {
         } = other;
 
         let slf = Self {
-            path: CString::new(path.into_os_string().into_vec())
+            path: CString::new(path.as_os_str().as_bytes())
                 .expect("encountered path with NUL bytes")
                 .into_raw(),
             build_id_len: build_id
@@ -255,7 +257,8 @@ impl blaze_user_meta_elf {
         let _elf = Elf {
             path: PathBuf::from(OsString::from_vec(
                 unsafe { CString::from_raw(path) }.into_bytes(),
-            )),
+            ))
+            .into(),
             build_id: (!build_id.is_null()).then(|| unsafe {
                 Box::<[u8]>::from_raw(slice::from_raw_parts_mut(build_id, build_id_len)).into_vec()
             }),
@@ -636,7 +639,7 @@ mod tests {
     #[test]
     fn apk_conversion() {
         let apk = Apk {
-            path: PathBuf::from("/tmp/archive.apk"),
+            path: Path::new("/tmp/archive.apk").into(),
             _non_exhaustive: (),
         };
 
@@ -653,7 +656,7 @@ mod tests {
     #[test]
     fn elf_conversion() {
         let elf = Elf {
-            path: PathBuf::from("/tmp/file.so"),
+            path: Path::new("/tmp/file.so").into(),
             build_id: Some(vec![0x01, 0x02, 0x03, 0x04]),
             _non_exhaustive: (),
         };

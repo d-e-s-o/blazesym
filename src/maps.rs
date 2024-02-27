@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -7,9 +8,14 @@ use std::io::BufReader;
 use std::io::Error;
 use std::io::ErrorKind;
 use std::io::Read;
+use std::io::Write as _;
+use std::mem::MaybeUninit;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::os::unix::ffi::OsStrExt as _;
+use std::path::Path;
+use std::rc::Rc;
 
+use crate::util::StackWriter;
 use crate::Addr;
 use crate::ErrorExt as _;
 use crate::IntoError as _;
@@ -24,13 +30,13 @@ pub(crate) struct EntryPath {
     ///
     /// This path should generally be used on the local system, unless perhaps
     /// for reporting purposes (for which `path` below may be more appropriate).
-    pub maps_file: PathBuf,
+    pub maps_file: Rc<Path>,
     /// The path to the file backing the proc maps entry as found directly in
     /// the `/proc/<xxx>/maps` file. This path should generally only be used for
     /// reporting matters or outside of the system on which proc maps was
     /// parsed. This path has been sanitized and no longer contains any
     /// `(deleted)` suffixes.
-    pub symbolic_path: PathBuf,
+    pub symbolic_path: Rc<Path>,
 }
 
 
@@ -159,15 +165,21 @@ fn parse_maps_line<'line>(line: &'line str, pid: Pid) -> Result<MapsEntry> {
     let path_name = match path_str.as_bytes() {
         [] => None,
         [b'/', ..] => {
-            let symbolic_path =
-                PathBuf::from(path_str.strip_suffix(" (deleted)").unwrap_or(path_str));
+            let symbolic_path = Rc::<Path>::from(Path::new(
+                path_str.strip_suffix(" (deleted)").unwrap_or(path_str),
+            ));
             // TODO: May have to resolve the symbolic link in case of
             //       `Pid::Slf` here for remote symbolization use cases.
-            let maps_file = PathBuf::from(format!(
-                "/proc/{pid}/map_files/{loaded_addr:x}-{end_addr:x}"
-            ));
+            // 256 bytes of stack buffer ought to be enough to format all the
+            // strings we care about, with a rather large margin.
+            let mut buffer = [MaybeUninit::<u8>::uninit(); 256];
+            let mut writer = StackWriter::new(&mut buffer);
+            let () = write!(writer, "/proc/{pid}/map_files/{loaded_addr:x}-{end_addr:x}")
+                .context("failed to create map_file entry string")?;
+            let maps_file = AsRef::<Path>::as_ref(OsStr::from_bytes(writer.written()));
+
             Some(PathName::Path(EntryPath {
-                maps_file,
+                maps_file: Rc::from(maps_file),
                 symbolic_path,
             }))
         }
@@ -265,7 +277,7 @@ pub(crate) fn filter_map_relevant(entry: MapsEntry) -> Option<MapsEntry> {
 mod tests {
     use super::*;
 
-    use std::path::Path;
+    use std::ops::Deref as _;
 
     use test_log::test;
 
@@ -346,7 +358,8 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
                 .unwrap()
                 .as_path()
                 .unwrap()
-                .maps_file,
+                .maps_file
+                .deref(),
             Path::new("/proc/self/map_files/400000-401000")
         );
 
@@ -361,7 +374,8 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
                 .unwrap()
                 .as_path()
                 .unwrap()
-                .maps_file,
+                .maps_file
+                .deref(),
             Path::new("/proc/self/map_files/55f4a95cb000-55f4a95cf000")
         );
         assert_eq!(entry.path_name.as_ref().unwrap().as_component(), None);
@@ -385,7 +399,8 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
                 .unwrap()
                 .as_path()
                 .unwrap()
-                .maps_file,
+                .maps_file
+                .deref(),
             Path::new("/proc/self/map_files/7f2321e00000-7f2321e37000")
         );
 

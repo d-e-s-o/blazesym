@@ -627,7 +627,7 @@ fn normalize_elf_addr() {
 
         let output = normalized.outputs[0];
         let meta = &normalized.meta[output.1];
-        assert_eq!(meta.elf().unwrap().path, test_so);
+        assert_eq!(meta.elf().unwrap().path.deref(), test_so);
 
         let elf = symbolize::Elf::new(test_so);
         let src = symbolize::Source::Elf(elf);
@@ -683,7 +683,7 @@ fn normalize_build_id_reading() {
         let output = normalized.outputs[0];
         let meta = &normalized.meta[output.1];
         let elf = meta.elf().unwrap();
-        assert_eq!(elf.path, test_so);
+        assert_eq!(elf.path.deref(), test_so);
         if read_build_ids {
             let expected = read_elf_build_id(&test_so).unwrap().unwrap();
             assert_eq!(elf.build_id.as_deref().unwrap(), &expected);

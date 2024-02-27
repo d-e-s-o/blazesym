@@ -1,7 +1,9 @@
+use std::cmp::min;
 use std::cmp::Ordering;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::io;
+use std::io::Write;
 use std::iter;
 use std::mem::align_of;
 use std::mem::size_of;
@@ -33,6 +35,59 @@ where
             Self::A(a) => a.next(),
             Self::B(b) => b.next(),
         }
+    }
+}
+
+
+pub(crate) struct StackWriter<'buf, const N: usize> {
+    /// The underlying stack allocated buffer.
+    buffer: &'buf mut [MaybeUninit<u8>; N],
+    /// The total number of bytes written to `buffer`.
+    written: usize,
+}
+
+impl<'buf, const N: usize> StackWriter<'buf, N> {
+    #[inline]
+    pub fn new(buffer: &'buf mut [MaybeUninit<u8>; N]) -> Self {
+        Self { buffer, written: 0 }
+    }
+
+    #[inline]
+    pub fn written(&self) -> &[u8] {
+        let slice = &self.buffer[0..self.written];
+        // TODO: Use `MaybeUninit::slice_assume_init_ref` once stable.
+        // SAFETY: This type guarantees that `written` bytes have been
+        //         initialized in the buffer.
+        unsafe { &*(slice as *const [MaybeUninit<u8>] as *const [u8]) }
+    }
+
+    /// Reset the buffer to its "empty" state.
+    #[inline]
+    #[cfg(test)]
+    pub fn reset(&mut self) {
+        self.written = 0;
+    }
+}
+
+impl<const N: usize> Write for StackWriter<'_, N> {
+    #[inline]
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        let len = min(data.len(), self.buffer.len() - self.written);
+        // TODO: Use `MaybeUninit::slice_as_mut_ptr` once stable.
+        let ptr = self.buffer[self.written..].as_mut_ptr().cast::<u8>();
+        // SAFETY: Both source and destination are valid for reads and are
+        //         properly aligned as they originate from references. They
+        //         cannot overlap because this method has exclusive access
+        //         to the buffer we write to.
+        let () = unsafe { ptr.copy_from_nonoverlapping(data.as_ptr(), len) };
+
+        self.written += len;
+        Ok(len)
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -400,6 +455,43 @@ mod tests {
     #[cfg(feature = "nightly")]
     use test::Bencher;
 
+
+    /// Check that our `StackWriter` works as expected.
+    #[test]
+    fn stack_writing() {
+        let mut buffer = [MaybeUninit::<u8>::uninit(); 8];
+        let mut writer = StackWriter::new(&mut buffer);
+
+        assert_eq!(writer.written(), []);
+        let n = writer.write(b"1").unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(writer.written(), [b'1']);
+
+        let n = writer.write(b"23").unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(writer.written(), [b'1', b'2', b'3']);
+
+        let () = writer.reset();
+        assert_eq!(writer.written(), []);
+
+        let n = writer.write(b"456").unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(writer.written(), [b'4', b'5', b'6']);
+
+        let n = writer.write(b"123456").unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(
+            writer.written(),
+            [b'4', b'5', b'6', b'1', b'2', b'3', b'4', b'5']
+        );
+
+        let n = writer.write(b"1337").unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(
+            writer.written(),
+            [b'4', b'5', b'6', b'1', b'2', b'3', b'4', b'5']
+        );
+    }
 
     /// Check whether an iterator represents a sorted sequence.
     // Copy of iterator::is_sorted_by used while it is still unstable.

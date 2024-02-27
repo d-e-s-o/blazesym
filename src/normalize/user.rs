@@ -5,6 +5,7 @@ use std::io::ErrorKind;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use crate::maps;
 use crate::maps::EntryPath;
@@ -25,7 +26,7 @@ use super::normalizer::Output;
 /// Make a [`UserMeta::Elf`] variant.
 fn make_elf_meta(entry_path: &EntryPath, get_build_id: &BuildIdFn) -> Result<UserMeta> {
     let elf = Elf {
-        path: entry_path.symbolic_path.to_path_buf(),
+        path: Rc::clone(&entry_path.symbolic_path),
         build_id: get_build_id(&entry_path.maps_file)?,
         _non_exhaustive: (),
     };
@@ -37,7 +38,7 @@ fn make_elf_meta(entry_path: &EntryPath, get_build_id: &BuildIdFn) -> Result<Use
 /// Make a [`UserMeta::Apk`] variant.
 fn make_apk_meta(entry_path: &EntryPath) -> Result<UserMeta> {
     let apk = Apk {
-        path: entry_path.symbolic_path.to_path_buf(),
+        path: Rc::clone(&entry_path.symbolic_path),
         _non_exhaustive: (),
     };
     let meta = UserMeta::Apk(apk);

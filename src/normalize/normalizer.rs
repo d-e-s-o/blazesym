@@ -403,7 +403,7 @@ mod tests {
             .join("libtest-so.so");
         let expected_elf = Elf {
             build_id: Some(read_elf_build_id(&so_path).unwrap().unwrap()),
-            path: so_path,
+            path: so_path.to_path_buf().into(),
             _non_exhaustive: (),
         };
         assert_eq!(meta, &UserMeta::Elf(expected_elf));
@@ -467,7 +467,7 @@ mod tests {
             assert_eq!(output.0, expected_offset);
             let meta = &normalized.meta[output.1];
             let expected = Apk {
-                path: test_zip.clone(),
+                path: test_zip.to_path_buf().into(),
                 _non_exhaustive: (),
             };
             assert_eq!(meta, &UserMeta::Apk(expected));
