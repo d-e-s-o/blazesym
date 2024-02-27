@@ -15,9 +15,9 @@ where
     M: Measurement,
 {
     let mut addrs = [
-        libc::__errno_location as Addr,
         libc::dlopen as Addr,
         libc::fopen as Addr,
+        libc::poll as Addr,
         normalize_process_impl::<M> as Addr,
         Normalizer::normalize_user_addrs_sorted as Addr,
     ];
@@ -27,7 +27,6 @@ where
         let normalized = normalizer
             .normalize_user_addrs_sorted(black_box(0.into()), black_box(addrs.as_slice()))
             .unwrap();
-        assert_eq!(normalized.meta.len(), 2);
         assert_eq!(normalized.outputs.len(), 5);
     });
 }

@@ -22,9 +22,9 @@ use criterion::BenchmarkGroup;
 fn symbolize_process() {
     let src = Source::Process(Process::new(Pid::Slf));
     let addrs = [
-        libc::__errno_location as Addr,
         libc::dlopen as Addr,
         libc::fopen as Addr,
+        libc::poll as Addr,
         symbolize_process as Addr,
         Symbolizer::symbolize_single as Addr,
     ];
