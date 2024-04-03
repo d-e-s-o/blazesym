@@ -210,7 +210,7 @@ impl<'mmap> Cache<'mmap> {
     /// of certain member variables to reference data from this header,
     /// which otherwise is zeroed out.
     #[inline]
-    fn read_first_shdr(&self, ehdr: &Elf64_Ehdr) -> Result<&'mmap Elf64_Shdr> {
+    fn read_first_shdr(&self, ehdr: &Elf64_Ehdr) -> Result<&Elf64_Shdr> {
         let shdr = self
             .elf_data
             .get(ehdr.e_shoff as usize..)
@@ -273,7 +273,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(ehdr)
     }
 
-    fn ensure_ehdr(&self) -> Result<&EhdrExt<'mmap>> {
+    fn ensure_ehdr(&self) -> Result<&EhdrExt<'_>> {
         self.ehdr.get_or_try_init(|| self.parse_ehdr())
     }
 
@@ -288,7 +288,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(shdrs)
     }
 
-    fn ensure_shdrs(&self) -> Result<&'mmap [Elf64_Shdr]> {
+    fn ensure_shdrs(&self) -> Result<&[Elf64_Shdr]> {
         self.shdrs.get_or_try_init(|| self.parse_shdrs()).copied()
     }
 
@@ -303,7 +303,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(phdrs)
     }
 
-    fn ensure_phdrs(&self) -> Result<&'mmap [Elf64_Phdr]> {
+    fn ensure_phdrs(&self) -> Result<&[Elf64_Phdr]> {
         self.phdrs.get_or_try_init(|| self.parse_phdrs()).copied()
     }
 
@@ -333,14 +333,14 @@ impl<'mmap> Cache<'mmap> {
         Ok(shstrtab)
     }
 
-    fn ensure_shstrtab(&self) -> Result<&'mmap [u8]> {
+    fn ensure_shstrtab(&self) -> Result<&[u8]> {
         self.shstrtab
             .get_or_try_init(|| self.parse_shstrtab())
             .copied()
     }
 
     /// Get the name of the section at a given index.
-    fn section_name(&self, idx: usize) -> Result<&'mmap str> {
+    fn section_name(&self, idx: usize) -> Result<&str> {
         let shdrs = self.ensure_shdrs()?;
         let shstrtab = self.ensure_shstrtab()?;
 
@@ -359,7 +359,7 @@ impl<'mmap> Cache<'mmap> {
     }
 
     #[cfg(test)]
-    fn symbol(&self, idx: usize) -> Result<&'mmap Elf64_Sym> {
+    fn symbol(&self, idx: usize) -> Result<&Elf64_Sym> {
         let symtab = self.ensure_symtab()?;
         let symbol = symtab
             .get(idx)
@@ -436,12 +436,12 @@ impl<'mmap> Cache<'mmap> {
         })
     }
 
-    fn ensure_symtab(&self) -> Result<&[&'mmap Elf64_Sym]> {
+    fn ensure_symtab(&self) -> Result<&[&Elf64_Sym]> {
         let symtab = self.ensure_symtab_cache()?;
         Ok(&symtab.syms)
     }
 
-    fn ensure_dynsym(&self) -> Result<&[&'mmap Elf64_Sym]> {
+    fn ensure_dynsym(&self) -> Result<&[&Elf64_Sym]> {
         let dynsym = self.ensure_dynsym_cache()?;
         Ok(&dynsym.syms)
     }
@@ -455,13 +455,13 @@ impl<'mmap> Cache<'mmap> {
         Ok(strs)
     }
 
-    fn ensure_str2symtab(&self) -> Result<&[(&'mmap str, usize)]> {
+    fn ensure_str2symtab(&self) -> Result<&[(&str, usize)]> {
         let symtab = self.ensure_symtab_cache()?;
         let str2sym = symtab.ensure_str2sym(|_sym| true)?;
         Ok(str2sym)
     }
 
-    fn ensure_str2dynsym(&self) -> Result<&[(&'mmap str, usize)]> {
+    fn ensure_str2dynsym(&self) -> Result<&[(&str, usize)]> {
         let symtab = self.ensure_symtab_cache()?;
         let dynsym = self.ensure_dynsym_cache()?;
         let str2sym = dynsym.ensure_str2sym(|sym| {
