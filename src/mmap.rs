@@ -1,10 +1,13 @@
+use std::cmp::min;
 use std::fs::File;
 use std::io;
+use std::io::Read;
 use std::ops::Deref;
 use std::ops::Range;
 use std::os::unix::io::AsRawFd;
 #[cfg(test)]
 use std::path::Path;
+use std::ptr::copy_nonoverlapping;
 use std::ptr::null_mut;
 use std::rc::Rc;
 use std::slice;
@@ -123,6 +126,7 @@ impl Drop for Mapping {
 }
 
 
+/// A memory mapped region.
 #[derive(Clone, Debug)]
 pub(crate) struct Mmap {
     /// The actual memory mapping.
@@ -165,6 +169,41 @@ impl Deref for Mmap {
             .deref()
             .get(self.view.start as usize..self.view.end as usize)
             .unwrap_or(&[])
+    }
+}
+
+
+/// A wrapper around the [`Mmap`] type that layers [`std::io::Read`]
+/// support on top.
+#[derive(Clone, Debug)]
+pub(crate) struct MmapReader {
+    /// The memory mapping.
+    mmap: Mmap,
+    /// The current read position.
+    pos: usize,
+}
+
+impl MmapReader {
+    #[inline]
+    pub fn new(mmap: Mmap) -> Self {
+        Self { mmap, pos: 0 }
+    }
+}
+
+impl Read for MmapReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let data = self.mmap.deref();
+        let data_avail = match data.get(self.pos..) {
+            Some(data) => data,
+            None => {
+                // We reached the end of the memory mapping.
+                return Ok(0)
+            }
+        };
+
+        let len = min(buf.len(), data_avail.len());
+        unsafe { copy_nonoverlapping(data_avail.as_ptr(), buf.as_mut_ptr(), len) }
+        Ok(len)
     }
 }
 
