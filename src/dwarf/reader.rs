@@ -1,8 +1,19 @@
+use gimli::read::EndianReader;
+use gimli::CloneStableDeref;
 use gimli::EndianSlice;
 use gimli::SectionId;
+use gimli::StableDeref;
 
 use crate::elf::ElfParser;
+use crate::mmap::Mmap;
 use crate::Result;
+
+
+/// SAFETY: `Mmap`, (unless [`constrain`][Mmap::constrain]ed) always
+///         derefs to the same address.
+unsafe impl StableDeref for Mmap {}
+/// SAFETY: `Mmap`, if cloned, still derefs to the same address.
+unsafe impl CloneStableDeref for Mmap {}
 
 
 #[cfg(target_endian = "little")]
@@ -10,12 +21,13 @@ type Endianess = gimli::LittleEndian;
 #[cfg(target_endian = "big")]
 type Endianess = gimli::BigEndian;
 
+
 /// The gimli reader type we currently use. Could be made generic if
 /// need be, but we keep things simple while we can.
-pub(crate) type R<'dat> = EndianSlice<'dat, Endianess>;
+pub(crate) type R = EndianReader<Endianess, Mmap>;
 
 
-pub(super) fn load_section(parser: &ElfParser, id: SectionId) -> Result<R<'_>> {
+pub(super) fn load_section(parser: &ElfParser, id: SectionId) -> Result<R> {
     let result = parser.find_section(id.name())?;
     let data = match result {
         Some(idx) => parser.section_data(idx)?,

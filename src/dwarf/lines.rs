@@ -46,10 +46,10 @@ fn path_push<'p>(path: &'p Path, p: &'p Path) -> Cow<'p, Path> {
 }
 
 fn render_file<'dwarf>(
-    dw_unit: &gimli::Unit<R<'dwarf>>,
-    file: &gimli::FileEntry<R<'dwarf>, <R<'dwarf> as gimli::Reader>::Offset>,
-    header: &gimli::LineProgramHeader<R<'dwarf>, <R<'dwarf> as gimli::Reader>::Offset>,
-    sections: &gimli::Dwarf<R<'dwarf>>,
+    dw_unit: &gimli::Unit<R>,
+    file: &gimli::FileEntry<R, <R as gimli::Reader>::Offset>,
+    header: &gimli::LineProgramHeader<R, <R as gimli::Reader>::Offset>,
+    sections: &gimli::Dwarf<R>,
 ) -> Result<(Cow<'dwarf, Path>, &'dwarf OsStr), gimli::Error> {
     let dir = if let Some(ref comp_dir) = dw_unit.comp_dir {
         Path::new(OsStr::from_bytes(comp_dir.slice()))
@@ -96,9 +96,9 @@ pub(crate) struct Lines<'dwarf> {
 
 impl<'dwarf> Lines<'dwarf> {
     pub(crate) fn parse(
-        dw_unit: &gimli::Unit<R<'dwarf>>,
-        ilnp: gimli::IncompleteLineProgram<R<'dwarf>, <R<'dwarf> as gimli::Reader>::Offset>,
-        sections: &gimli::Dwarf<R<'dwarf>>,
+        dw_unit: &gimli::Unit<R>,
+        ilnp: gimli::IncompleteLineProgram<R, <R as gimli::Reader>::Offset>,
+        sections: &gimli::Dwarf<R>,
     ) -> Result<Self, gimli::Error> {
         let mut sequences = Vec::new();
         let mut sequence_rows = Vec::<LineRow>::new();

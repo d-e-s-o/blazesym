@@ -44,17 +44,17 @@ pub(super) struct UnitRange {
 
 
 pub(super) struct Unit<'dwarf> {
-    offset: gimli::DebugInfoOffset<<R<'dwarf> as gimli::Reader>::Offset>,
-    dw_unit: gimli::Unit<R<'dwarf>>,
+    offset: gimli::DebugInfoOffset<<R as gimli::Reader>::Offset>,
+    dw_unit: gimli::Unit<R>,
     lang: Option<gimli::DwLang>,
     lines: OnceCell<Lines<'dwarf>>,
-    funcs: OnceCell<Functions<'dwarf>>,
+    funcs: OnceCell<Functions>,
 }
 
 impl<'dwarf> Unit<'dwarf> {
     pub(super) fn new(
-        offset: gimli::DebugInfoOffset<<R<'dwarf> as gimli::Reader>::Offset>,
-        unit: gimli::Unit<R<'dwarf>>,
+        offset: gimli::DebugInfoOffset<<R as gimli::Reader>::Offset>,
+        unit: gimli::Unit<R>,
         lang: Option<gimli::DwLang>,
         lines: OnceCell<Lines<'dwarf>>,
     ) -> Self {
@@ -72,7 +72,7 @@ impl<'dwarf> Unit<'dwarf> {
     pub(super) fn parse_functions<'unit>(
         &'unit self,
         units: &Units<'dwarf>,
-    ) -> Result<&'unit Functions<'dwarf>, gimli::Error> {
+    ) -> Result<&'unit Functions, gimli::Error> {
         let unit = &self.dw_unit;
         let functions = self.parse_functions_dwarf_and_unit(unit, units)?;
         Ok(functions)
@@ -83,7 +83,7 @@ impl<'dwarf> Unit<'dwarf> {
     pub(super) fn parse_inlined_functions<'unit>(
         &'unit self,
         units: &Units<'dwarf>,
-    ) -> Result<&'unit Functions<'dwarf>, gimli::Error> {
+    ) -> Result<&'unit Functions, gimli::Error> {
         let unit = &self.dw_unit;
 
         self.funcs.get_or_try_init(|| {
@@ -125,9 +125,9 @@ impl<'dwarf> Unit<'dwarf> {
 
     fn parse_functions_dwarf_and_unit(
         &self,
-        unit: &gimli::Unit<R<'dwarf>>,
+        unit: &gimli::Unit<R>,
         units: &Units<'dwarf>,
-    ) -> Result<&Functions<'dwarf>, gimli::Error> {
+    ) -> Result<&Functions, gimli::Error> {
         self.funcs.get_or_try_init(|| Functions::parse(unit, units))
     }
 
@@ -135,7 +135,7 @@ impl<'dwarf> Unit<'dwarf> {
         &self,
         probe: u64,
         units: &Units<'dwarf>,
-    ) -> Result<Option<&Function<'dwarf>>, gimli::Error> {
+    ) -> Result<Option<&Function>, gimli::Error> {
         let unit = &self.dw_unit;
         let functions = self.parse_functions_dwarf_and_unit(unit, units)?;
         let function = match functions.find_address(probe) {
@@ -153,7 +153,7 @@ impl<'dwarf> Unit<'dwarf> {
         &'slf self,
         name: &str,
         units: &Units<'dwarf>,
-    ) -> Result<Option<&'slf Function<'dwarf>>, gimli::Error> {
+    ) -> Result<Option<&'slf Function>, gimli::Error> {
         let unit = &self.dw_unit;
         let functions = self.parse_functions_dwarf_and_unit(unit, units)?;
         for func in functions.functions.iter() {
@@ -167,13 +167,13 @@ impl<'dwarf> Unit<'dwarf> {
 
     /// Retrieve the unit's debug info offset.
     #[inline]
-    pub(super) fn offset(&self) -> gimli::DebugInfoOffset<<R<'dwarf> as gimli::Reader>::Offset> {
+    pub(super) fn offset(&self) -> gimli::DebugInfoOffset<<R as gimli::Reader>::Offset> {
         self.offset
     }
 
     /// Retrieve the underlying [`gimli::Unit`] object.
     #[inline]
-    pub(super) fn dw_unit(&self) -> &gimli::Unit<R<'dwarf>> {
+    pub(super) fn dw_unit(&self) -> &gimli::Unit<R> {
         &self.dw_unit
     }
 

@@ -25,6 +25,10 @@
 // > IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // > DEALINGS IN THE SOFTWARE.
 
+use std::borrow::Cow;
+
+use gimli::Reader as _;
+
 use crate::log::warn;
 use crate::once::OnceCell;
 use crate::ErrorExt as _;
@@ -53,7 +57,7 @@ fn format_offset(offset: gimli::UnitSectionOffset<usize>) -> String {
 
 pub(crate) struct Units<'dwarf> {
     /// The DWARF data.
-    dwarf: gimli::Dwarf<R<'dwarf>>,
+    dwarf: gimli::Dwarf<R>,
     /// The ranges of the units encountered.
     unit_ranges: Box<[UnitRange]>,
     /// All units along with meta-data.
@@ -61,7 +65,7 @@ pub(crate) struct Units<'dwarf> {
 }
 
 impl<'dwarf> Units<'dwarf> {
-    pub(crate) fn parse(sections: gimli::Dwarf<R<'dwarf>>) -> Result<Self> {
+    pub(crate) fn parse(sections: gimli::Dwarf<R>) -> Result<Self> {
         // Find all the references to compilation units in .debug_aranges.
         // Note that we always also iterate through all of .debug_info to
         // find compilation units, because .debug_aranges may be missing some.
@@ -233,11 +237,11 @@ impl<'dwarf> Units<'dwarf> {
     /// offset into a unit offset.
     pub(super) fn find_unit(
         &self,
-        offset: gimli::DebugInfoOffset<<R<'_> as gimli::Reader>::Offset>,
+        offset: gimli::DebugInfoOffset<<R as gimli::Reader>::Offset>,
     ) -> Result<
         (
-            &gimli::Unit<R<'dwarf>>,
-            gimli::UnitOffset<<R<'dwarf> as gimli::Reader>::Offset>,
+            &gimli::Unit<R>,
+            gimli::UnitOffset<<R as gimli::Reader>::Offset>,
         ),
         gimli::Error,
     > {
@@ -326,7 +330,7 @@ impl<'dwarf> Units<'dwarf> {
     pub fn find_function(
         &self,
         probe: u64,
-    ) -> Result<Option<(&Function<'dwarf>, Option<gimli::DwLang>)>, gimli::Error> {
+    ) -> Result<Option<(&Function, Option<gimli::DwLang>)>, gimli::Error> {
         for unit in self.find_units(probe) {
             if let Some(function) = unit.find_function(probe, self)? {
                 return Ok(Some((function, unit.language())))
@@ -342,7 +346,7 @@ impl<'dwarf> Units<'dwarf> {
     ) -> Result<
         Option<
             impl ExactSizeIterator<
-                    Item = Result<(&'dwarf str, Option<Location<'slf>>), gimli::Error>,
+                    Item = Result<(Cow<'dwarf, str>, Option<Location<'slf>>), gimli::Error>,
                 > + 'slf,
         >,
         gimli::Error,
@@ -355,7 +359,7 @@ impl<'dwarf> Units<'dwarf> {
                         .name
                         .map(|name| name.to_string())
                         .transpose()?
-                        .unwrap_or("");
+                        .unwrap_or(Cow::Borrowed(""));
 
                     let code_info = if let Some(call_file) = inlined_fn.call_file {
                         if let Some(lines) = unit.parse_lines(self)? {
@@ -401,7 +405,7 @@ impl<'dwarf> Units<'dwarf> {
     pub fn find_name<'s, 'slf: 's>(
         &'slf self,
         name: &'s str,
-    ) -> impl Iterator<Item = Result<&Function<'dwarf>, gimli::Error>> + 's {
+    ) -> impl Iterator<Item = Result<&Function, gimli::Error>> + 's {
         self.units
             .iter()
             .filter_map(move |unit| unit.find_name(name, self).transpose())
@@ -440,7 +444,7 @@ impl<'dwarf> Units<'dwarf> {
 
     /// Retrieve the underlying [`gimli::Dwarf`] object.
     #[inline]
-    pub(super) fn dwarf(&self) -> &gimli::Dwarf<R<'dwarf>> {
+    pub(super) fn dwarf(&self) -> &gimli::Dwarf<R> {
         &self.dwarf
     }
 }

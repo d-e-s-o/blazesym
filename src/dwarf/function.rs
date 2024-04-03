@@ -32,6 +32,7 @@ use std::fmt::Result as FmtResult;
 use std::vec;
 
 use gimli::Error;
+use gimli::Reader;
 
 use crate::once::OnceCell;
 
@@ -41,11 +42,11 @@ use super::units::Units;
 
 
 fn name_entry<'dwarf>(
-    unit: &gimli::Unit<R<'dwarf>>,
-    offset: gimli::UnitOffset<<R<'_> as gimli::Reader>::Offset>,
+    unit: &gimli::Unit<R>,
+    offset: gimli::UnitOffset<<R as Reader>::Offset>,
     units: &Units<'dwarf>,
     recursion_limit: usize,
-) -> Result<Option<R<'dwarf>>, Error> {
+) -> Result<Option<R>, Error> {
     let mut entries = unit.entries_raw(Some(offset))?;
     let abbrev = if let Some(abbrev) = entries.read_abbreviation()? {
         abbrev
@@ -91,10 +92,10 @@ fn name_entry<'dwarf>(
 
 fn name_attr<'dwarf>(
     attr: gimli::AttributeValue<R>,
-    unit: &gimli::Unit<R<'dwarf>>,
+    unit: &gimli::Unit<R>,
     units: &Units<'dwarf>,
     recursion_limit: usize,
-) -> Result<Option<R<'dwarf>>, Error> {
+) -> Result<Option<R>, Error> {
     if recursion_limit == 0 {
         return Ok(None)
     }
@@ -111,8 +112,8 @@ fn name_attr<'dwarf>(
 }
 
 
-pub(super) struct InlinedFunction<'dwarf> {
-    pub(crate) name: Option<R<'dwarf>>,
+pub(super) struct InlinedFunction {
+    pub(crate) name: Option<R>,
     pub(crate) call_file: Option<u64>,
     pub(crate) call_line: u32,
     pub(crate) call_column: u32,
@@ -127,19 +128,19 @@ struct InlinedFunctionAddress {
 }
 
 
-pub(super) struct InlinedFunctions<'dwarf> {
+pub(super) struct InlinedFunctions {
     /// List of all `DW_TAG_inlined_subroutine` details in this
     /// function.
-    inlined_functions: Box<[InlinedFunction<'dwarf>]>,
+    inlined_functions: Box<[InlinedFunction]>,
     /// List of `DW_TAG_inlined_subroutine` address ranges in this
     /// function.
     inlined_addresses: Box<[InlinedFunctionAddress]>,
 }
 
-impl<'dwarf> InlinedFunctions<'dwarf> {
-    pub(crate) fn parse(
-        dw_die_offset: gimli::UnitOffset<<R<'dwarf> as gimli::Reader>::Offset>,
-        unit: &gimli::Unit<R<'dwarf>>,
+impl InlinedFunctions {
+    pub(crate) fn parse<'dwarf>(
+        dw_die_offset: gimli::UnitOffset<<R as Reader>::Offset>,
+        unit: &gimli::Unit<R>,
         units: &Units<'dwarf>,
     ) -> Result<Self, Error> {
         let mut entries = unit.entries_raw(Some(dw_die_offset))?;
@@ -187,10 +188,7 @@ impl<'dwarf> InlinedFunctions<'dwarf> {
     }
 
     /// Build the list of inlined functions that contain `probe`.
-    pub(super) fn find_inlined_functions(
-        &self,
-        probe: u64,
-    ) -> vec::IntoIter<&InlinedFunction<'dwarf>> {
+    pub(super) fn find_inlined_functions(&self, probe: u64) -> vec::IntoIter<&InlinedFunction> {
         // `inlined_functions` is ordered from outside to inside.
         let mut inlined_functions = Vec::new();
         let mut inlined_addresses = &self.inlined_addresses[..];
@@ -239,17 +237,17 @@ pub(crate) struct FunctionAddress {
 }
 
 
-pub(crate) struct Function<'dwarf> {
-    pub(crate) dw_die_offset: gimli::UnitOffset<<R<'dwarf> as gimli::Reader>::Offset>,
+pub(crate) struct Function {
+    pub(crate) dw_die_offset: gimli::UnitOffset<<R as Reader>::Offset>,
     /// The function's name, if present.
-    pub(crate) name: Option<R<'dwarf>>,
+    pub(crate) name: Option<R>,
     /// The function's range (begin and end address).
     pub(crate) range: Option<gimli::Range>,
     /// List of inlined function calls.
-    pub(super) inlined_functions: OnceCell<InlinedFunctions<'dwarf>>,
+    pub(super) inlined_functions: OnceCell<InlinedFunctions>,
 }
 
-impl Debug for Function<'_> {
+impl Debug for Function {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         let Self {
             dw_die_offset,
@@ -274,16 +272,16 @@ impl Debug for Function<'_> {
 
 
 #[derive(Debug)]
-pub(crate) struct Functions<'dwarf> {
+pub(crate) struct Functions {
     /// List of all `DW_TAG_subprogram` details in the unit.
-    pub(crate) functions: Box<[Function<'dwarf>]>,
+    pub(crate) functions: Box<[Function]>,
     /// List of `DW_TAG_subprogram` address ranges in the unit.
     pub(crate) addresses: Box<[FunctionAddress]>,
 }
 
-impl<'dwarf> Functions<'dwarf> {
-    pub(crate) fn parse(
-        unit: &gimli::Unit<R<'dwarf>>,
+impl Functions {
+    pub(crate) fn parse<'dwarf>(
+        unit: &gimli::Unit<R>,
         units: &Units<'dwarf>,
     ) -> Result<Self, Error> {
         let mut functions = Vec::new();
@@ -394,7 +392,7 @@ impl<'dwarf> Functions<'dwarf> {
     #[cfg(feature = "nightly")]
     pub(crate) fn parse_inlined_functions(
         &self,
-        unit: &gimli::Unit<R<'dwarf>>,
+        unit: &gimli::Unit<R>,
         units: &Units<'dwarf>,
     ) -> Result<(), Error> {
         for function in &*self.functions {
@@ -418,13 +416,13 @@ impl<'dwarf> Functions<'dwarf> {
     }
 }
 
-impl<'dwarf> Function<'dwarf> {
-    fn parse_children(
-        entries: &mut gimli::EntriesRaw<'_, '_, R<'dwarf>>,
+impl Function {
+    fn parse_children<'dwarf>(
+        entries: &mut gimli::EntriesRaw<'_, '_, R>,
         depth: isize,
-        unit: &gimli::Unit<R<'dwarf>>,
+        unit: &gimli::Unit<R>,
         units: &Units<'dwarf>,
-        inlined_functions: &mut Vec<InlinedFunction<'dwarf>>,
+        inlined_functions: &mut Vec<InlinedFunction>,
         inlined_addresses: &mut Vec<InlinedFunctionAddress>,
         inlined_depth: usize,
     ) -> Result<(), Error> {
@@ -458,18 +456,18 @@ impl<'dwarf> Function<'dwarf> {
         }
     }
 
-    pub(super) fn parse_inlined_functions(
+    pub(super) fn parse_inlined_functions<'dwarf>(
         &self,
-        unit: &gimli::Unit<R<'dwarf>>,
+        unit: &gimli::Unit<R>,
         units: &Units<'dwarf>,
-    ) -> Result<&InlinedFunctions<'dwarf>, Error> {
+    ) -> Result<&InlinedFunctions, Error> {
         self.inlined_functions
             .get_or_try_init(|| InlinedFunctions::parse(self.dw_die_offset, unit, units))
     }
 
 
     fn skip(
-        entries: &mut gimli::EntriesRaw<'_, '_, R<'dwarf>>,
+        entries: &mut gimli::EntriesRaw<'_, '_, R>,
         abbrev: &gimli::Abbreviation,
         depth: isize,
     ) -> Result<(), Error> {
@@ -484,15 +482,15 @@ impl<'dwarf> Function<'dwarf> {
     }
 }
 
-impl<'dwarf> InlinedFunction<'dwarf> {
+impl InlinedFunction {
     #[allow(clippy::too_many_arguments)]
-    fn parse(
-        entries: &mut gimli::EntriesRaw<'_, '_, R<'dwarf>>,
+    fn parse<'dwarf>(
+        entries: &mut gimli::EntriesRaw<'_, '_, R>,
         abbrev: &gimli::Abbreviation,
         depth: isize,
-        unit: &gimli::Unit<R<'dwarf>>,
+        unit: &gimli::Unit<R>,
         units: &Units<'dwarf>,
-        inlined_functions: &mut Vec<InlinedFunction<'dwarf>>,
+        inlined_functions: &mut Vec<InlinedFunction>,
         inlined_addresses: &mut Vec<InlinedFunctionAddress>,
         inlined_depth: usize,
     ) -> Result<(), Error> {

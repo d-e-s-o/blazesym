@@ -12,6 +12,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use gimli::Dwarf;
+use gimli::Reader as _;
 
 use crate::elf::ElfParser;
 use crate::error::IntoCowStr;
