@@ -12,6 +12,8 @@ use crate::symbolize::AddrCodeInfo;
 use crate::symbolize::FindSymOpts;
 use crate::symbolize::IntSym;
 use crate::symbolize::Reason;
+use crate::symbolize::SrcLang;
+use crate::symbolize::Sym;
 use crate::Addr;
 use crate::Error;
 use crate::Result;
@@ -46,7 +48,7 @@ impl SymResolver for KernelResolver {
         &self,
         addr: Addr,
         opts: &FindSymOpts,
-    ) -> Result<Result<(IntSym<'_>, Option<AddrCodeInfo<'_>>), Reason>> {
+    ) -> Result<Result<(Sym<'_>, SrcLang), Reason>> {
         // TODO: If an `ElfResolver` is available we probably should give
         //       preference to it, if for no other reason than the fact that it
         //       may report source code location information.

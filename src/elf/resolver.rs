@@ -17,6 +17,8 @@ use crate::symbolize::FindSymOpts;
 use crate::symbolize::IntSym;
 use crate::symbolize::Reason;
 use crate::symbolize::SrcLang;
+use crate::symbolize::Sym;
+use crate::symbolize::Symbolized;
 use crate::Addr;
 use crate::Error;
 use crate::Result;
@@ -154,31 +156,34 @@ impl SymResolver for ElfResolver {
         &self,
         addr: Addr,
         opts: &FindSymOpts,
-    ) -> Result<Result<(IntSym<'_>, Option<AddrCodeInfo<'_>>), Reason>> {
+    ) -> Result<Result<(Sym<'_>, SrcLang), Reason>> {
         #[cfg(feature = "dwarf")]
         if let ElfBackend::Dwarf(dwarf) = &self.backend {
-            if let Some(sym) = dwarf.find_sym(addr, opts)? {
-                return Ok(Ok(sym))
+            if let Some(data) = dwarf.find_sym(addr, opts)? {
+                return Ok(Ok(data))
             }
         }
 
         let parser = self.parser();
         let result = parser
             .find_sym(addr, SymType::Undefined)?
-            .map(|(name, addr, size)| {
+            .map(|(name, sym_addr, size)| {
                 // ELF does not carry any source code language information.
                 let lang = SrcLang::Unknown;
                 // We found the address in ELF.
                 // TODO: Long term we probably want a different heuristic here, as
                 //       there can be valid differences between the two formats
                 //       (e.g., DWARF could contain more symbols).
-                let sym = IntSym {
-                    name,
-                    addr,
+                let sym = Sym {
+                    name: Cow::Borrowed(name),
+                    addr: sym_addr,
+                    offset: (addr - sym_addr) as usize,
                     size: Some(size),
-                    lang,
+                    code_info: None,
+                    inlined: Box::new([]),
+                    _non_exhaustive: (),
                 };
-                (sym, None)
+                (sym, lang)
             });
 
         Ok(result)

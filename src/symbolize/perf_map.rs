@@ -1,6 +1,7 @@
 /// A module for working with Perf Map files.
 ///
 /// See <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/perf/Documentation/jit-interface.txt>
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -15,11 +16,10 @@ use crate::inspect::FindAddrOpts;
 use crate::inspect::SymInfo;
 use crate::mmap::Mmap;
 use crate::resolver::SymResolver;
-use crate::symbolize::AddrCodeInfo;
 use crate::symbolize::FindSymOpts;
-use crate::symbolize::IntSym;
 use crate::symbolize::Reason;
 use crate::symbolize::SrcLang;
+use crate::symbolize::Sym;
 use crate::util::find_match_or_lower_bound_by_key;
 use crate::Addr;
 use crate::Error;
@@ -177,7 +177,7 @@ impl SymResolver for PerfMap {
         &self,
         addr: Addr,
         _opts: &FindSymOpts,
-    ) -> Result<Result<(IntSym<'_>, Option<AddrCodeInfo<'_>>), Reason>> {
+    ) -> Result<Result<(Sym<'_>, SrcLang), Reason>> {
         let result = find_match_or_lower_bound_by_key(&self.functions, addr, |l| l.addr);
         match result {
             Some(idx) => {
@@ -189,14 +189,22 @@ impl SymResolver for PerfMap {
                     if (function.addr == addr && function.size == 0)
                         || (function.addr <= addr && addr < function.addr + function.size as Addr)
                     {
-                        let Function { name, addr, size } = function;
-                        let sym = IntSym {
+                        let lang = SrcLang::Unknown;
+                        let Function {
                             name,
-                            addr: *addr,
+                            addr: sym_addr,
+                            size,
+                        } = function;
+                        let sym = Sym {
+                            name: Cow::Borrowed(name),
+                            addr: *sym_addr,
                             size: Some(*size),
-                            lang: SrcLang::Unknown,
+                            offset: (addr - sym_addr) as usize,
+                            code_info: None,
+                            inlined: Box::new([]),
+                            _non_exhaustive: (),
                         };
-                        return Ok(Ok((sym, None)))
+                        return Ok(Ok((sym, lang)))
                     }
                 }
                 Ok(Err(Reason::UnknownAddr))

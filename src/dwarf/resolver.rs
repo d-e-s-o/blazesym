@@ -22,6 +22,7 @@ use crate::symbolize::CodeInfo;
 use crate::symbolize::FindSymOpts;
 use crate::symbolize::IntSym;
 use crate::symbolize::SrcLang;
+use crate::symbolize::Sym;
 use crate::Addr;
 use crate::Error;
 use crate::ErrorExt;
@@ -116,7 +117,7 @@ impl DwarfResolver {
         &self,
         addr: Addr,
         opts: &FindSymOpts,
-    ) -> Result<Option<(IntSym<'_>, Option<AddrCodeInfo<'_>>)>> {
+    ) -> Result<Option<(Sym<'_>, SrcLang)>> {
         if let Some((function, unit)) = self.units.find_function(addr)? {
             let name = function
                 .name

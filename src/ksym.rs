@@ -16,6 +16,7 @@ use crate::symbolize::FindSymOpts;
 use crate::symbolize::IntSym;
 use crate::symbolize::Reason;
 use crate::symbolize::SrcLang;
+use crate::symbolize::Sym;
 use crate::util::find_match_or_lower_bound_by_key;
 use crate::Addr;
 use crate::Result;
@@ -29,21 +30,6 @@ const DFL_KSYM_CAP: usize = 200000;
 pub struct Ksym {
     pub addr: Addr,
     pub name: String,
-}
-
-impl<'ksym> From<&'ksym Ksym> for IntSym<'ksym> {
-    fn from(other: &'ksym Ksym) -> Self {
-        let Ksym { name, addr } = other;
-        IntSym {
-            name,
-            addr: *addr,
-            // There is no size information in kallsyms.
-            size: None,
-            // Kernel symbols don't carry any source code language
-            // information.
-            lang: SrcLang::Unknown,
-        }
-    }
 }
 
 /// The symbol resolver for /proc/kallsyms.
@@ -125,9 +111,22 @@ impl SymResolver for KSymResolver {
         &self,
         addr: Addr,
         _opts: &FindSymOpts,
-    ) -> Result<Result<(IntSym<'_>, Option<AddrCodeInfo<'_>>), Reason>> {
-        let sym = self.find_ksym(addr).map(|sym| (IntSym::from(sym), None));
-        Ok(sym)
+    ) -> Result<Result<(Sym<'_>, SrcLang), Reason>> {
+        let result = self.find_ksym(addr).map(|ksym| {
+            let lang = SrcLang::Unknown;
+            let Ksym { addr: sym_addr, name } = ksym;
+            let sym = Sym {
+                name: Cow::Borrowed(name),
+                addr: *sym_addr,
+                offset: (addr - sym_addr) as usize,
+                size: None,
+                code_info: None,
+                inlined: Box::new([]),
+                _non_exhaustive: (),
+            };
+            (sym, lang)
+        });
+        Ok(result)
     }
 
     fn find_addr<'slf>(&'slf self, name: &str, opts: &FindAddrOpts) -> Result<Vec<SymInfo<'slf>>> {
