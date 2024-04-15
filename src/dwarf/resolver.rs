@@ -83,14 +83,12 @@ pub(crate) struct DwarfResolver {
     //         to make sure we never end up with a dangling reference.
     units: Units<'static>,
     parser: Rc<ElfParser>,
+    /// Whether or not to fall back to ELF symbolization if DWARF data
+    /// wasn't "sufficient" to fulfill a request.
+    elf_fallback: bool,
 }
 
 impl DwarfResolver {
-    /// Retrieve the resolver's underlying `ElfParser`.
-    pub fn parser(&self) -> &Rc<ElfParser> {
-        &self.parser
-    }
-
     pub fn from_parser(parser: Rc<ElfParser>) -> Result<Self, Error> {
         // SAFETY: We own the `ElfParser` and make sure that it stays
         //         around while the `Units` object uses it. As such, it
@@ -100,8 +98,19 @@ impl DwarfResolver {
         let mut load_section = |section| reader::load_section(static_parser, section);
         let dwarf = Dwarf::load(&mut load_section)?;
         let units = Units::parse(dwarf)?;
-        let slf = Self { units, parser };
+        // TODO: Make this flag configurable?
+        let elf_fallback = true;
+        let slf = Self {
+            units,
+            parser,
+            elf_fallback,
+        };
         Ok(slf)
+    }
+
+    /// Retrieve the resolver's underlying `ElfParser`.
+    pub fn parser(&self) -> &Rc<ElfParser> {
+        &self.parser
     }
 
     /// Open a binary to load and parse .debug_line for later uses.
@@ -141,6 +150,10 @@ impl Symbolize for DwarfResolver {
 
             Ok(Ok(sym))
         } else {
+            if self.elf_fallback {
+                return self.parser.find_sym(addr, opts)
+            }
+
             if self.units.is_empty() {
                 Ok(Err(Reason::MissingSyms))
             } else {
@@ -154,10 +167,17 @@ impl Inspect for DwarfResolver {
     /// Find information about a symbol given its name.
     ///
     /// # Notes
-    /// - lookup of variables is not currently supported
+    /// - lookup of variables is not currently supported and will fall back to
+    ///   using ELF information
     fn find_addr<'slf>(&'slf self, name: &str, opts: &FindAddrOpts) -> Result<Vec<SymInfo<'slf>>> {
         if let SymType::Variable = opts.sym_type {
-            return Err(Error::with_unsupported("not implemented"))
+            if self.elf_fallback {
+                return self.parser.find_addr(name, opts)
+            } else {
+                return Err(Error::with_unsupported(
+                    "DWARF logic does not currently support variable lookup",
+                ))
+            }
         }
 
         let syms = self
@@ -199,14 +219,23 @@ impl Inspect for DwarfResolver {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        if syms.is_empty() && self.elf_fallback {
+            return self.parser.find_addr(name, opts)
+        }
+
         Ok(syms)
     }
 
-    fn for_each(&self, _opts: &FindAddrOpts, _f: &mut dyn FnMut(&SymInfo<'_>)) -> Result<()> {
-        // TODO: Implement this functionality.
-        Err(Error::with_unsupported(
-            "DWARF logic does not currently support symbol iteration",
-        ))
+    fn for_each(&self, opts: &FindAddrOpts, f: &mut dyn FnMut(&SymInfo<'_>)) -> Result<()> {
+        if self.elf_fallback {
+            let parser = self.parser();
+            return parser.deref().for_each(opts, f)
+        } else {
+            // TODO: Implement this functionality.
+            Err(Error::with_unsupported(
+                "DWARF logic does not currently support symbol iteration",
+            ))
+        }
     }
 }
 
@@ -387,9 +416,16 @@ mod tests {
         // `factorial` resides at address 0x2000100.
         let symbol = symbols.first().unwrap();
         assert_eq!(symbol.addr, 0x2000100);
+
+        let opts = FindAddrOpts {
+            offset_in_file: false,
+            sym_type: SymType::Variable,
+        };
+        let symbols = resolver.find_addr("factorial", &opts).unwrap();
+        assert_eq!(symbols, Vec::new());
     }
 
-    /// Check that we fail to look up variables.
+    /// Check that we fail to look up/iterate over variables.
     #[test]
     fn unsupported_ops() {
         let test_dwarf = Path::new(&env!("CARGO_MANIFEST_DIR"))
@@ -399,7 +435,8 @@ mod tests {
             offset_in_file: false,
             sym_type: SymType::Variable,
         };
-        let resolver = DwarfResolver::open(test_dwarf.as_ref()).unwrap();
+        let mut resolver = DwarfResolver::open(test_dwarf.as_ref()).unwrap();
+        resolver.elf_fallback = false;
 
         let err = resolver.find_addr("factorial", &opts).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Unsupported);
