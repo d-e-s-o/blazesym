@@ -55,20 +55,25 @@ use std::fmt::Result as FmtResult;
 use std::path::Path;
 
 cfg_apk! {
-  pub use source::Apk;
+    pub use source::Apk;
 }
 cfg_breakpad! {
-  pub use source::Breakpad;
+    pub use source::Breakpad;
 }
 pub use source::Elf;
 cfg_gsym! {
-  pub use source::Gsym;
-  pub use source::GsymData;
-  pub use source::GsymFile;
+    pub use source::Gsym;
+    pub use source::GsymData;
+    pub use source::GsymFile;
 }
 pub use source::Kernel;
 pub use source::Process;
 pub use source::Source;
+
+cfg_apk! {
+    pub use symbolizer::ApkDispatch;
+    pub use symbolizer::ApkMemberInfo;
+}
 pub use symbolizer::Builder;
 pub use symbolizer::Symbolizer;
 
@@ -79,7 +84,7 @@ use crate::Result;
 
 /// Options determining what "parts" of a symbol to look up.
 #[derive(Debug)]
-pub(crate) enum FindSymOpts {
+pub enum FindSymOpts {
     /// Only look up the "basic" symbol data (name, address, size, ...), without
     /// source code location and inlined function information.
     Basic,
@@ -227,7 +232,7 @@ pub struct InlinedFn<'src> {
 
 /// The source code language from which a symbol originates.
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
-pub(crate) enum SrcLang {
+pub enum SrcLang {
     /// The language is unknown.
     #[default]
     Unknown,
@@ -238,9 +243,9 @@ pub(crate) enum SrcLang {
 }
 
 
-/// Our internal representation of a symbol.
+/// A type representing a symbol as produced by a [`Resolve`] object.
 #[derive(Debug, PartialEq)]
-pub(crate) struct ResolvedSym<'src> {
+pub struct ResolvedSym<'src> {
     /// The name of the symbol.
     pub name: &'src str,
     /// The symbol's normalized address.
@@ -393,12 +398,13 @@ impl<'src> Symbolized<'src> {
 /// A trait helping with upcasting into a `dyn Symbolize`.
 // TODO: This trait is currently necessary because Rust does not yet support
 //       trait upcasting on stable (check `trait_upcasting` feature).
-pub(crate) trait AsSymbolize {
+#[doc(hidden)]
+pub trait AsSymbolize {
     fn as_symbolize(&self) -> &dyn Symbolize;
 }
 
 /// The trait for types providing address symbolization services.
-pub(crate) trait Symbolize
+pub trait Symbolize
 where
     Self: AsSymbolize + Debug,
 {
@@ -420,7 +426,7 @@ where
 /// the APK symbolization path.
 ///
 /// Refer to [`Builder::set_apk_dispatcher`] for additional details.
-pub(crate) trait Resolve: Symbolize + TranslateFileOffset {}
+pub trait Resolve: Symbolize + TranslateFileOffset {}
 
 impl<R> Resolve for R where R: Symbolize + TranslateFileOffset {}
 
@@ -430,7 +436,7 @@ impl<R> Resolve for R where R: Symbolize + TranslateFileOffset {}
 ///
 /// Please refer to the [`Input`] enum for an overview of the various offset
 /// types.
-pub(crate) trait TranslateFileOffset
+pub trait TranslateFileOffset
 where
     Self: Debug,
 {

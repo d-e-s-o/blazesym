@@ -130,7 +130,7 @@ fn maybe_demangle(name: Cow<'_, str>, _language: SrcLang) -> Cow<'_, str> {
 /// see [`Builder::set_apk_dispatcher`].
 #[cfg(feature = "apk")]
 #[derive(Clone, Debug)]
-pub(crate) struct ApkMemberInfo<'dat> {
+pub struct ApkMemberInfo<'dat> {
     /// The path to the APK itself.
     pub apk_path: &'dat Path,
     /// The path to the member inside the APK.
@@ -153,7 +153,7 @@ pub(crate) struct ApkMemberInfo<'dat> {
 /// is returned, the default dispatcher will be used instead.
 // TODO: Use a trait alias once stable.
 #[cfg(feature = "apk")]
-trait ApkDispatch: Fn(ApkMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> {}
+pub trait ApkDispatch: Fn(ApkMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> {}
 
 #[cfg(feature = "apk")]
 impl<F> ApkDispatch for F where F: Fn(ApkMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> {}
