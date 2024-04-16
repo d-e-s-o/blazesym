@@ -418,6 +418,8 @@ where
 
 /// A meta-trait encompassing functionality necessary for plugging into
 /// the APK symbolization path.
+///
+/// Refer to [`Builder::set_apk_dispatcher`] for additional details.
 pub(crate) trait Resolve: Symbolize + TranslateFileOffset {}
 
 impl<R> Resolve for R where R: Symbolize + TranslateFileOffset {}
