@@ -4,7 +4,6 @@ use std::fmt::Result as FmtResult;
 use std::path::Path;
 use std::rc::Rc;
 
-use crate::elf::ElfResolver;
 use crate::ksym::KSymResolver;
 use crate::symbolize::FindSymOpts;
 use crate::symbolize::IntSym;
@@ -17,13 +16,13 @@ use crate::Result;
 
 pub(crate) struct KernelResolver {
     pub ksym_resolver: Option<Rc<KSymResolver>>,
-    pub elf_resolver: Option<Rc<ElfResolver>>,
+    pub elf_resolver: Option<Rc<dyn Symbolize>>,
 }
 
 impl KernelResolver {
     pub fn new(
         ksym_resolver: Option<Rc<KSymResolver>>,
-        elf_resolver: Option<Rc<ElfResolver>>,
+        elf_resolver: Option<Rc<dyn Symbolize>>,
     ) -> Result<KernelResolver> {
         if ksym_resolver.is_none() && elf_resolver.is_none() {
             return Err(Error::with_not_found(
@@ -63,7 +62,8 @@ impl Debug for KernelResolver {
                 .display(),
             self.elf_resolver
                 .as_ref()
-                .map(|resolver| resolver.path())
+                // TODO: Need to report the proper path!
+                .map(|_resolver| Path::new("FOOBAR") /*resolver.path()*/)
                 .unwrap_or_else(|| Path::new(""))
                 .display(),
         )

@@ -15,6 +15,7 @@ use crate::elf;
 use crate::elf::ElfParser;
 use crate::elf::ElfResolver;
 use crate::elf::ElfResolverData;
+use crate::elf::ResolverType;
 use crate::file_cache::FileCache;
 #[cfg(feature = "gsym")]
 use crate::gsym::GsymResolver;
@@ -582,12 +583,14 @@ impl Symbolizer {
                     .symbolizer
                     .elf_cache
                     .elf_resolver(path, self.debug_syms)?;
+                let parser = resolver.elf_parser();
+                let resolver = resolver.as_symbolize();
 
-                match elf_offset_to_address(file_off, resolver.parser())? {
+                match elf_offset_to_address(file_off, parser)? {
                     Some(addr) => {
                         let symbol = self
                             .symbolizer
-                            .symbolize_with_resolver(addr, &Resolver::Cached(resolver.deref()))?;
+                            .symbolize_with_resolver(addr, &Resolver::Cached(resolver))?;
                         let () = self.all_symbols.push(symbol);
                         Ok(())
                     }
@@ -708,7 +711,7 @@ impl Symbolizer {
         };
 
         let elf_resolver = if let Some(image) = kernel_image {
-            let resolver = self.elf_cache.elf_resolver(image, *debug_syms)?;
+            let resolver = self.elf_cache.elf_resolver(image, *debug_syms)?.to_owned();
             Some(resolver)
         } else {
             let release = uname_release()?.to_str().unwrap().to_string();
@@ -722,7 +725,7 @@ impl Symbolizer {
             if let Some(image) = kernel_image {
                 let result = self.elf_cache.elf_resolver(&image, *debug_syms);
                 match result {
-                    Ok(resolver) => Some(resolver),
+                    Ok(resolver) => Some(resolver.to_owned()),
                     Err(err) => {
                         log::warn!(
                             "failed to load kernel image {}: {err}; ignoring...",
@@ -736,7 +739,7 @@ impl Symbolizer {
             }
         };
 
-        KernelResolver::new(ksym_resolver.cloned(), elf_resolver.cloned())
+        KernelResolver::new(ksym_resolver.cloned(), elf_resolver)
     }
 
     /// Symbolize a list of addresses.
@@ -838,7 +841,7 @@ impl Symbolizer {
                     Input::VirtOffset(addrs) => addrs
                         .iter()
                         .map(|addr| {
-                            self.symbolize_with_resolver(*addr, &Resolver::Cached(resolver.deref()))
+                            self.symbolize_with_resolver(*addr, &Resolver::Cached(resolver.as_symbolize()))
                         })
                         .collect(),
                     Input::AbsAddr(..) => {
@@ -849,13 +852,14 @@ impl Symbolizer {
                     Input::FileOffset(offsets) => offsets
                         .iter()
                         .map(
-                            |offset| match elf_offset_to_address(*offset, resolver.parser())? {
+                            |offset| {
+                                match elf_offset_to_address(*offset, resolver.elf_parser())? {
                                 Some(addr) => self.symbolize_with_resolver(
                                     addr,
-                                    &Resolver::Cached(resolver.deref()),
+                                    &Resolver::Cached(resolver.as_symbolize()),
                                 ),
                                 None => Ok(Symbolized::Unknown(Reason::InvalidFileOffset)),
-                            },
+                            }},
                         )
                         .collect(),
                 }
@@ -1022,14 +1026,14 @@ impl Symbolizer {
                         ))
                     }
                     Input::FileOffset(offset) => {
-                        match elf_offset_to_address(offset, resolver.parser())? {
+                        match elf_offset_to_address(offset, resolver.elf_parser())? {
                             Some(addr) => addr,
                             None => return Ok(Symbolized::Unknown(Reason::InvalidFileOffset)),
                         }
                     }
                 };
 
-                self.symbolize_with_resolver(addr, &Resolver::Cached(resolver.deref()))
+                self.symbolize_with_resolver(addr, &Resolver::Cached(resolver.as_symbolize()))
             }
             Source::Kernel(kernel) => {
                 let addr = match input {

@@ -9,6 +9,7 @@ use std::rc::Rc;
 #[cfg(feature = "breakpad")]
 use crate::breakpad::BreakpadResolver;
 use crate::elf::ElfResolverData;
+use crate::elf::ResolverType;
 use crate::file_cache::FileCache;
 use crate::Result;
 
@@ -99,8 +100,7 @@ impl Inspector {
                 debug_syms,
                 _non_exhaustive: (),
             }) => {
-                let resolver = self.elf_cache.elf_resolver(path, *debug_syms)?;
-                resolver.deref() as &dyn Inspect
+                self.elf_cache.elf_resolver(path, *debug_syms)?.as_inspect()
             }
         };
 
@@ -170,7 +170,7 @@ impl Inspector {
                         sym_type: SymType::Undefined,
                     };
                     let resolver = slf.elf_cache.elf_resolver(path, *debug_syms)?;
-                    (resolver.deref() as &dyn Inspect, opts)
+                    (resolver.as_inspect(), opts)
                 }
             };
 

@@ -29,6 +29,55 @@ enum ElfBackend {
     Elf(Rc<ElfParser>), // ELF w/o DWARF
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum ResolverType<'res> {
+    /// A DWARF resolver.
+    #[cfg(feature = "dwarf")]
+    Dwarf(&'res Rc<ElfResolver>),
+    /// An ELF resolver.
+    Elf(&'res Rc<ElfResolver>),
+}
+
+impl<'res> ResolverType<'res> {
+    /// Retrieve the [`ElfParser`] underlying either of the resolvers.
+    #[inline]
+    pub fn elf_parser(&self) -> &ElfParser {
+        match self {
+            #[cfg(feature = "dwarf")]
+            ResolverType::Dwarf(resolver) => resolver.parser(),
+            ResolverType::Elf(resolver) => resolver.parser(),
+        }
+    }
+
+    #[inline]
+    pub fn to_owned(&self) -> Rc<dyn Symbolize> {
+        match self {
+            #[cfg(feature = "dwarf")]
+            ResolverType::Dwarf(resolver) => Rc::clone(resolver) as Rc<dyn Symbolize>,
+            ResolverType::Elf(resolver) => Rc::clone(resolver) as Rc<dyn Symbolize>,
+        }
+    }
+
+    #[inline]
+    pub fn as_symbolize(&self) -> &'res dyn Symbolize {
+        match self {
+            #[cfg(feature = "dwarf")]
+            ResolverType::Dwarf(resolver) => Rc::deref(resolver) as &dyn Symbolize,
+            ResolverType::Elf(resolver) => Rc::deref(resolver) as &dyn Symbolize,
+        }
+    }
+
+    #[inline]
+    pub fn as_inspect(&self) -> &'res dyn Inspect {
+        match self {
+            #[cfg(feature = "dwarf")]
+            ResolverType::Dwarf(resolver) => Rc::deref(resolver) as &dyn Inspect,
+            ResolverType::Elf(resolver) => Rc::deref(resolver) as &dyn Inspect,
+        }
+    }
+}
+
+
 /// Resolver data associated with a specific source.
 #[derive(Clone, Debug)]
 pub(crate) struct ElfResolverData {
@@ -43,7 +92,7 @@ impl FileCache<ElfResolverData> {
         &'slf self,
         path: &Path,
         debug_syms: bool,
-    ) -> Result<&'slf Rc<ElfResolver>> {
+    ) -> Result<ResolverType<'slf>> {
         let (file, cell) = self.entry(path)?;
         let resolver = if let Some(data) = cell.get() {
             if debug_syms {
@@ -91,12 +140,13 @@ impl FileCache<ElfResolverData> {
         });
 
         let resolver = if debug_syms {
-            data.dwarf.get()
+            // SANITY: We made sure to create the desired resolver above.
+            ResolverType::Dwarf(data.dwarf.get().unwrap())
         } else {
-            data.elf.get()
+            // SANITY: We made sure to create the desired resolver above.
+            ResolverType::Elf(data.elf.get().unwrap())
         };
-        // SANITY: We made sure to create the desired resolver above.
-        Ok(resolver.unwrap())
+        Ok(resolver)
     }
 }
 
