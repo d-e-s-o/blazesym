@@ -83,6 +83,8 @@ pub use crate::error::Error;
 pub use crate::error::ErrorExt;
 pub use crate::error::ErrorKind;
 pub use crate::error::IntoError;
+pub use crate::maps::EntryPath;
+pub use crate::maps::PathName;
 pub use crate::mmap::Mmap;
 pub use crate::normalize::buildid::BuildId;
 pub use crate::pid::Pid;

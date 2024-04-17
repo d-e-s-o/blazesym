@@ -41,6 +41,39 @@
 //! symbolized instead. Refer to the runnable
 //! [`backtrace`](https://github.com/libbpf/blazesym/blob/main/examples/backtrace.rs)
 //! example.
+//!
+//! # Advanced use cases
+//! In many cases symbolization is straight forward: the user provides a
+//! symbolization source -- typically a file of a certain data format -- and the
+//! library knows how to parse it and look up a symbol.
+//!
+//! However, in the case of process symbolization as briefly shown above, a
+//! process is really a form of container. That is to say, it contains a set of
+//! entities (e.g., loaded shared objects, otherwise mapped files etc.) that
+//! each may require different ways of symbolization. **blazesym** comes with a
+//! default way of dealing with the entities inside such a container (implicitly
+//! used in the above example), but advanced users may want more flexibility.
+//! For example, envision a case where, instead of using embedded symbols in an
+//! executable, all binaries are stripped and symbol information is co-located
+//! somewhere on the file system, not in the form of ELF or DWARF symbol data,
+//! but in the Gsym format, which is optimized for fast lookup and also
+//! typically requires much less disk space.
+//!
+//! In such as setup, a user can install a custom process "dispatcher". This
+//! dispatcher is a callback function that **blazesym** invokes when and that it
+//! provides certain information to (in the form of a [`ProcessMemberInfo`]
+//! object). It is then the dispatcher's responsibility to use this information
+//! to instantiate and return a "resolver" that the library will use as part of
+//! address symbolization for addresses mapping to a single entity in inside the
+//! process (e.g., a shared object).
+//!
+//! XXX: explain more.
+//!
+//! APK are another container format (common on Android systems) that can be
+//! customized with a dispatcher. Installation of a custom dispatcher works
+//! similar to the process symbolization case, the only difference is that
+//! different data is provided to the dispatch function (refer to
+//! [`ApkMemberInfo`]).
 
 mod perf_map;
 mod source;
@@ -75,6 +108,7 @@ cfg_apk! {
     pub use symbolizer::ApkMemberInfo;
 }
 pub use symbolizer::Builder;
+pub use symbolizer::ProcessMemberInfo;
 pub use symbolizer::Symbolizer;
 
 use crate::normalize;

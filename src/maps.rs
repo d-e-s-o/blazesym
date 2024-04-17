@@ -17,8 +17,9 @@ use crate::Pid;
 use crate::Result;
 
 
+/// XXX
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct EntryPath {
+pub struct EntryPath {
     /// The path of the file backing the maps entry via a
     /// `/proc/<xxx>/map_files/` component.
     ///
@@ -36,14 +37,18 @@ pub(crate) struct EntryPath {
 
 /// The "pathname" component in a proc maps entry. See `proc(5)` section
 /// `/proc/[pid]/maps`.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum PathName {
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum PathName {
+    /// XXX
     Path(EntryPath),
+    /// XXX
     Component(String),
 }
 
 impl PathName {
-    #[cfg(test)]
+    /// XXX
+    #[inline]
     pub fn as_path(&self) -> Option<&EntryPath> {
         match self {
             Self::Path(path) => Some(path),
@@ -51,7 +56,8 @@ impl PathName {
         }
     }
 
-    #[cfg(test)]
+    /// XXX
+    #[inline]
     pub fn as_component(&self) -> Option<&str> {
         match self {
             Self::Component(comp) => Some(comp),
