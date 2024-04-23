@@ -22,8 +22,8 @@ use crate::inspect::SymInfo;
 use crate::symbolize::CodeInfo;
 use crate::symbolize::FindSymOpts;
 use crate::symbolize::InlinedFn;
-use crate::symbolize::IntSym;
 use crate::symbolize::Reason;
+use crate::symbolize::ResolvedSym;
 use crate::symbolize::SrcLang;
 use crate::symbolize::Symbolize;
 use crate::Addr;
@@ -124,7 +124,7 @@ impl DwarfResolver {
 }
 
 impl Symbolize for DwarfResolver {
-    fn find_sym(&self, addr: Addr, opts: &FindSymOpts) -> Result<Result<IntSym<'_>, Reason>> {
+    fn find_sym(&self, addr: Addr, opts: &FindSymOpts) -> Result<Result<ResolvedSym<'_>, Reason>> {
         if let Some((function, unit)) = self.units.find_function(addr)? {
             let name = function
                 .name
@@ -135,7 +135,7 @@ impl Symbolize for DwarfResolver {
             let size = function
                 .range
                 .map(|range| usize::try_from(range.end - range.begin).unwrap_or(usize::MAX));
-            let mut sym = IntSym {
+            let mut sym = ResolvedSym {
                 name,
                 addr: fn_addr,
                 size,
@@ -235,7 +235,7 @@ impl<'dwarf> Units<'dwarf> {
     /// `addr` is a normalized address.
     fn fill_code_info<'slf>(
         &'slf self,
-        sym: &mut IntSym<'slf>,
+        sym: &mut ResolvedSym<'slf>,
         addr: Addr,
         opts: &FindSymOpts,
         function: &'slf Function<'dwarf>,
