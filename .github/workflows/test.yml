@@ -25,7 +25,7 @@ jobs:
         # gsym-in-apk requires `generate-unit-test-files` feature, which
         # requires `llvm-gsymutil` installed. We don't want that dependency in
         # this large OS spanning matrix.
-        args: ["--workspace", "--exclude=gsym-in-apk"]
+        args: ["--workspace --exclude=gsym-in-apk"]
         include:
           - runs-on: ubuntu-latest
             rust: stable
