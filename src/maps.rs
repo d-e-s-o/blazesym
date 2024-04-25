@@ -136,7 +136,7 @@ fn parse_maps_line<'line>(line: &'line [u8], pid: Pid) -> Result<MapsEntry> {
     // a7ed5000-a8008000 r-xp  00000000 03:00 4222       /lib/libc.so.6
     let (address_str, line) = split_once(line, "address range")?;
     // TODO: Use `<[u8]>::split_once` once stabilized.
-    let (loaded_str, end_str) = util::split_once(address_str, |b| *b == b'-').ok_or_else(|| {
+    let (loaded_str, end_str) = util::split_once(address_str, b'-').ok_or_else(|| {
         Error::new(
             ErrorKind::InvalidData,
             format!(
