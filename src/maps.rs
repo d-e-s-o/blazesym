@@ -13,7 +13,6 @@ use std::path::PathBuf;
 use crate::util;
 use crate::util::bytes_to_path;
 use crate::util::from_radix_16;
-use crate::util::split_bytes;
 use crate::util::trim_ascii;
 use crate::Addr;
 use crate::ErrorExt as _;
@@ -114,9 +113,8 @@ impl Debug for MapsEntry {
 fn parse_maps_line<'line>(line: &'line [u8], pid: Pid) -> Result<MapsEntry> {
     let full_line = line;
 
-    let split_once_opt = |line: &'line [u8]| -> Option<(&'line [u8], &'line [u8])> {
-        split_bytes(line, |b| b.is_ascii_whitespace())
-    };
+    let split_once_opt =
+        |line: &'line [u8]| -> Option<(&'line [u8], &'line [u8])> { util::split_once(line, b' ') };
 
     let split_once = |line: &'line [u8], component| -> Result<(&'line [u8], &'line [u8])> {
         split_once_opt(line).ok_or_invalid_data(|| {

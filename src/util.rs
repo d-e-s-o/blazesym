@@ -116,8 +116,10 @@ pub(crate) fn trim_ascii(bytes: &[u8]) -> &[u8] {
 //       version.
 #[inline]
 pub fn split_once(bytes: &[u8], b: u8) -> Option<(&[u8], &[u8])> {
-    let index = bytes.iter().position(|x| *x == b)?;
-    Some((&bytes[..index], &bytes[index + 1..]))
+    memchr::memchr(b, bytes).map(|idx| {
+        let (left, right) = bytes.split_at(idx);
+        (left, &right[1..])
+    })
 }
 
 /// Converts an ascii character to digit
