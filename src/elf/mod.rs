@@ -1,3 +1,4 @@
+mod debug_link;
 mod parser;
 #[cfg_attr(not(feature = "dwarf"), allow(unused_variables))]
 mod resolver;
