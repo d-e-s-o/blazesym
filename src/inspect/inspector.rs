@@ -253,8 +253,8 @@ mod tests {
         let _results = inspector.lookup(&Source::Elf(elf.clone()), &["factorial"]);
         let data2 = data();
         assert!(Rc::ptr_eq(
-            data1.dwarf.get().unwrap(),
-            data2.dwarf.get().unwrap()
+            data1.dwarf.get().unwrap().resolver(),
+            data2.dwarf.get().unwrap().resolver()
         ));
 
         // When changing whether we use debug symbols we should create a
@@ -264,7 +264,7 @@ mod tests {
         let _results = inspector.lookup(&Source::Elf(elf.clone()), &["factorial"]);
         let data3 = data();
         assert!(!Rc::ptr_eq(
-            data1.dwarf.get().unwrap(),
+            data1.dwarf.get().unwrap().resolver(),
             data3.elf.get().unwrap()
         ));
     }

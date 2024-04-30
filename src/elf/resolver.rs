@@ -1,8 +1,10 @@
+use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::ops::Deref as _;
 use std::path::Path;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 #[cfg(feature = "dwarf")]
@@ -11,6 +13,8 @@ use crate::file_cache::FileCache;
 use crate::inspect::FindAddrOpts;
 use crate::inspect::Inspect;
 use crate::inspect::SymInfo;
+use crate::log::debug;
+use crate::log::warn;
 use crate::once::OnceCell;
 use crate::symbolize::FindSymOpts;
 use crate::symbolize::Reason;
@@ -19,8 +23,12 @@ use crate::symbolize::Symbolize;
 use crate::symbolize::TranslateFileOffset;
 use crate::Addr;
 use crate::Error;
+use crate::ErrorExt as _;
+use crate::Mmap;
 use crate::Result;
 
+use super::debug_link::debug_link_crc32;
+use super::debug_link::read_debug_link;
 use super::ElfParser;
 
 #[derive(Clone, Debug)]
@@ -30,13 +38,135 @@ enum ElfBackend {
     Elf(Rc<ElfParser>), // ELF w/o DWARF
 }
 
+
+#[derive(Clone, Debug)]
+pub(crate) enum Dwarf {
+    /// A "direct" resolver.
+    Resolver(Rc<ElfResolver>),
+    /// A debug link.
+    Link {
+        /// The ELF parser of the linking entity.
+        parser: Rc<ElfParser>,
+        /// The ELF resolver for the link destination.
+        resolver: Rc<ElfResolver>,
+    },
+}
+
+impl Dwarf {
+    #[inline]
+    pub fn resolver(&self) -> &Rc<ElfResolver> {
+        match self {
+            Self::Resolver(resolver) | Self::Link { resolver, .. } => resolver,
+        }
+    }
+}
+
+
+/// Find a debug file in a list of default directories.
+///
+/// `linker` is the path to the file containing the debug link.
+///
+/// # Notes
+/// This function ignores any errors encountered.
+// TODO: Ideally this discovery functionality would be provided in the
+//       form of an iterator for better testability.
+fn find_debug_file(file: &OsStr, linker: &Path) -> Option<PathBuf> {
+    macro_rules! return_if_exists {
+        ($path:ident) => {
+            if $path.exists() {
+                debug!("found debug info at {}", $path.display());
+                return Some($path)
+            }
+        };
+    }
+
+    // First check known fixed locations.
+    let path = Path::new("/lib/debug/").join(file);
+    return_if_exists!(path);
+
+    let path = Path::new("/usr/lib/debug/").join(file);
+    return_if_exists!(path);
+
+    // Next check others that depend on the absolute `linker` (which may
+    // not be retrievable).
+    // TODO: Different heuristics may be possible here? Users
+    //       could want to pass in a directory instead?
+    if let Ok(mut path) = linker.canonicalize() {
+        let () = path.set_file_name(file);
+        return_if_exists!(path);
+
+        let mut ancestors = path.ancestors();
+        // Remove the file name, as we will always append it anyway.
+        let _ = ancestors.next();
+
+        for ancestor in ancestors {
+            let mut components = ancestor.components();
+            // Remove the root directory to make the path relative. That
+            // allows for joining to work as expected.
+            let _ = components.next();
+
+            // If the remaining path is empty we'd basically just cover
+            // one of the "fixed" cases above, so we can stop.
+            if components.as_path().as_os_str().is_empty() {
+                break
+            }
+
+            let path = Path::new("/usr/lib/debug/")
+                .join(components.as_path())
+                .join(file);
+            return_if_exists!(path);
+        }
+    }
+    None
+}
+
+
+fn create_debug_resolver(parser: Rc<ElfParser>) -> Result<Dwarf> {
+    let debug_syms = true;
+
+    if let Some((file, checksum)) = read_debug_link(&parser)? {
+        match find_debug_file(file, parser.path()) {
+            Some(path) => {
+                let mmap = Mmap::builder().open(&path).with_context(|| {
+                    format!("failed to open debug link destination `{}`", path.display())
+                })?;
+                let crc = debug_link_crc32(&mmap);
+                if crc != checksum {
+                    return Err(Error::with_invalid_data(format!(
+                        "debug link destination `{}` checksum does not match \
+                         expected one: {crc:x} (actual) != {checksum:x} (expected)",
+                        path.display()
+                    )))
+                }
+
+                let dst_parser = Rc::new(ElfParser::from_mmap(mmap, path));
+                let resolver = ElfResolver::from_parser(dst_parser.clone(), debug_syms)?;
+                let dwarf = Dwarf::Link {
+                    parser,
+                    resolver: Rc::new(resolver),
+                };
+                return Ok(dwarf)
+            }
+            None => warn!(
+                "debug link references destination `{}` which was not found in any known location",
+                Path::new(file).display(),
+            ),
+        }
+    }
+
+    let resolver = ElfResolver::from_parser(parser, debug_syms)?;
+    let dwarf = Dwarf::Resolver(Rc::new(resolver));
+    Ok(dwarf)
+}
+
+
 /// Resolver data associated with a specific source.
 #[derive(Clone, Debug)]
 pub(crate) struct ElfResolverData {
     /// A bare-bones ELF resolver.
     pub elf: OnceCell<Rc<ElfResolver>>,
     /// An ELF resolver with debug information enabled.
-    pub dwarf: OnceCell<Rc<ElfResolver>>,
+    pub dwarf: OnceCell<Dwarf>,
 }
 
 impl FileCache<ElfResolverData> {
@@ -46,53 +176,55 @@ impl FileCache<ElfResolverData> {
         debug_syms: bool,
     ) -> Result<&'slf Rc<ElfResolver>> {
         let (file, cell) = self.entry(path)?;
-        let resolver = if let Some(data) = cell.get() {
+        let data = if let Some(data) = cell.get() {
             if debug_syms {
-                data.dwarf.get_or_try_init(|| {
+                let _dwarf = data.dwarf.get_or_try_init(|| {
                     // SANITY: We *know* a `ElfResolverData` object is
                     //         present and given that we are
                     //         initializing the `dwarf` part of it, the
                     //         `elf` part *must* be present.
                     let parser = data.elf.get().unwrap().parser().clone();
-                    let resolver = ElfResolver::from_parser(parser, debug_syms)?;
-                    let resolver = Rc::new(resolver);
-                    Result::<_, Error>::Ok(resolver)
-                })?
+                    create_debug_resolver(parser)
+                })?;
             } else {
-                data.elf.get_or_try_init(|| {
+                let _resolver = data.elf.get_or_try_init(|| {
                     // SANITY: We *know* a `ElfResolverData` object is
                     //         present and given that we are
                     //         initializing the `elf` part of it, the
                     //         `dwarf` part *must* be present.
-                    let parser = data.dwarf.get().unwrap().parser().clone();
+                    let parser = match data.dwarf.get().unwrap() {
+                        Dwarf::Resolver(resolver) => resolver.parser().clone(),
+                        Dwarf::Link {
+                            parser,
+                            resolver: _,
+                        } => parser.clone(),
+                    };
                     let resolver = ElfResolver::from_parser(parser, debug_syms)?;
                     let resolver = Rc::new(resolver);
                     Result::<_, Error>::Ok(resolver)
-                })?
-            }
-            .clone()
+                })?;
+            };
+            data
         } else {
             let parser = Rc::new(ElfParser::open_file(file, path)?);
-            let resolver = ElfResolver::from_parser(parser, debug_syms)?;
-            Rc::new(resolver)
-        };
 
-        let data = cell.get_or_init(|| {
-            if debug_syms {
+            let data = if debug_syms {
                 ElfResolverData {
-                    dwarf: OnceCell::from(resolver),
+                    dwarf: OnceCell::from(create_debug_resolver(parser)?),
                     elf: OnceCell::new(),
                 }
             } else {
+                let resolver = ElfResolver::from_parser(parser, debug_syms)?;
                 ElfResolverData {
                     dwarf: OnceCell::new(),
-                    elf: OnceCell::from(resolver),
+                    elf: OnceCell::from(Rc::new(resolver)),
                 }
-            }
-        });
+            };
+            cell.get_or_init(|| data)
+        };
 
         let resolver = if debug_syms {
-            data.dwarf.get()
+            data.dwarf.get().map(Dwarf::resolver)
         } else {
             data.elf.get()
         };
