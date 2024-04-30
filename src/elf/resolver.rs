@@ -99,6 +99,24 @@ impl FileCache<ElfResolverData> {
         // SANITY: We made sure to create the desired resolver above.
         Ok(resolver.unwrap())
     }
+
+    /// Create a new [`ElfResolver`] given a shared [`ElfParser`].
+    ///
+    /// This functionality is a method (it doesn't have to be) on `FileCache`
+    /// (it conceptually doesn't have to belong to it) in an attempt to force
+    /// `ElfResolver` construction through `FileCache` objects, as that is the
+    /// intended usage anywhere outside this module. This way, we make it a very
+    /// intentional decision to create an `ElfResolver` circumventing the
+    /// `FileCache` as it allows us to keep the [`ElfResolver::from_parser`]
+    /// constructor as restricted as possible.
+    #[inline]
+    pub(crate) fn elf_resolver_from_parser(
+        &self,
+        parser: Rc<ElfParser>,
+        debug_syms: bool,
+    ) -> Result<ElfResolver> {
+        ElfResolver::from_parser(parser, debug_syms)
+    }
 }
 
 
@@ -118,7 +136,7 @@ impl ElfResolver {
         Self::from_parser(parser, true)
     }
 
-    pub(crate) fn from_parser(parser: Rc<ElfParser>, _debug_syms: bool) -> Result<Self> {
+    fn from_parser(parser: Rc<ElfParser>, _debug_syms: bool) -> Result<Self> {
         #[cfg(feature = "dwarf")]
         let backend = if _debug_syms {
             let dwarf = DwarfResolver::from_parser(parser)?;

@@ -12,7 +12,6 @@ use std::rc::Rc;
 #[cfg(feature = "breakpad")]
 use crate::breakpad::BreakpadResolver;
 use crate::elf::ElfParser;
-use crate::elf::ElfResolver;
 use crate::elf::ElfResolverData;
 use crate::file_cache::FileCache;
 #[cfg(feature = "gsym")]
@@ -170,18 +169,6 @@ impl<F> ApkDispatch for F where F: Fn(ApkMemberInfo<'_>) -> Result<Option<Box<dy
 pub trait ProcessDispatch: Fn(ProcessMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> {}
 
 impl<F> ProcessDispatch for F where F: Fn(ProcessMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> {}
-
-
-#[cfg(feature = "apk")]
-fn default_apk_dispatcher(info: ApkMemberInfo<'_>, debug_syms: bool) -> Result<Box<dyn Resolve>> {
-    // Create an Android-style binary-in-APK path for
-    // reporting purposes.
-    let apk_elf_path = create_apk_elf_path(info.apk_path, info.member_path)?;
-    let parser = Rc::new(ElfParser::from_mmap(info.member_mmap, Some(apk_elf_path)));
-    let resolver = ElfResolver::from_parser(parser, debug_syms)?;
-    let resolver = Box::new(resolver);
-    Ok(resolver)
-}
 
 
 /// Information about an address space member of a process.
@@ -519,6 +506,19 @@ impl Symbolizer {
     }
 
     #[cfg(feature = "apk")]
+    fn dispatch_apk(&self, info: ApkMemberInfo<'_>, debug_syms: bool) -> Result<Box<dyn Resolve>> {
+        // Create an Android-style binary-in-APK path for
+        // reporting purposes.
+        let apk_elf_path = create_apk_elf_path(info.apk_path, info.member_path)?;
+        let parser = Rc::new(ElfParser::from_mmap(info.member_mmap, Some(apk_elf_path)));
+        let resolver = self
+            .elf_cache
+            .elf_resolver_from_parser(parser, debug_syms)?;
+        let resolver = Box::new(resolver);
+        Ok(resolver)
+    }
+
+    #[cfg(feature = "apk")]
     fn create_apk_resolver<'slf>(
         &'slf self,
         apk: &zip::Archive,
@@ -554,10 +554,10 @@ impl Symbolizer {
                         if let Some(resolver) = (apk_dispatch)(info.clone())? {
                             resolver
                         } else {
-                            default_apk_dispatcher(info, debug_syms)?
+                            self.dispatch_apk(info, debug_syms)?
                         }
                     } else {
-                        default_apk_dispatcher(info, debug_syms)?
+                        self.dispatch_apk(info, debug_syms)?
                     };
 
                     Ok(resolver)
@@ -1305,6 +1305,7 @@ mod tests {
 
     use std::mem::transmute;
 
+    use crate::elf::ElfResolver;
     use crate::inspect;
     use crate::inspect::FindAddrOpts;
     use crate::symbolize;
@@ -1326,8 +1327,7 @@ mod tests {
         let test_elf = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
             .join("test-stable-addrs.bin");
-        let parser = Rc::new(ElfParser::open(&test_elf).unwrap());
-        let resolver = ElfResolver::from_parser(parser, false).unwrap();
+        let resolver = ElfResolver::open(test_elf).unwrap();
         let resolver = Resolver::Cached(&resolver);
         assert_ne!(format!("{resolver:?}"), "");
     }
