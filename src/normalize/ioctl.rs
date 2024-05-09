@@ -91,16 +91,11 @@ pub(crate) fn procmap_query(
         )
     };
     if rc < 0 {
-        let err = unsafe { *libc::__errno_location() };
-        if err == ENOTTY {
-            return Err(Error::with_unsupported(
-                "ioctl PROCFS_PROCMAP_QUERY is not supported",
-            ))
-        }
-        if err == ENOENT {
+        let err = io::Error::last_os_error();
+        if err.kind() == io::ErrorKind::NotFound {
             return Ok(None)
         }
-        return Err(Error::from(io::Error::from_raw_os_error(err)))
+        return Err(Error::from(err))
     }
 
     let path_buf = unsafe { path_buf.assume_init_ref() };
