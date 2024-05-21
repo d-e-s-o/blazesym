@@ -206,6 +206,22 @@ pub struct ProcessMemberInfo<'dat> {
 }
 
 
+/// The "flavor" of a dispatcher.
+#[derive(Debug)]
+#[non_exhaustive]
+enum DispatchFlavor {
+    /// The provided "dispatcher" is used as the primary dispatcher and only if
+    /// it fails to yield a result will the default dispatcher be tried as a
+    /// fallback.
+    Primary,
+    /// The provided "dispatcher" is used as the secondary dispatcher
+    /// ("fallback"), meaning that the default dispatcher is invoked first and
+    /// only if it didn't produce a result will the user provided one be
+    /// consulted.
+    Secondary,
+}
+
+
 /// A builder for configurable construction of [`Symbolizer`] objects.
 ///
 /// By default all features are enabled.
@@ -232,10 +248,10 @@ pub struct Builder {
     /// The "dispatch" function to use when symbolizing addresses
     /// mapping to members of an APK.
     #[cfg(feature = "apk")]
-    apk_dispatch: Option<Dbg<Box<dyn ApkDispatch>>>,
+    apk_dispatch: Option<(DispatchFlavor, Dbg<Box<dyn ApkDispatch>>)>,
     /// The "dispatch" function to use when symbolizing addresses
     /// mapping to members of a process.
-    process_dispatch: Option<Dbg<Box<dyn ProcessDispatch>>>,
+    process_dispatch: Option<(DispatchFlavor, Dbg<Box<dyn ProcessDispatch>>)>,
 }
 
 impl Builder {
@@ -307,21 +323,21 @@ impl Builder {
     /// mapping to members of an APK.
     #[cfg(feature = "apk")]
     #[cfg_attr(docsrs, doc(cfg(feature = "apk")))]
-    pub fn set_apk_dispatcher<D>(mut self, apk_dispatch: D) -> Self
+    pub fn set_apk_dispatcher<D>(mut self, apk_dispatch: D, flavor: DispatchFlavor) -> Self
     where
         D: ApkDispatch + 'static,
     {
-        self.apk_dispatch = Some(Dbg(Box::new(apk_dispatch)));
+        self.apk_dispatch = Some((flavor, Dbg(Box::new(apk_dispatch))));
         self
     }
 
     /// Set the "dispatch" function to use when symbolizing addresses
     /// mapping to members of a process.
-    pub fn set_process_dispatcher<D>(mut self, process_dispatch: D) -> Self
+    pub fn set_process_dispatcher<D>(mut self, process_dispatch: D, flavor: DispatchFlavor) -> Self
     where
         D: ProcessDispatch + 'static,
     {
-        self.process_dispatch = Some(Dbg(Box::new(process_dispatch)));
+        self.process_dispatch = Some((flavor, Dbg(Box::new(process_dispatch))));
         self
     }
 
@@ -590,8 +606,8 @@ pub struct Symbolizer {
     #[cfg(feature = "dwarf")]
     debug_dirs: Vec<PathBuf>,
     #[cfg(feature = "apk")]
-    apk_dispatch: Option<Dbg<Box<dyn ApkDispatch>>>,
-    process_dispatch: Option<Dbg<Box<dyn ProcessDispatch>>>,
+    apk_dispatch: Option<(DispatchFlavor, Dbg<Box<dyn ApkDispatch>>)>,
+    process_dispatch: Option<(DispatchFlavor, Dbg<Box<dyn ProcessDispatch>>)>,
 }
 
 impl Symbolizer {
@@ -749,11 +765,22 @@ impl Symbolizer {
                         _non_exhaustive: (),
                     };
 
-                    let resolver = if let Some(Dbg(apk_dispatch)) = &self.apk_dispatch {
-                        if let Some(resolver) = (apk_dispatch)(info.clone())? {
-                            resolver
-                        } else {
-                            default_apk_dispatcher(info, debug_dirs)?
+                    let resolver = if let Some((flavor, Dbg(apk_dispatch))) = &self.apk_dispatch {
+                        match flavor {
+                            DispatchFlavor::Primary => {
+                                if let Some(resolver) = (apk_dispatch)(info.clone())? {
+                                    resolver
+                                } else {
+                                    default_apk_dispatcher(info, debug_dirs)?
+                                }
+                            }
+                            DispatchFlavor::Secondary => {
+                                if let Some(resolver) = default_apk_dispatcher(info, debug_dirs)? {
+                                    resolver
+                                } else {
+                                    (apk_dispatch)(info.clone())?
+                                }
+                            }
                         }
                     } else {
                         default_apk_dispatcher(info, debug_dirs)?
@@ -828,7 +855,7 @@ impl Symbolizer {
         range: Range<Addr>,
         path_name: &PathName,
     ) -> Result<Option<&'slf dyn Resolve>> {
-        if let Some(Dbg(process_dispatch)) = &self.process_dispatch {
+        if let Some((_flavor, Dbg(process_dispatch))) = &self.process_dispatch {
             let resolver = self
                 .process_cache
                 .get_or_try_insert(path_name.clone(), || {
