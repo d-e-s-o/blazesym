@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
+use std::fs::read_link;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -8,6 +9,7 @@ use std::io::Error;
 use std::io::ErrorKind;
 use std::io::Read;
 use std::ops::Range;
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::util;
@@ -111,7 +113,7 @@ impl Debug for MapsEntry {
 
 
 /// Parse a line of a proc maps file.
-fn parse_maps_line<'line>(line: &'line [u8], pid: Pid) -> Result<MapsEntry> {
+fn parse_maps_line<'line>(line: &'line [u8], pid: Pid, root: &Path) -> Result<MapsEntry> {
     let full_line = line;
 
     let split_once_opt = |line: &'line [u8]| -> Option<(&'line [u8], &'line [u8])> {
@@ -228,6 +230,7 @@ struct MapsEntryIter<R> {
     reader: R,
     line: Vec<u8>,
     pid: Pid,
+    root: PathBuf,
 }
 
 impl<R> Iterator for MapsEntryIter<R>
@@ -246,7 +249,7 @@ where
                     // There shouldn't be any empty lines, but we'd just ignore them. We
                     // need to trim anyway.
                     if !self.line.is_empty() {
-                        let result = parse_maps_line(&self.line, self.pid);
+                        let result = parse_maps_line(&self.line, self.pid, &self.root);
                         break Some(result)
                     }
                 }
@@ -257,7 +260,11 @@ where
 
 
 /// Parse a proc maps file from the provided reader.
-pub(crate) fn parse_file<R>(reader: R, pid: Pid) -> impl Iterator<Item = Result<MapsEntry>>
+pub(crate) fn parse_file<R>(
+    reader: R,
+    pid: Pid,
+    root: PathBuf,
+) -> impl Iterator<Item = Result<MapsEntry>>
 where
     R: Read,
 {
@@ -267,15 +274,19 @@ where
         reader: BufReader::with_capacity(16 * 1024, reader),
         line: Vec::new(),
         pid,
+        root,
     }
 }
 
 /// Parse the maps file for the process with the given PID.
 pub(crate) fn parse(pid: Pid) -> Result<impl Iterator<Item = Result<MapsEntry>>> {
+    let root = format!("/proc/{pid}/root");
+    let root =
+        read_link(&root).with_context(|| format!("failed to read symbolic link `{}`", root))?;
     let path = format!("/proc/{pid}/maps");
     let file =
         File::open(&path).with_context(|| format!("failed to open proc maps file {path}"))?;
-    let iter = parse_file(file, pid);
+    let iter = parse_file(file, pid, root);
     Ok(iter)
 }
 
@@ -377,13 +388,15 @@ mod tests {
 ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]
 "#;
 
-        let entries = parse_file(lines.as_bytes(), Pid::Slf);
+        let root = PathBuf::from("<invalid>");
+        let entries = parse_file(lines.as_bytes(), Pid::Slf, root.clone());
         let () = entries.for_each(|entry| {
             let _entry = entry.unwrap();
         });
 
         // Parse the first (actual) line.
-        let entry = parse_maps_line(lines.lines().next().unwrap().as_bytes(), Pid::Slf).unwrap();
+        let entry =
+            parse_maps_line(lines.lines().next().unwrap().as_bytes(), Pid::Slf, &root).unwrap();
         assert_eq!(entry.range.start, 0x400000);
         assert_eq!(entry.range.end, 0x401000);
         assert_eq!(
@@ -397,7 +410,8 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
             Path::new("/proc/self/map_files/400000-401000")
         );
 
-        let entry = parse_maps_line(lines.lines().nth(6).unwrap().as_bytes(), Pid::Slf).unwrap();
+        let entry =
+            parse_maps_line(lines.lines().nth(6).unwrap().as_bytes(), Pid::Slf, &root).unwrap();
         assert_eq!(entry.range.start, 0x55f4a95cb000);
         assert_eq!(entry.range.end, 0x55f4a95cf000);
         assert_eq!(entry.mode, 0b1011);
@@ -413,7 +427,8 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
         );
         assert_eq!(entry.path_name.as_ref().unwrap().as_component(), None);
 
-        let entry = parse_maps_line(lines.lines().nth(10).unwrap().as_bytes(), Pid::Slf).unwrap();
+        let entry =
+            parse_maps_line(lines.lines().nth(10).unwrap().as_bytes(), Pid::Slf, &root).unwrap();
         assert_eq!(entry.range.start, 0x55f4aa379000);
         assert_eq!(entry.range.end, 0x55f4aa39a000);
         assert_eq!(entry.mode, 0b1101);
@@ -423,7 +438,8 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
         );
         assert_eq!(entry.path_name.as_ref().unwrap().as_path(), None);
 
-        let entry = parse_maps_line(lines.lines().nth(12).unwrap().as_bytes(), Pid::Slf).unwrap();
+        let entry =
+            parse_maps_line(lines.lines().nth(12).unwrap().as_bytes(), Pid::Slf, &root).unwrap();
         assert_eq!(entry.mode, 0b1001);
         assert_eq!(
             entry
@@ -436,7 +452,8 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
             Path::new("/proc/self/map_files/7f2321e00000-7f2321e37000")
         );
 
-        let entry = parse_maps_line(lines.lines().nth(23).unwrap().as_bytes(), Pid::Slf).unwrap();
+        let entry =
+            parse_maps_line(lines.lines().nth(23).unwrap().as_bytes(), Pid::Slf, &root).unwrap();
         assert_eq!(entry.range.start, 0x7fa7bb5fa000);
         assert_eq!(entry.range.end, 0x7fa7bb602000);
         assert_eq!(entry.path_name, None);
@@ -445,6 +462,7 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
     /// Check that we error out as expected on malformed proc maps lines.
     #[test]
     fn malformed_proc_maps_lines() {
+        let root = PathBuf::from("<invalid>");
         let lines = [
             b"7fa7bb75a000+7fa7bb75c000".as_slice(),
             b"7fa7bb75a000-7fa7bb75c000".as_slice(),
@@ -460,7 +478,7 @@ ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsysca
         ];
 
         let () = lines.iter().for_each(|line| {
-            let _err = parse_maps_line(line, Pid::Slf).unwrap_err();
+            let _err = parse_maps_line(line, Pid::Slf, &root).unwrap_err();
         });
     }
 

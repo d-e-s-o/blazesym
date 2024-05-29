@@ -293,9 +293,10 @@ mod tests {
 "#;
 
             let pid = Pid::Slf;
+            let root = PathBuf::from("<invalid>");
             let addrs = [unknown_addr as Addr];
 
-            let entries = maps::parse_file(maps.as_bytes(), pid)
+            let entries = maps::parse_file(maps.as_bytes(), pid, root)
                 .filter(|result| result.as_ref().map(maps::filter_relevant).unwrap_or(true));
             let reader = NoBuildIdReader;
             let mut handler = NormalizationHandler::new(&reader, addrs.len());
