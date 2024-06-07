@@ -1,4 +1,7 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::File;
+use std::io;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::path::PathBuf;
@@ -10,7 +13,7 @@ use crate::ErrorExt as _;
 use crate::Result;
 
 
-#[derive(Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 // `libc` has deprecated `time_t` usage on `musl`. See
 // https://github.com/rust-lang/libc/issues/1848
 #[cfg_attr(target_env = "musl", allow(deprecated))]
@@ -44,13 +47,10 @@ struct EntryMeta {
 }
 
 impl EntryMeta {
-    /// Create a new [`EntryMeta`] object. If `stat` is [`None`] file
+    /// Create a new [`EntryMeta`] object. If `meta` is [`None`] file
     /// modification times and other meta data are effectively ignored.
-    fn new(path: PathBuf, stat: Option<&libc::stat>) -> Self {
-        Self {
-            path,
-            meta: stat.map(FileMeta::from),
-        }
+    fn new(path: PathBuf, meta: Option<FileMeta>) -> Self {
+        Self { path, meta }
     }
 }
 
@@ -101,6 +101,7 @@ impl<T> Builder<T> {
 
         FileCache {
             cache: InsertMap::new(),
+            most_recent: RefCell::new(HashMap::new()),
             auto_reload,
         }
     }
@@ -127,6 +128,12 @@ pub(crate) struct FileCache<T> {
     /// The map we use for associating file meta data with user-defined
     /// data.
     cache: InsertMap<EntryMeta, Entry<T>>,
+    /// A mapping from path to the most recently used `FileMeta` object.
+    ///
+    /// Having this data available allows us to still look up the data
+    /// associated with a deleted (but still opened) file.
+    // TODO: It may be better to fold this member into `cache`, somehow.
+    most_recent: RefCell<HashMap<PathBuf, Option<FileMeta>>>,
     /// Whether or not to automatically reload files that were updated
     /// since the last open.
     auto_reload: bool,
@@ -141,24 +148,38 @@ impl<T> FileCache<T> {
 
     /// Retrieve an entry for the file at the given `path`.
     pub(crate) fn entry(&self, path: &Path) -> Result<(&File, &OnceCell<T>)> {
-        let stat = if self.auto_reload {
-            let stat = stat(path).with_context(|| format!("failed to stat {}", path.display()))?;
-            Some(stat)
+        let path = path.to_path_buf();
+        let file_meta = if self.auto_reload {
+            match stat(&path) {
+                Ok(stat) => Some(FileMeta::from(&stat)),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    self.most_recent.borrow().get(&path).cloned().flatten()
+                }
+                Err(err) => {
+                    return Err(err).with_context(|| format!("failed to stat `{}`", path.display()))
+                }
+            }
         } else {
             None
         };
 
-        let meta = EntryMeta::new(path.to_path_buf(), stat.as_ref());
+        let meta = EntryMeta::new(path.to_path_buf(), file_meta);
         let entry = self.cache.get_or_try_insert(meta, || {
             // We may end up associating this file with a potentially
             // outdated `stat` (which could have changed), but the only
             // consequence is that we'd create a new entry again in the
             // future. On the bright side, we save one `stat` call.
-            let file = File::open(path)
-                .with_context(|| format!("failed to open file {}", path.display()))?;
+            let file = File::open(&path)
+                .with_context(|| format!("failed to open file `{}`", path.display()))?;
             let entry = Entry::new(file);
             Ok(entry)
         })?;
+
+        let _new = self
+            .most_recent
+            .borrow_mut()
+            .entry(path)
+            .or_insert(file_meta);
 
         Ok((&entry.file, &entry.value))
     }
@@ -210,6 +231,29 @@ mod tests {
 
         {
             let (_file, cell) = cache.entry(tmpfile.path()).unwrap();
+            assert_eq!(cell.get(), Some(&42));
+        }
+    }
+
+    /// Check that we find a cached entry even if the underlying file
+    /// has been deleted.
+    #[test]
+    fn lookup_deleted() {
+        let cache = FileCache::<usize>::default();
+        let tmpfile = NamedTempFile::new().unwrap();
+
+        {
+            let (_file, cell) = cache.entry(tmpfile.path()).unwrap();
+            assert_eq!(cell.get(), None);
+
+            let () = cell.set(42).unwrap();
+        }
+
+        let path = tmpfile.path().to_path_buf();
+        let () = drop(tmpfile);
+
+        {
+            let (_file, cell) = cache.entry(&path).unwrap();
             assert_eq!(cell.get(), Some(&42));
         }
     }
