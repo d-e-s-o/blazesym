@@ -24,12 +24,11 @@ use super::Reason;
 /// Make a [`UserMeta::Elf`] variant.
 fn make_elf_meta<'src>(
     path: &Path,
-    maps_file: &Path,
     build_id_reader: &dyn BuildIdReader<'src>,
 ) -> Result<UserMeta<'src>> {
     let elf = Elf {
         path: path.to_path_buf(),
-        build_id: build_id_reader.read_build_id(maps_file)?,
+        build_id: build_id_reader.read_build_id(path)?,
         _non_exhaustive: (),
     };
     let meta = UserMeta::Elf(elf);
@@ -191,7 +190,7 @@ impl Handler<Reason> for NormalizationHandler<'_, '_> {
                         file_off,
                         path,
                         &mut self.meta_lookup,
-                        || make_elf_meta(path, &entry_path.maps_file, self.build_id_reader),
+                        || make_elf_meta(path, self.build_id_reader),
                     ),
                 }
             }

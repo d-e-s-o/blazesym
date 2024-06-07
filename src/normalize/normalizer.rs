@@ -457,10 +457,16 @@ mod tests {
             let output = normalized.outputs[0];
             assert_eq!(output.0, sym.addr);
             let meta = &normalized.meta[output.1].elf().unwrap();
-            assert_eq!(
-                meta.build_id,
-                Some(read_elf_build_id(&test_so).unwrap().unwrap())
-            );
+            if use_map_files {
+                assert_eq!(
+                    meta.build_id,
+                    Some(read_elf_build_id(&test_so).unwrap().unwrap())
+                );
+            } else {
+                // If we are not using the `map_files` entry we won't be
+                // able to get a build ID.
+                assert_eq!(meta.build_id, None)
+            }
         }
 
         for cache_build_ids in [true, false] {
