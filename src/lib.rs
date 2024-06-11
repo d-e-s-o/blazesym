@@ -31,6 +31,7 @@
 //! [tracing.rs]: https://tracing.rs
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(feature = "nightly", feature(core_intrinsics))]
 #![cfg_attr(feature = "nightly", feature(test))]
 #![cfg_attr(
     not(all(
