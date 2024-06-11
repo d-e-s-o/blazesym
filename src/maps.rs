@@ -2,6 +2,8 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::fs::File;
+#[cfg(feature = "nightly")]
+use std::intrinsics::prefetch_read_data;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Error;
@@ -246,6 +248,8 @@ where
                     // There shouldn't be any empty lines, but we'd just ignore them. We
                     // need to trim anyway.
                     if !self.line.is_empty() {
+                        #[cfg(feature = "nightly")]
+                        let () = unsafe { prefetch_read_data(line.as_ptr(), 3) };
                         let result = parse_maps_line(&self.line, self.pid);
                         break Some(result)
                     }
