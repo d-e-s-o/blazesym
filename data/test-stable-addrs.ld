@@ -63,7 +63,14 @@ SECTIONS {
   .debug_str_offsets 0 : { *(.debug_str_offsets) }
   .debug_sup      0 : { *(.debug_sup) }
 
+  /* Seemingly some other GNU extension. */
+  .debug_gnu_pubnames 0: { *(.debug_gnu_pubnames) }
+  .debug_gnu_pubtypes 0: { *(.debug_gnu_pubtypes) }
+
+
+  /*
   /DISCARD/ : {
     *(.*)
   }
+    */
 }
