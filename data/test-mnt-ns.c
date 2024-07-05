@@ -73,6 +73,15 @@ int main(int argc, char **argv) {
     return err;
   }
 
+  /* Recursively set the mount namespace to private, so caller can't see.
+   */
+  rc = mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL);
+  if (rc != 0) {
+    err = errno;
+    fprintf(stderr, "mount failed: %s (errno: %d)\n", strerror(err), err);
+    return err;
+  }
+
   /* Create a temporary directory (now already inside this mount
    * namespace) and mount a ramdisk in there.
    */
