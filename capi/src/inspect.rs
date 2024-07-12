@@ -172,18 +172,36 @@ pub struct blaze_sym_info {
 }
 
 
+/// Information about looked up symbols.
+///
+/// Instances of [`blaze_sym_infos`] are returned by any of the
+/// `blaze_inspect_syms_*` functions. They should be freed by calling
+/// [`blaze_sym_infos_free`].
+#[repr(C)]
+#[derive(Debug)]
+pub struct blaze_sym_infos {
+    /// The number of symbols being reported.
+    pub cnt: usize,
+    /// The symbols corresponding to input addresses.
+    ///
+    /// Symbolization happens based on the ordering of (input) addresses.
+    /// Therefore, every input address has an associated symbol.
+    pub syms: [blaze_sym_info; 0],
+}
+
+
 /// Convert [`SymInfo`] objects as returned by
 /// [`Symbolizer::find_addrs`] to a C array.
-fn convert_syms_list_to_c(syms_list: Vec<Vec<SymInfo>>) -> *const *const blaze_sym_info {
+fn convert_syms_list_to_c(syms_list: Vec<Vec<SymInfo>>) -> *const blaze_sym_infos {
     let mut sym_cnt = 0;
-    let mut str_buf_sz = 0;
+    let mut strtab_size = 0;
 
     for syms in &syms_list {
         sym_cnt += syms.len() + 1;
         for sym in syms {
-            str_buf_sz += sym.name.len() + 1;
+            strtab_size += sym.name.len() + 1;
             if let Some(fname) = sym.obj_file_name.as_ref() {
-                str_buf_sz += AsRef::<OsStr>::as_ref(fname.deref()).as_bytes().len() + 1;
+                strtab_size += AsRef::<OsStr>::as_ref(fname.deref()).as_bytes().len() + 1;
             }
         }
     }
@@ -192,7 +210,7 @@ fn convert_syms_list_to_c(syms_list: Vec<Vec<SymInfo>>) -> *const *const blaze_s
         / mem::size_of::<u64>()
         * mem::size_of::<u64>();
     let sym_buf_sz = mem::size_of::<blaze_sym_info>() * sym_cnt;
-    let buf_size = mem::size_of::<u64>() + array_sz + sym_buf_sz + str_buf_sz;
+    let buf_size = mem::size_of::<u64>() + array_sz + sym_buf_sz + strtab_size;
     let raw_buf_with_sz = unsafe { alloc(Layout::from_size_align(buf_size, 8).unwrap()) };
     if raw_buf_with_sz.is_null() {
         return ptr::null()
@@ -270,7 +288,7 @@ fn convert_syms_list_to_c(syms_list: Vec<Vec<SymInfo>>) -> *const *const blaze_s
 ///
 /// On success, returns an array with `name_cnt` elements. Each such element, in
 /// turn, is NULL terminated array comprised of each symbol found. The returned
-/// object should be released using [`blaze_inspect_syms_free`] once it is no
+/// object should be released using [`blaze_sym_infos_free`] once it is no
 /// longer needed.
 ///
 /// On error, the function returns `NULL` and sets the thread's last error to
@@ -287,7 +305,7 @@ pub unsafe extern "C" fn blaze_inspect_syms_elf(
     src: *const blaze_inspect_elf_src,
     names: *const *const c_char,
     name_cnt: usize,
-) -> *const *const blaze_sym_info {
+) -> *const blaze_sym_infos {
     if !input_zeroed!(src, blaze_inspect_elf_src) {
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null()
@@ -333,7 +351,7 @@ pub unsafe extern "C" fn blaze_inspect_syms_elf(
 ///
 /// The pointer must be returned by [`blaze_inspect_syms_elf`].
 #[no_mangle]
-pub unsafe extern "C" fn blaze_inspect_syms_free(syms: *const *const blaze_sym_info) {
+pub unsafe extern "C" fn blaze_sym_infos_free(syms: *const blaze_sym_infos) {
     if syms.is_null() {
         return
     }
@@ -516,7 +534,7 @@ mod tests {
                 }
             }
 
-            let () = unsafe { blaze_inspect_syms_free(ptr) };
+            let () = unsafe { blaze_sym_infos_free(ptr) };
         }
 
         // Test conversion of no symbols.
@@ -650,7 +668,7 @@ mod tests {
         );
         assert_eq!(sym_info.addr, 0x2000100);
 
-        let () = unsafe { blaze_inspect_syms_free(result) };
+        let () = unsafe { blaze_sym_infos_free(result) };
         let () = unsafe { blaze_inspector_free(inspector) };
     }
 }
