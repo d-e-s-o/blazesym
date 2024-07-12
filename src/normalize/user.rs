@@ -26,26 +26,26 @@ fn make_elf_meta<'src>(
     path: &Path,
     maps_file: &Path,
     build_id_reader: &dyn BuildIdReader<'src>,
-) -> Result<UserMeta<'src>> {
+) -> UserMeta<'src> {
     let elf = Elf {
         path: path.to_path_buf(),
         build_id: build_id_reader.read_build_id(maps_file),
         _non_exhaustive: (),
     };
     let meta = UserMeta::Elf(elf);
-    Ok(meta)
+    meta
 }
 
 
 /// Make a [`UserMeta::Apk`] variant.
 #[cfg(feature = "apk")]
-fn make_apk_meta(path: &Path) -> Result<UserMeta<'static>> {
+fn make_apk_meta(path: &Path) -> UserMeta<'static> {
     let apk = Apk {
         path: path.to_path_buf(),
         _non_exhaustive: (),
     };
     let meta = UserMeta::Apk(apk);
-    Ok(meta)
+    meta
 }
 
 
@@ -89,14 +89,13 @@ impl<'src> UserOutput<'src> {
         key: &Path,
         meta_lookup: &mut HashMap<PathBuf, usize>,
         create_meta: F,
-    ) -> Result<()>
-    where
-        F: FnOnce() -> Result<UserMeta<'src>>,
+    ) where
+        F: FnOnce() -> UserMeta<'src>,
     {
         let meta_idx = if let Some(meta_idx) = meta_lookup.get(key) {
             *meta_idx
         } else {
-            let meta = create_meta()?;
+            let meta = create_meta();
             let meta_idx = self.meta.len();
             let () = self.meta.push(meta);
             let _ref = meta_lookup.insert(key.to_path_buf(), meta_idx);
@@ -104,7 +103,6 @@ impl<'src> UserOutput<'src> {
         };
 
         let () = self.outputs.push((file_offset, meta_idx));
-        Ok(())
     }
 }
 
@@ -114,7 +112,7 @@ pub(crate) trait Handler<D = ()> {
     fn handle_unknown_addr(&mut self, addr: Addr, data: D);
 
     /// Handle an address residing in the provided [`MapsEntry`].
-    fn handle_entry_addr(&mut self, addr: Addr, entry: &MapsEntry) -> Result<()>;
+    fn handle_entry_addr(&mut self, addr: Addr, entry: &MapsEntry);
 }
 
 
@@ -161,7 +159,7 @@ impl Handler<Reason> for NormalizationHandler<'_, '_> {
             .add_unknown_addr(addr, reason, &mut self.unknown_cache);
     }
 
-    fn handle_entry_addr(&mut self, addr: Addr, entry: &MapsEntry) -> Result<()> {
+    fn handle_entry_addr(&mut self, addr: Addr, entry: &MapsEntry) {
         match &entry.path_name {
             Some(PathName::Path(entry_path)) => {
                 let path = if self.map_files {
@@ -190,16 +188,10 @@ impl Handler<Reason> for NormalizationHandler<'_, '_> {
                     ),
                 }
             }
-            Some(PathName::Component(..)) => {
-                let () = self.handle_unknown_addr(addr, Reason::Unsupported);
-                Ok(())
-            }
+            Some(PathName::Component(..)) => self.handle_unknown_addr(addr, Reason::Unsupported),
             // We could still normalize the address and report it, but without a
             // path nobody could really do anything with it.
-            None => {
-                let () = self.handle_unknown_addr(addr, Reason::MissingComponent);
-                Ok(())
-            }
+            None => self.handle_unknown_addr(addr, Reason::MissingComponent),
         }
     }
 }

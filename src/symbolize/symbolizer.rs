@@ -480,7 +480,7 @@ impl normalize::Handler<Reason> for SymbolizeHandler<'_> {
         let () = self.all_symbols.push(Symbolized::Unknown(reason));
     }
 
-    fn handle_entry_addr(&mut self, addr: Addr, entry: &MapsEntry) -> Result<()> {
+    fn handle_entry_addr(&mut self, addr: Addr, entry: &MapsEntry) {
         if let Some(path_name) = &entry.path_name {
             if let Some(resolver) = self
                 .symbolizer
@@ -827,7 +827,7 @@ impl Symbolizer {
         &'slf self,
         range: Range<Addr>,
         path_name: &PathName,
-    ) -> Result<Option<&'slf dyn Resolve>> {
+    ) -> Option<&'slf dyn Resolve> {
         if let Some(Dbg(process_dispatch)) = &self.process_dispatch {
             let resolver = self
                 .process_cache
@@ -839,9 +839,9 @@ impl Symbolizer {
                     };
                     (process_dispatch)(info)
                 })?;
-            Ok(resolver.as_deref())
+            resolver.as_deref()
         } else {
-            Ok(None)
+            None
         }
     }
 
