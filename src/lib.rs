@@ -71,6 +71,7 @@ pub mod normalize;
 mod pathlike;
 mod perf_map;
 mod pid;
+mod runtime;
 pub mod symbolize;
 #[cfg(any(test, feature = "test"))]
 mod test_helper;
