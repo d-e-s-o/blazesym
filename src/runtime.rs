@@ -1,4 +1,5 @@
 use std::hint::unreachable_unchecked;
+use std::marker::PhantomData;
 use std::thread;
 use std::thread::JoinHandle;
 
@@ -11,12 +12,13 @@ trait Handle<T> {
 }
 
 trait Scheduler {
+    type Scope<'x>;
     type Handle<T>: Handle<T>;
 
-    fn schedule<F, T>(&self, f: F) -> Self::Handle<T>
+    fn schedule<'scope, F, T>(&self, scope: Self::Scope<'scope>, f: F) -> Self::Handle<T>
     where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static;
+        F: FnOnce() -> T + Send + 'scope,
+        T: Send + 'scope;
 }
 
 struct ImmediateHandle<T>(T);
@@ -31,12 +33,13 @@ impl<T> Handle<T> for ImmediateHandle<T> {
 struct SerialRunner;
 
 impl Scheduler for SerialRunner {
+    type Scope<'x> = &'x ();
     type Handle<T> = ImmediateHandle<T>;
 
-    fn schedule<F, T>(&self, f: F) -> Self::Handle<T>
+    fn schedule<'scope, F, T>(&self, _scope: Self::Scope<'scope>, f: F) -> Self::Handle<T>
     where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'scope,
+        T: Send + 'scope,
     {
         // Just execute the function here and there and return the result.
         ImmediateHandle(f())
@@ -53,12 +56,13 @@ impl<T> Handle<T> for JoinHandle<T> {
 struct DumbThreadedScheduler;
 
 impl Scheduler for DumbThreadedScheduler {
+    type Scope<'x> = &'static ();
     type Handle<T> = JoinHandle<T>;
 
-    fn schedule<F, T>(&self, f: F) -> Self::Handle<T>
+    fn schedule<'scope, F, T>(&self, _scope: Self::Scope<'scope>, f: F) -> Self::Handle<T>
     where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'scope,
+        T: Send + 'scope,
     {
         thread::spawn(f)
     }
@@ -69,19 +73,21 @@ enum HandleOrResolved<H, R> {
     Resolved(R),
 }
 
-struct Promise<T> {
+struct Promise<'scope, T> {
     value: HandleOrResolved<<GlobalScheduler as Scheduler>::Handle<T>, T>,
+    _phantom: PhantomData<&'scope ()>
 }
 
-impl<T> Promise<T> {
-    pub fn new<F>(f: F) -> Self
+impl<'scope, T> Promise<'scope, T> {
+    pub fn new<F>(scope: &'scope (), f: F) -> Self
     where
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        let handle = GLOBAL_SCHEDULER.schedule(f);
+        let handle = GLOBAL_SCHEDULER.schedule(scope, f);
         Self {
             value: HandleOrResolved::Handle(Some(handle)),
+            _phantom: PhantomData,
         }
     }
 
