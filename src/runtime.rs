@@ -105,18 +105,29 @@ impl<T> Promise<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        thread::{current, sleep},
-        time::Duration,
-    };
+    use std::str;
+    use std::sync::Arc;
+    use std::thread::current;
+    use std::thread::sleep;
+    use std::time::Duration;
 
     use super::*;
 
     type Future<T> = Promise<T>;
 
+    fn parse(data: &[u8]) -> &str {
+        str::from_utf8(data).unwrap()
+    }
+
+
     #[test]
     fn it_works() {
+        let data = b"hallihallo".to_vec();
+        let data = Arc::new(data);
+        let slice = data.as_slice();
+
         let mut future1 = Future::new(|| {
+            let _s = parse(slice);
             let name = current()
                 .name()
                 .map(ToString::to_string)
