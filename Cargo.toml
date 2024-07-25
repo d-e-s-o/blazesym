@@ -59,6 +59,8 @@ demangle = ["dep:cpp_demangle", "dep:rustc-demangle"]
 dwarf = ["dep:gimli"]
 # Enable this feature to enable Gsym support.
 gsym = []
+# Enable multi-threaded code paths.
+multi-threaded = []
 # Emit `tracing` traces and configure spans. User code is responsible for
 # subscribing.
 tracing = ["dep:tracing"]
