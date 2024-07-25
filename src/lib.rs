@@ -73,6 +73,7 @@ mod mmap;
 pub mod normalize;
 mod once;
 mod pid;
+mod runtime;
 pub mod symbolize;
 #[cfg(test)]
 mod test_helper;
