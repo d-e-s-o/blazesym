@@ -440,7 +440,7 @@ fn inline_address_range(input: &[u8]) -> IResult<&[u8], (u64, u32), VerboseError
 ///
 /// An INLINE record has the form `INLINE <inline_nest_level> <call_site_line>
 /// <call_site_file_id> <origin_id> [<addr> <size>]+`.
-fn inline_line(input: &[u8]) -> IResult<&[u8], impl Iterator<Item = Inlinee>, VerboseError<&[u8]>> {
+fn inline_line(input: &[u8]) -> IResult<&[u8], impl ExactSizeIterator<Item = Inlinee>, VerboseError<&[u8]>> {
     let (input, _) = terminated(tag("INLINE"), space1)(input)?;
     let (input, (depth, call_line, call_file, origin_id)) = cut(tuple((
         terminated(decimal_u32, space1),
@@ -697,11 +697,26 @@ impl SymbolParser {
         }
         if input.starts_with(b"INLINE ") {
             let (input, new_inlinees) = inline_line(input)?;
-            inlinees.extend(new_inlinees);
+            let () = inlinees.reserve(new_inlinees.len());
+
+            for new_inlinee in new_inlinees {
+                let result = inlinees
+                    .binary_search_by_key(&(new_inlinee.depth, new_inlinee.addr), |x| {
+                        (x.depth, x.addr)
+                    });
+                let insert_idx = match result {
+                    Ok(idx) | Err(idx) => idx,
+                };
+                let () = inlinees.insert(insert_idx, new_inlinee);
+            }
             return Ok((input, ()))
         }
         let (input, line) = func_line_data(input)?;
-        lines.push(line);
+        let result = lines.binary_search_by_key(&(line.addr, line.size), |x| (x.addr, x.size));
+        let insert_idx = match result {
+            Ok(idx) | Err(idx) => idx,
+        };
+        let () = lines.insert(insert_idx, line);
         Ok((input, ()))
     }
 
@@ -709,11 +724,7 @@ impl SymbolParser {
     /// We now have all the sublines, so it's complete.
     fn finish_item(&mut self, item: Line) {
         match item {
-            Line::Function(mut cur) => {
-                let () = cur.lines.sort_by_key(|x| (x.addr, x.size));
-                let () = cur.inlinees.sort_by_key(|x| (x.depth, x.addr));
-                let () = self.functions.push(cur);
-            }
+            Line::Function(cur) => self.functions.push(cur),
             Line::StackCfi(..) => {}
             _ => {
                 unreachable!()
