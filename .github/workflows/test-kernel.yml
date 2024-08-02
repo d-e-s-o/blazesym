@@ -51,7 +51,5 @@ jobs:
       - name: Test
         uses: danobi/vmtest-action@v0.6
         with:
-          kernel_url: https://github.com/danobi/vmtest/releases/download/test_assets/bzImage-v6.2-empty
-          #kernel: bzImage
-          #command: "/bin/bash -c ${{ github.workspace }}/main.sh"
-          command: "/bin/bash -c zcat /proc/config.gz"
+          kernel: bzImage
+          command: "/bin/bash -c ${{ github.workspace }}/main.sh"

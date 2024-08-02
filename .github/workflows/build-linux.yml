@@ -14,13 +14,12 @@ jobs:
     outputs:
       kernel-artifact-id: ${{ steps.upload-linux-kernel.outputs.artifact-id }}
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/cache/restore@v4
         id: restore-cached-kernel
         with:
           path: build/arch/x86/boot/bzImage
-          key: linux-kernel
-      - if: steps.restore-cached-kernel.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
+          key: linux-kernel-${{ hashFiles('data/config') }}
       - if: steps.restore-cached-kernel.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         with:
@@ -52,7 +51,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: build/arch/x86/boot/bzImage
-          key: linux-kernel
+          key: linux-kernel-${{ hashFiles('data/config') }}
       - uses: actions/upload-artifact@v4
         id: upload-linux-kernel
         with:
