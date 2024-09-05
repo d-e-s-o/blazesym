@@ -58,3 +58,5 @@ jobs:
   build-artifacts:
     uses: ./.github/workflows/build-cli.yml
     secrets: inherit
+    with:
+      upload: true

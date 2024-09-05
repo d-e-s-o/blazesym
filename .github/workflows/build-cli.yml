@@ -2,6 +2,12 @@ name: Build
 
 on:
   workflow_call:
+  inputs:
+    upload:
+      description: 'Whether to upload created artifacts to the current release'
+      default: false
+      required: false
+      type: boolean
   workflow_dispatch:
 
 jobs:
@@ -29,3 +35,8 @@ jobs:
         with:
           name: blazecli-${{ matrix.target }}
           path: bin/blazecli
+      - if: ${{ inputs.upload }} == 'true'
+        name: Upload release asset
+        run: |
+          mv bin/blazecli blazecli-${{ matrix.target }}
+          gh release upload assets blazecli-${{ matrix.target }}
