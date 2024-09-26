@@ -1,6 +1,7 @@
 use std::alloc::alloc;
 use std::alloc::dealloc;
 use std::alloc::Layout;
+use std::ffi::c_void;
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::ffi::OsStr;
@@ -324,6 +325,62 @@ pub unsafe extern "C" fn blaze_inspect_syms_elf(
             ptr::null()
         }
     }
+}
+
+
+type blaze_inspect_for_each_cb = extern "C" fn(sym: *const blaze_sym_info, context: *mut c_void);
+
+
+/// Perform an operation on symbols in an ELF file.
+///
+/// # Safety
+/// - `inspector` needs to point to an initialized [`blaze_inspector`] object
+/// - `src` needs to point to an initialized [`blaze_inspect_syms_elf`] object
+#[no_mangle]
+pub unsafe extern "C" fn blaze_inspect_elf_for_each(
+    inspector: *const blaze_inspector,
+    src: *const blaze_inspect_elf_src,
+    cb: blaze_inspect_for_each_cb,
+    ctx: *mut c_void,
+) {
+    if !input_zeroed!(src, blaze_inspect_elf_src) {
+        let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
+        return
+    }
+    let src = input_sanitize!(src, blaze_inspect_elf_src);
+
+    // SAFETY: The caller ensures that the pointer is valid.
+    let inspector = unsafe { &*inspector };
+    // SAFETY: The caller ensures that the pointer is valid.
+    let src = Source::Elf(Elf::from(src));
+
+    let result = inspector.for_each(&src, |sym| {
+        let SymInfo {
+            name,
+            addr,
+            size, 
+            sym_type,
+			file_offset,
+            obj_file_name,
+        };
+        let sym_c = blaze_sym_info {
+            name: name_ptr,
+            addr,
+            size,
+            sym_type: sym_type.into(),
+            file_offset: file_offset.unwrap_or(0),
+            obj_file_name,
+            reserved: [0u8; 15],
+        };
+
+        let () = cb(&sym_c, context);
+    });
+
+    let err = result
+        .as_ref()
+        .map(|_| blaze_err::BLAZE_ERR_OK)
+        .unwrap_or_else(|err| err.kind().into());
+    let () = set_last_err(err);
 }
 
 
