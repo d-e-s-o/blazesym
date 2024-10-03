@@ -12,17 +12,19 @@ trait Handle<T> {
     fn get(self) -> T;
 }
 
-trait Scheduler {
-    type Scope<'scope, 'env: 'scope>;
-    type Handle<'scope, T>: Handle<T>
-    where
-        T: 'scope;
+// Required due to <https://github.com/rust-lang/rust/issues/87479>
+trait SchedulerScope {
+    type Scope<'scope, 'env>;
+}
+
+trait Scheduler: SchedulerScope {
+    type Handle<'scope, T: 'scope>: Handle<T>;
 
     fn with_scope<'env, F>(f: F)
     where
         F: for<'scope> FnOnce(&'scope Self::Scope<'scope, 'env>);
 
-    fn schedule<'scope, 'env: 'scope, F, T>(
+    fn schedule<'scope, 'env, F, T>(
         &self,
         scope: &'scope Self::Scope<'scope, 'env>,
         f: F,
@@ -43,11 +45,12 @@ impl<T> Handle<T> for ImmediateHandle<T> {
 
 struct SerialRunner;
 
+impl SchedulerScope for SerialRunner {
+    type Scope<'scope, 'env> = ();
+}
+
 impl Scheduler for SerialRunner {
-    type Scope<'scope, 'env: 'scope> = ();
-    type Handle<'scope, T> = ImmediateHandle<T>
-    where
-        T: 'scope;
+    type Handle<'scope, T: 'scope> = ImmediateHandle<T>;
 
     fn with_scope<'env, F>(f: F)
     where
@@ -56,7 +59,7 @@ impl Scheduler for SerialRunner {
         f(&())
     }
 
-    fn schedule<'scope, 'env: 'scope, F, T>(
+    fn schedule<'scope, 'env, F, T>(
         &self,
         _scope: &'scope Self::Scope<'scope, 'env>,
         f: F,
@@ -70,41 +73,42 @@ impl Scheduler for SerialRunner {
     }
 }
 
-//impl<T> Handle<T> for thread::ScopedJoinHandle<'_, T> {
-//    #[inline]
-//    fn get(self) -> T {
-//        self.join().expect("thread panicked")
-//    }
-//}
-//
-//
-//struct DumbThreadedScheduler;
-//
-//impl Scheduler for DumbThreadedScheduler {
-//    type Scope<'scope, 'env: 'scope> = thread::Scope<'scope, 'env>;
-//    type Handle<'scope, T> = thread::ScopedJoinHandle<'scope, T>
-//    where
-//        T: 'scope;
-//
-//    fn with_scope<'env, F>(f: F)
-//    where
-//        F: for<'scope> FnOnce(&'scope Self::Scope<'scope, 'env>),
-//    {
-//        thread::scope(f)
-//    }
-//
-//    fn schedule<'scope, 'env: 'scope, F, T>(
-//        &self,
-//        scope: &'scope Self::Scope<'scope, 'env>,
-//        f: F,
-//    ) -> Self::Handle<'scope, T>
-//    where
-//        F: FnOnce() -> T + Send + 'scope,
-//        T: Send + 'scope,
-//    {
-//        scope.spawn(f)
-//    }
-//}
+impl<T> Handle<T> for thread::ScopedJoinHandle<'_, T> {
+    #[inline]
+    fn get(self) -> T {
+        self.join().expect("thread panicked")
+    }
+}
+
+
+struct DumbThreadedScheduler;
+
+impl SchedulerScope for DumbThreadedScheduler {
+    type Scope<'scope, 'env> = thread::Scope<'scope, 'env>;
+}
+
+impl Scheduler for DumbThreadedScheduler {
+    type Handle<'scope, T: 'scope> = thread::ScopedJoinHandle<'scope, T>;
+
+    fn with_scope<'env, F>(f: F)
+    where
+        F: for<'scope> FnOnce(&'scope Self::Scope<'scope, 'env>),
+    {
+        thread::scope(f)
+    }
+
+    fn schedule<'scope, 'env, F, T>(
+        &self,
+        scope: &'scope Self::Scope<'scope, 'env>,
+        f: F,
+    ) -> Self::Handle<'scope, T>
+    where
+        F: FnOnce() -> T + Send + 'scope,
+        T: Send + 'scope,
+    {
+        scope.spawn(f)
+    }
+}
 
 enum HandleOrResolved<H, R> {
     Handle(Option<H>),
@@ -119,8 +123,8 @@ where
     _phantom: PhantomData<(&'scope (), &'env ())>,
 }
 
-impl<'scope, 'env: 'scope, T> Promise<'scope, 'env, T> {
-    pub fn new<F>(scope: &'scope <GlobalScheduler as Scheduler>::Scope<'scope, 'env>, f: F) -> Self
+impl<'scope, 'env, T> Promise<'scope, 'env, T> {
+    pub fn new<F>(scope: &'scope <GlobalScheduler as SchedulerScope>::Scope<'scope, 'env>, f: F) -> Self
     where
         F: FnOnce() -> T + Send + 'scope,
         T: Send,
@@ -179,7 +183,7 @@ mod tests {
         let data = Arc::new(data);
         let slice = data.as_slice();
 
-        thread::scope(move |scope| {
+        GlobalScheduler::with_scope(move |scope| {
             let mut future1 = Future::new(scope, || {
                 println!("PARSING ON THREAD: {}", thread_name());
                 parse(slice).split_at(5).0
