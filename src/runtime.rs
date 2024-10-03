@@ -1,10 +1,13 @@
 use std::hint::unreachable_unchecked;
 use std::marker::PhantomData;
 use std::thread;
-use std::thread::JoinHandle;
+use std::thread::Scope;
+use std::thread::ScopedJoinHandle;
 
-type GlobalScheduler = SerialRunner;
-const GLOBAL_SCHEDULER: GlobalScheduler = SerialRunner;
+//type GlobalScheduler = SerialRunner;
+//const GLOBAL_SCHEDULER: GlobalScheduler = SerialRunner;
+type GlobalScheduler = DumbThreadedScheduler;
+const GLOBAL_SCHEDULER: GlobalScheduler = DumbThreadedScheduler;
 
 
 trait Handle<T> {
@@ -12,10 +15,20 @@ trait Handle<T> {
 }
 
 trait Scheduler {
-    type Scope<'x>;
-    type Handle<T>: Handle<T>;
+    type Scope<'scope, 'env: 'scope>;
+    type Handle<'scope, T>: Handle<T>
+    where
+        T: 'scope;
 
-    fn schedule<'scope, F, T>(&self, scope: Self::Scope<'scope>, f: F) -> Self::Handle<T>
+    fn with_scope<'scope, 'env: 'scope, F>(f: F)
+    where
+        F: FnOnce(&'scope Self::Scope<'scope, 'env>), <Self as Scheduler>::Scope<'scope, 'env>: 'scope;
+
+    fn schedule<'scope, 'env: 'scope, F, T>(
+        &self,
+        scope: &'scope Self::Scope<'scope, 'env>,
+        f: F,
+    ) -> Self::Handle<'scope, T>
     where
         F: FnOnce() -> T + Send + 'scope,
         T: Send + 'scope;
@@ -33,10 +46,23 @@ impl<T> Handle<T> for ImmediateHandle<T> {
 struct SerialRunner;
 
 impl Scheduler for SerialRunner {
-    type Scope<'x> = &'x ();
-    type Handle<T> = ImmediateHandle<T>;
+    type Scope<'scope, 'env: 'scope> = ();
+    type Handle<'scope, T> = ImmediateHandle<T>
+    where
+        T: 'scope;
 
-    fn schedule<'scope, F, T>(&self, _scope: Self::Scope<'scope>, f: F) -> Self::Handle<T>
+    fn with_scope<'scope, 'env: 'scope, F>(f: F)
+    where
+        F: FnOnce(&'scope Self::Scope<'scope, 'env>),
+    {
+        f(&())
+    }
+
+    fn schedule<'scope, 'env: 'scope, F, T>(
+        &self,
+        _scope: &'scope Self::Scope<'scope, 'env>,
+        f: F,
+    ) -> Self::Handle<'scope, T>
     where
         F: FnOnce() -> T + Send + 'scope,
         T: Send + 'scope,
@@ -46,25 +72,39 @@ impl Scheduler for SerialRunner {
     }
 }
 
-impl<T> Handle<T> for JoinHandle<T> {
+impl<T> Handle<T> for ScopedJoinHandle<'_, T> {
     #[inline]
     fn get(self) -> T {
         self.join().expect("thread panicked")
     }
 }
 
+
 struct DumbThreadedScheduler;
 
 impl Scheduler for DumbThreadedScheduler {
-    type Scope<'x> = &'static ();
-    type Handle<T> = JoinHandle<T>;
+    type Scope<'scope, 'env: 'scope> = Scope<'scope, 'env>;
+    type Handle<'scope, T> = ScopedJoinHandle<'scope, T>
+    where
+        T: 'scope;
 
-    fn schedule<'scope, F, T>(&self, _scope: Self::Scope<'scope>, f: F) -> Self::Handle<T>
+    fn with_scope<'scope, 'env: 'scope, F>(f: F)
+    where
+        F: FnOnce(&'scope Self::Scope<'scope, 'env>),
+    {
+        thread::scope(f)
+    }
+
+    fn schedule<'scope, 'env: 'scope, F, T>(
+        &self,
+        scope: &'scope Self::Scope<'scope, 'env>,
+        f: F,
+    ) -> Self::Handle<'scope, T>
     where
         F: FnOnce() -> T + Send + 'scope,
         T: Send + 'scope,
     {
-        thread::spawn(f)
+        scope.spawn(f)
     }
 }
 
@@ -73,16 +113,19 @@ enum HandleOrResolved<H, R> {
     Resolved(R),
 }
 
-struct Promise<'scope, T> {
-    value: HandleOrResolved<<GlobalScheduler as Scheduler>::Handle<T>, T>,
-    _phantom: PhantomData<&'scope ()>
+struct Promise<'scope, 'env, T>
+where
+    T: 'scope,
+{
+    value: HandleOrResolved<<GlobalScheduler as Scheduler>::Handle<'scope, T>, T>,
+    _phantom: PhantomData<(&'scope (), &'env ())>,
 }
 
-impl<'scope, T> Promise<'scope, T> {
-    pub fn new<F>(scope: &'scope (), f: F) -> Self
+impl<'scope, 'env, T> Promise<'scope, 'env, T> {
+    pub fn new<F>(scope: &'scope <GlobalScheduler as Scheduler>::Scope<'scope, 'env>, f: F) -> Self
     where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'scope,
+        T: Send,
     {
         let handle = GLOBAL_SCHEDULER.schedule(scope, f);
         Self {
@@ -109,22 +152,28 @@ impl<'scope, T> Promise<'scope, T> {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use std::str;
     use std::sync::Arc;
-    use std::thread::current;
     use std::thread::sleep;
     use std::time::Duration;
 
-    use super::*;
-
-    type Future<T> = Promise<T>;
+    type Future<'scope, 'env, T> = Promise<'scope, 'env, T>;
 
     fn parse(data: &[u8]) -> &str {
         str::from_utf8(data).unwrap()
     }
 
+    fn thread_name() -> String {
+        thread::current()
+            .name()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("{:?}", thread::current().id()))
+    }
 
     #[test]
     fn it_works() {
@@ -132,29 +181,21 @@ mod tests {
         let data = Arc::new(data);
         let slice = data.as_slice();
 
-        let mut future1 = Future::new(|| {
-            let _s = parse(slice);
-            let name = current()
-                .name()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("{:?}", current().id()));
-            println!("HELLO FROM THREAD: {}", name);
-            name
-        });
+        thread::scope(move |scope| {
+            let mut future1 = Future::new(scope, || {
+                println!("PARSING ON THREAD: {}", thread_name());
+                parse(slice).split_at(5).0
+            });
+            let mut future2 = Future::new(scope, || {
+                println!("PARSING ON THREAD: {}", thread_name());
+                parse(slice).split_at(5).1
+            });
 
-        let mut future2 = Future::new(|| {
-            let name = current()
-                .name()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| format!("{:?}", current().id()));
-            println!("HELLO FROM THREAD: {}", name);
-            name
-        });
+            println!("SLEEPING...");
+            sleep(Duration::from_secs(2));
 
-        println!("SLEEPING...");
-        sleep(Duration::from_secs(2));
-
-        println!("future1: {:?}", future1.get());
-        println!("future2: {:?}", future2.get());
+            println!("future1: {:?}", future1.get());
+            println!("future2: {:?}", future2.get());
+        })
     }
 }
