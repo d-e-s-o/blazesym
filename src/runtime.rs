@@ -1,13 +1,11 @@
 use std::hint::unreachable_unchecked;
 use std::marker::PhantomData;
 use std::thread;
-use std::thread::Scope;
-use std::thread::ScopedJoinHandle;
 
-//type GlobalScheduler = SerialRunner;
-//const GLOBAL_SCHEDULER: GlobalScheduler = SerialRunner;
-type GlobalScheduler = DumbThreadedScheduler;
-const GLOBAL_SCHEDULER: GlobalScheduler = DumbThreadedScheduler;
+type GlobalScheduler = SerialRunner;
+const GLOBAL_SCHEDULER: GlobalScheduler = SerialRunner;
+//type GlobalScheduler = DumbThreadedScheduler;
+//const GLOBAL_SCHEDULER: GlobalScheduler = DumbThreadedScheduler;
 
 
 trait Handle<T> {
@@ -20,9 +18,9 @@ trait Scheduler {
     where
         T: 'scope;
 
-    fn with_scope<'scope, 'env: 'scope, F>(f: F)
+    fn with_scope<'env, F>(f: F)
     where
-        F: FnOnce(&'scope Self::Scope<'scope, 'env>), <Self as Scheduler>::Scope<'scope, 'env>: 'scope;
+        F: for<'scope> FnOnce(&'scope Self::Scope<'scope, 'env>);
 
     fn schedule<'scope, 'env: 'scope, F, T>(
         &self,
@@ -51,9 +49,9 @@ impl Scheduler for SerialRunner {
     where
         T: 'scope;
 
-    fn with_scope<'scope, 'env: 'scope, F>(f: F)
+    fn with_scope<'env, F>(f: F)
     where
-        F: FnOnce(&'scope Self::Scope<'scope, 'env>),
+        F: for<'scope> FnOnce(&'scope Self::Scope<'scope, 'env>),
     {
         f(&())
     }
@@ -67,46 +65,46 @@ impl Scheduler for SerialRunner {
         F: FnOnce() -> T + Send + 'scope,
         T: Send + 'scope,
     {
-        // Just execute the function here and there and return the result.
+        // Just execute the function here and now and return the result.
         ImmediateHandle(f())
     }
 }
 
-impl<T> Handle<T> for ScopedJoinHandle<'_, T> {
-    #[inline]
-    fn get(self) -> T {
-        self.join().expect("thread panicked")
-    }
-}
-
-
-struct DumbThreadedScheduler;
-
-impl Scheduler for DumbThreadedScheduler {
-    type Scope<'scope, 'env: 'scope> = Scope<'scope, 'env>;
-    type Handle<'scope, T> = ScopedJoinHandle<'scope, T>
-    where
-        T: 'scope;
-
-    fn with_scope<'scope, 'env: 'scope, F>(f: F)
-    where
-        F: FnOnce(&'scope Self::Scope<'scope, 'env>),
-    {
-        thread::scope(f)
-    }
-
-    fn schedule<'scope, 'env: 'scope, F, T>(
-        &self,
-        scope: &'scope Self::Scope<'scope, 'env>,
-        f: F,
-    ) -> Self::Handle<'scope, T>
-    where
-        F: FnOnce() -> T + Send + 'scope,
-        T: Send + 'scope,
-    {
-        scope.spawn(f)
-    }
-}
+//impl<T> Handle<T> for thread::ScopedJoinHandle<'_, T> {
+//    #[inline]
+//    fn get(self) -> T {
+//        self.join().expect("thread panicked")
+//    }
+//}
+//
+//
+//struct DumbThreadedScheduler;
+//
+//impl Scheduler for DumbThreadedScheduler {
+//    type Scope<'scope, 'env: 'scope> = thread::Scope<'scope, 'env>;
+//    type Handle<'scope, T> = thread::ScopedJoinHandle<'scope, T>
+//    where
+//        T: 'scope;
+//
+//    fn with_scope<'env, F>(f: F)
+//    where
+//        F: for<'scope> FnOnce(&'scope Self::Scope<'scope, 'env>),
+//    {
+//        thread::scope(f)
+//    }
+//
+//    fn schedule<'scope, 'env: 'scope, F, T>(
+//        &self,
+//        scope: &'scope Self::Scope<'scope, 'env>,
+//        f: F,
+//    ) -> Self::Handle<'scope, T>
+//    where
+//        F: FnOnce() -> T + Send + 'scope,
+//        T: Send + 'scope,
+//    {
+//        scope.spawn(f)
+//    }
+//}
 
 enum HandleOrResolved<H, R> {
     Handle(Option<H>),
@@ -121,7 +119,7 @@ where
     _phantom: PhantomData<(&'scope (), &'env ())>,
 }
 
-impl<'scope, 'env, T> Promise<'scope, 'env, T> {
+impl<'scope, 'env: 'scope, T> Promise<'scope, 'env, T> {
     pub fn new<F>(scope: &'scope <GlobalScheduler as Scheduler>::Scope<'scope, 'env>, f: F) -> Self
     where
         F: FnOnce() -> T + Send + 'scope,
