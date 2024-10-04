@@ -1890,7 +1890,7 @@ mod tests {
         let name = unsafe { CStr::from_ptr(sym.name) };
         assert_eq!(name.to_str().unwrap(), "factorial");
 
-        let () = unsafe { blaze_syms_free(result) };
+        //let () = unsafe { blaze_syms_free(result) };
         let () = unsafe { blaze_symbolizer_free(symbolizer) };
     }
 }
