@@ -19,6 +19,7 @@ use std::ops::Deref as _;
 #[cfg(not(windows))]
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 use std::str;
@@ -42,6 +43,15 @@ use blazesym::ErrorKind;
 use blazesym::Pid;
 use blazesym::Result;
 use blazesym::SymType;
+
+use libbpf_rs::Map;
+use libbpf_rs::MapCore as _;
+use libbpf_rs::MapMut;
+use libbpf_rs::Object;
+use libbpf_rs::ObjectBuilder;
+use libbpf_rs::OpenObject;
+use libbpf_rs::ProgramMut;
+use libbpf_rs::RingBufferBuilder;
 
 use scopeguard::defer;
 
@@ -1288,4 +1298,95 @@ fn inspect_elf_all_symbols_without_duplicates() {
         .unwrap();
 
     assert_eq!(syms.iter().filter(|name| *name == "the_answer").count(), 1);
+}
+
+fn test_object_path(object: &str) -> PathBuf {
+    Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("bpf")
+        .join(object)
+}
+
+#[track_caller]
+fn open_test_object(object: &str) -> OpenObject {
+    let obj_path = test_object_path(object);
+    let obj = ObjectBuilder::default()
+        .open_file(obj_path)
+        .expect("failed to open object");
+    obj
+}
+
+#[track_caller]
+fn test_object(filename: &str) -> Object {
+    open_test_object(filename)
+        .load()
+        .expect("failed to load object")
+}
+
+/// Find the BPF map with the given name, panic if it does not exist.
+#[track_caller]
+pub fn get_map_mut<'obj>(object: &'obj mut Object, name: &str) -> MapMut<'obj> {
+    object
+        .maps_mut()
+        .find(|map| map.name() == name)
+        .unwrap_or_else(|| panic!("failed to find map `{name}`"))
+}
+
+/// Find the BPF program with the given name, panic if it does not exist.
+#[track_caller]
+fn prog_mut<'obj>(object: &'obj mut Object, name: &str) -> ProgramMut<'obj> {
+    object
+        .progs_mut()
+        .find(|map| map.name() == name)
+        .unwrap_or_else(|| panic!("failed to find program `{name}`"))
+}
+
+/// A helper function for instantiating a `RingBuffer` with a callback meant to
+/// be invoked when `action` is executed and that is intended to trigger a write
+/// to said `RingBuffer` from kernel space, which then reads a single `u32` from
+/// this buffer from user space and returns it.
+fn with_ringbuffer<F>(map: &Map, action: F) -> u64
+where
+    F: FnOnce(),
+{
+    let mut value = 0u64;
+    {
+        let callback = |data: &[u8]| {
+            value = u64::from_ne_bytes(data.try_into().unwrap());
+            0
+        };
+
+        let mut builder = RingBufferBuilder::new();
+        builder.add(map, callback).expect("failed to add ringbuf");
+        let ringbuf = builder.build().expect("failed to build");
+
+        let () = action();
+        let () = ringbuf.consume().expect("failed to consume ringbuf");
+    }
+
+    value
+}
+
+/// Retrieve the address of the `symbolization_target` function in the
+/// `getpid.bpf.o` BPF program.
+fn bpf_symbolization_target_addr() -> Addr {
+    let mut obj = test_object("getpid.bpf.o");
+    let prog = prog_mut(&mut obj, "handle__getpid");
+    let _link = prog
+        .attach_tracepoint("syscalls", "sys_enter_getpid")
+        .expect("failed to attach prog");
+
+    let map = get_map_mut(&mut obj, "ringbuf");
+    let action = || {
+        let _pid = unsafe { libc::getpid() };
+    };
+    let addr = with_ringbuffer(&map, action);
+    addr
+}
+
+/// Test symbolization of an address inside a BPF program.
+#[test]
+fn symbolize_bpf_program() {
+    let addr = bpf_symbolization_target_addr();
+    println!("ADDRESS is {addr:#x}");
 }
