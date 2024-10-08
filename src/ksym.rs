@@ -29,28 +29,49 @@ use crate::SymType;
 pub const KALLSYMS: &str = "/proc/kallsyms";
 const DFL_KSYM_CAP: usize = 200000;
 
+/// BPF kernel programs show up with this prefix followed by a tag and
+/// some other meta-data.
+const BPF_PROG_PREFIX: &str = "bpf_prog_";
+/// The size of a BPF tag, as defined in `include/uapi/linux/bpf.h`.
+const BPF_TAG_SIZE: usize = 8;
+
+type BpfTag = u64;
+
+const _: () = assert!(size_of::<BpfTag>() == BPF_TAG_SIZE);
+
 
 /// A kallsyms-style symbol.
 enum Ksym {
     Kfunc(Kfunc),
+    BpfProg(BpfProg),
 }
 
 impl Ksym {
     fn as_kfunc(&self) -> Option<&Kfunc> {
         match self {
             Self::Kfunc(kfunc) => Some(kfunc),
+            _ => None
+        }
+    }
+
+    fn as_bpf_prog(&self) -> Option<&BpfProg> {
+        match self {
+            Self::BpfProg(bpf_prog) => Some(bpf_prog),
+            _ => None
         }
     }
 
     fn name(&self) -> &str {
         match self {
             Self::Kfunc(kfunc) => &kfunc.name,
+            Self::BpfProg(bpf_prog) => &bpf_prog.name,
         }
     }
 
     fn addr(&self) -> Addr {
         match self {
             Self::Kfunc(kfunc) => kfunc.addr,
+            Self::BpfProg(bpf_prog) => bpf_prog.addr,
         }
     }
 }
@@ -61,6 +82,7 @@ impl<'ksym> TryFrom<&'ksym Ksym> for ResolvedSym<'ksym> {
     fn try_from(other: &'ksym Ksym) -> Result<Self, Self::Error> {
         match other {
             Ksym::Kfunc(kfunc) => ResolvedSym::try_from(kfunc),
+            Ksym::BpfProg(bpf_prog) => todo!(),
         }
     }
 }
@@ -69,6 +91,7 @@ impl<'ksym> From<&'ksym Ksym> for SymInfo<'ksym> {
     fn from(other: &'ksym Ksym) -> Self {
         match other {
             Ksym::Kfunc(kfunc) => SymInfo::from(kfunc),
+            Ksym::BpfProg(bpf_prog) => todo!(),
         }
     }
 }
@@ -112,6 +135,36 @@ impl<'kfunc> From<&'kfunc Kfunc> for SymInfo<'kfunc> {
             file_offset: None,
             obj_file_name: None,
         }
+    }
+}
+
+
+/// Information about a BPF program.
+#[derive(Debug, PartialEq)]
+struct BpfProg {
+    addr: Addr,
+    name: Box<str>,
+    tag: BpfTag,
+}
+
+impl BpfProg {
+    /// Parse information about a BPF program from part of a `kallsyms`
+    /// line.
+    fn parse(s: &str, addr: Addr) -> Option<Self> {
+        let s = s.strip_prefix(BPF_PROG_PREFIX)?;
+        let (tag, name) = s.split_once('_')?;
+        // Each byte of the tag is encoded as two hexadecimal characters.
+        if tag.len() != 2 * BPF_TAG_SIZE {
+            return None
+        }
+
+        let tag = BpfTag::from_str_radix(tag, 16).ok()?;
+        let prog = BpfProg {
+            addr,
+            name: Box::from(name),
+            tag,
+        };
+        Some(prog)
     }
 }
 
@@ -163,10 +216,16 @@ impl KSymResolver {
                 if addr == 0 {
                     continue
                 }
-                syms.push(Ksym::Kfunc(Kfunc {
-                    addr,
-                    name: Box::from(name),
-                }));
+
+                let sym = if let Some(bpf_prog) = BpfProg::parse(name, addr) {
+                    Ksym::BpfProg(bpf_prog)
+                } else {
+                    Ksym::Kfunc(Kfunc {
+                        addr,
+                        name: Box::from(name),
+                    })
+                };
+                let () = syms.push(sym);
             }
         }
 
@@ -197,7 +256,7 @@ impl KSymResolver {
     }
 
     fn find_ksym(&self, addr: Addr) -> Result<&Ksym, Reason> {
-        let result = find_match_or_lower_bound_by_key(&self.syms, addr, |ksym: &Ksym| ksym.addr())
+        let result = find_match_or_lower_bound_by_key(&self.syms, addr, Ksym::addr)
             .and_then(|idx| self.syms.get(idx));
         match result {
             Some(sym) => Ok(sym),
@@ -267,8 +326,8 @@ impl Inspect for KSymResolver {
             return Ok(())
         }
 
-        for ksym in self.syms.iter() {
-            let sym = SymInfo::from(ksym);
+        for sym in self.syms.iter() {
+            let sym = SymInfo::from(sym);
             if let ControlFlow::Break(()) = f(&sym) {
                 return Ok(())
             }
@@ -313,6 +372,52 @@ mod tests {
             name: Box::from("3l33t"),
         };
         assert_ne!(format!("{kfunc:?}"), "");
+    }
+
+    /// Test that we can parse a BPF program string as it may appear in
+    /// `kallsyms` successfully.
+    #[tag(miri)]
+    #[test]
+    fn bpf_prog_str_parsing() {
+        let addr = 0x1337;
+        let name = "bpf_prog_30304e82b4033ea3_kprobe__cap_capable";
+        let bpf_prog = BpfProg::parse(name, addr).unwrap();
+        assert_eq!(bpf_prog.addr, addr);
+        assert_eq!(&*bpf_prog.name, "kprobe__cap_capable");
+        assert_eq!(bpf_prog.tag, 0x30304e82b4033ea3);
+
+        let name = "bpf_prog_run";
+        assert_eq!(BpfProg::parse(name, addr), None);
+
+        let name = "bpf_prog_get_curr_or_next";
+        assert_eq!(BpfProg::parse(name, addr), None);
+    }
+
+    /// Check that we can parse a kallsyms file containing a BPF
+    /// program.
+    #[tag(miri)]
+    #[test]
+    fn kallsyms_parsing() {
+        let kallsyms = br#"""ffffffffc02791d0 T fuse_ctl_init        [fuse]
+ffffffffc0279010 T fuse_dev_init        [fuse]
+ffffffffc212d000 t ftrace_trampoline    [__builtin__ftrace]
+ffffffffc003b960 t bpf_prog_7cc47bbf07148bfe_hid_tail_call      [bpf]
+ffffffffc003e9c8 t bpf_prog_30304e82b4033ea3_kprobe__cap_capable        [bpf]
+"""#;
+
+        let resolver =
+            KSymResolver::load_from_reader(&mut kallsyms.as_slice(), Path::new("<dummy>")).unwrap();
+        assert_eq!(resolver.syms.len(), 4);
+
+        // Spot-check some of the parsed symbols for sanity.
+        let ksym = resolver.syms[0].as_kfunc().unwrap();
+        assert_eq!(&*ksym.name, "fuse_dev_init");
+        assert_eq!(ksym.addr, 0xffffffffc0279010);
+
+        let prog = resolver.syms[2].as_bpf_prog().unwrap();
+        assert_eq!(prog.addr, 0xffffffffc003e9c8);
+        assert_eq!(&*prog.name, "kprobe__cap_capable");
+        assert_eq!(prog.tag, 0x30304e82b4033ea3);
     }
 
     /// Check that we can use a `KSymResolver` to find symbols.
