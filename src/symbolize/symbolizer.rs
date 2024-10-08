@@ -1380,6 +1380,7 @@ mod tests {
     use crate::maps::Perm;
     use crate::symbolize;
     use crate::symbolize::CodeInfo;
+    use crate::test_helper::bpf_symbolization_target_addr;
     use crate::test_helper::find_the_answer_fn_in_zip;
 
 
@@ -1686,5 +1687,12 @@ mod tests {
 
         let () = test(zip_error_dispatch);
         let () = test(zip_delayed_error_dispatch);
+    }
+
+    /// Test symbolization of a kernel address inside a BPF program.
+    #[test]
+    fn symbolize_kernel_bpf_program() {
+        let addr = bpf_symbolization_target_addr();
+        println!("BPF address: {addr:#x}");
     }
 }
