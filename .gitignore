@@ -8,5 +8,6 @@
 /data/vmlinux-5.17.12-100.fc34.x86_64*
 /data/zip-dir
 /target
+/tests/bpf/*.bpf.o
 /tests/vmlinux-include/target
 Cargo.lock
