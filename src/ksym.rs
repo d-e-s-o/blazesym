@@ -35,10 +35,12 @@ pub struct Kfunc {
     pub name: Box<str>,
 }
 
-impl<'kfunc> From<&'kfunc Kfunc> for ResolvedSym<'kfunc> {
-    fn from(other: &'kfunc Kfunc) -> Self {
+impl<'kfunc> TryFrom<&'kfunc Kfunc> for ResolvedSym<'kfunc> {
+    type Error = Reason;
+
+    fn try_from(other: &'kfunc Kfunc) -> Result<Self, Self::Error> {
         let Kfunc { name, addr } = other;
-        ResolvedSym {
+        let sym = ResolvedSym {
             name,
             addr: *addr,
             // There is no size information in kallsyms.
@@ -49,7 +51,8 @@ impl<'kfunc> From<&'kfunc Kfunc> for ResolvedSym<'kfunc> {
             // kallsyms doesn't have source code location information.
             code_info: None,
             inlined: Box::new([]),
-        }
+        };
+        Ok(sym)
     }
 }
 
@@ -168,7 +171,7 @@ impl KSymResolver {
 
 impl Symbolize for KSymResolver {
     fn find_sym(&self, addr: Addr, _opts: &FindSymOpts) -> Result<Result<ResolvedSym<'_>, Reason>> {
-        let sym = self.find_ksym(addr).map(ResolvedSym::from);
+        let sym = self.find_ksym(addr).and_then(ResolvedSym::try_from);
         Ok(sym)
     }
 }
