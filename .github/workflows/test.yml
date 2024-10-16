@@ -262,7 +262,7 @@ jobs:
         path: data/
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
-    - run: cargo test --tests --release --features=blazesym-dev/dont-generate-unit-test-files -- ':windows:'
+    - run: cargo test --tests --release -- ':windows:'
   test-sanitizers:
     name: Test with ${{ matrix.sanitizer }} sanitizer
     strategy:
@@ -328,7 +328,7 @@ jobs:
     - name: Remove .cargo/config.toml
       run: rm .cargo/config.toml
     - name: Run tests
-      run: cargo miri test --workspace --features=blazesym-dev/dont-generate-unit-test-files -- ":miri:"
+      run: cargo miri test --workspace -- ":miri:"
   test-examples:
     name: Test examples
     runs-on: ubuntu-22.04
@@ -377,7 +377,7 @@ jobs:
         # `--output-format` option, we need to specify the benchmark
         # binary (`main`) here and have a different invocation for
         # libtest style benchmarks above. Sigh.
-        cargo bench --workspace --bench=main --bench=capi --features=blazesym-dev/generate-large-test-files,blazesym-dev/dont-generate-unit-test-files -- --output-format=bencher | tee --append $GITHUB_STEP_SUMMARY
+        cargo bench --workspace --bench=main --bench=capi -- --output-format=bencher | tee --append $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
   clippy:
     name: Lint with clippy
