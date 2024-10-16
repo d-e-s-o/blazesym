@@ -135,7 +135,10 @@ where
 
 /// Retrieve the address of the `symbolization_target` function in the
 /// `getpid.bpf.o` BPF program.
-pub(crate) fn bpf_symbolization_target_addr() -> Addr {
+pub(crate) fn with_bpf_symbolization_target_addr<F>(f: F)
+where
+    F: FnOnce(Addr)
+{
     let mut obj = test_object("getpid.bpf.o");
     let prog = prog_mut(&mut obj, "handle__getpid");
     let _link = prog
@@ -147,5 +150,5 @@ pub(crate) fn bpf_symbolization_target_addr() -> Addr {
         let _pid = unsafe { libc::getpid() };
     };
     let addr = with_ringbuffer(&map, action);
-    addr
+    f(addr)
 }

@@ -1380,7 +1380,7 @@ mod tests {
     use crate::maps::Perm;
     use crate::symbolize;
     use crate::symbolize::CodeInfo;
-    use crate::test_helper::bpf_symbolization_target_addr;
+    use crate::test_helper::with_bpf_symbolization_target_addr;
     use crate::test_helper::find_the_answer_fn_in_zip;
 
 
@@ -1692,7 +1692,15 @@ mod tests {
     /// Test symbolization of a kernel address inside a BPF program.
     #[test]
     fn symbolize_kernel_bpf_program() {
-        let addr = bpf_symbolization_target_addr();
-        println!("BPF address: {addr:#x}");
+        with_bpf_symbolization_target_addr(|addr| {
+            let src = symbolize::Source::Kernel(symbolize::Kernel::default());
+            let symbolizer = Symbolizer::new();
+            let result = symbolizer
+                .symbolize_single(&src, symbolize::Input::AbsAddr(addr))
+                .unwrap()
+                .into_sym()
+                .unwrap();
+            assert_eq!(result.name, "");
+        })
     }
 }
