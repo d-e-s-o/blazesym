@@ -1693,6 +1693,10 @@ mod tests {
     #[test]
     fn symbolize_kernel_bpf_program() {
         with_bpf_symbolization_target_addr(|addr| {
+            println!("ADDRESS: {addr:#x}");
+            let mut buffer = String::new();
+            std::io::stdin().read_line(&mut buffer).unwrap();
+
             let src = symbolize::Source::Kernel(symbolize::Kernel::default());
             let symbolizer = Symbolizer::new();
             let result = symbolizer

@@ -10,7 +10,12 @@ struct {
 
 static __noinline u64 symbolization_target(void)
 {
-    asm volatile ("");
+	u64 fp, ip;
+  /* Read frame pointer. */
+  asm volatile ("%[fp] = r10" : [fp] "+r"(fp) :);
+  /* At frame pointer + 8 we expect the return address. */
+  bpf_probe_read_kernel(&ip, sizeof(ip), (void *)(long)(fp + 8));
+  return ip;
 }
 
 SEC("tracepoint/syscalls/sys_enter_getpid")
@@ -24,9 +29,8 @@ int handle__getpid(void *ctx)
         return 1;
     }
 
-    (void)symbolization_target();
-
-    *value = (u64)&symbolization_target;
+    (void)&symbolization_target;
+    *value = symbolization_target();
     bpf_printk("symbolization_target = %lx\n", *value);
     bpf_ringbuf_submit(value, 0);
     bpf_printk("handle__getpid: submitted ringbuf value");

@@ -9,6 +9,10 @@ use std::os::fd::BorrowedFd;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::fmt::Display;
+use std::fmt::Formatter;
+use std::fmt::Result as FmtResult;
+
 
 use crate::inspect::SymInfo;
 use crate::once::OnceCell;
@@ -30,12 +34,46 @@ use super::Btf;
 /// BPF kernel programs show up with this prefix followed by a tag and
 /// some other meta-data.
 const BPF_PROG_PREFIX: &str = "bpf_prog_";
-/// The size of a BPF tag, as defined in `include/uapi/linux/bpf.h`.
-const BPF_TAG_SIZE: usize = 8;
 
-pub type BpfTag = u64;
 
-const _: () = assert!(size_of::<BpfTag>() == BPF_TAG_SIZE);
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[repr(transparent)]
+pub struct BpfTag([u8; 8]);
+
+impl Display for BpfTag {
+  fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+    for b in self.0 {
+        let () = write!(f, "{b:02x}")?;
+    }
+    Ok(())
+  }
+}
+
+impl From<[u8; 8]> for BpfTag {
+  fn from(other: [u8; 8]) -> Self {
+    Self(other)
+  }
+}
+
+use std::str::FromStr;
+
+impl FromStr for BpfTag {
+  type Err = ();
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+      if s.as_bytes().len() != 2 * size_of::<BpfTag>() {
+          return Err(())
+      }
+
+      let mut tag = [0; size_of::<BpfTag>()];
+     (0..s.len())
+        .step_by(2)
+        .enumerate()
+        .try_for_each(|(i, idx)| tag[i] = u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ())?)?;
+
+        Ok(Self(tag))
+  }
+}
 
 
 /// A cache for BPF program related information.
@@ -54,15 +92,11 @@ pub struct BpfInfoCache {
 }
 
 impl BpfInfoCache {
-    /// Look up BPF program information from the cache and remove it.
-    ///
-    /// We remove the information to keep memory usage to a minimum:
-    /// we expect clients of this infrastructure to extract and then
-    /// cache their own copy of data from the `bpf_prog_info`.
-    fn lookup_and_take(&self, tag: BpfTag) -> Result<Option<sys::bpf_prog_info>> {
+    /// Look up BPF program information from the cache.
+    fn lookup(&self, tag: BpfTag) -> Result<Option<sys::bpf_prog_info>> {
         let mut cache = self.cache.borrow_mut();
-        if let Some(info) = cache.remove(&tag) {
-            return Ok(Some(info))
+        if let Some(info) = cache.get(&tag) {
+            return Ok(Some(*info))
         }
 
         // If we didn't find the tag inside the cache we have to assume
@@ -75,6 +109,7 @@ impl BpfInfoCache {
         let mut next_prog_id = 0;
 
         while let Ok(prog_id) = sys::bpf_prog_get_next_id(next_prog_id) {
+            println!("FOUND PROG {prog_id}");
             let fd = sys::bpf_prog_get_fd_from_id(prog_id).with_context(|| {
                 format!("failed to retrieve BPF program file descriptor for program {prog_id}")
             })?;
@@ -88,9 +123,14 @@ impl BpfInfoCache {
             let prog_tag = BpfTag::from_ne_bytes(info.tag);
             if found.is_none() && tag == prog_tag {
                 found = Some(info);
-            } else {
-                let _prev = cache.insert(prog_tag, info);
             }
+
+            let name = std::ffi::CStr::from_bytes_until_nul(info.name.as_slice())
+                    .unwrap()
+                    .to_string_lossy();
+
+            println!("NAME: `{name}` | TAG {prog_tag:#x}");
+            let _prev = cache.insert(prog_tag, info);
             next_prog_id = prog_id;
         }
         Ok(found)
@@ -205,12 +245,7 @@ impl BpfProg {
     pub fn parse(s: &str, addr: Addr) -> Option<Self> {
         let s = s.strip_prefix(BPF_PROG_PREFIX)?;
         let (tag, name) = s.split_once('_')?;
-        // Each byte of the tag is encoded as two hexadecimal characters.
-        if tag.len() != 2 * BPF_TAG_SIZE {
-            return None
-        }
-
-        let tag = BpfTag::from_str_radix(tag, 16).ok()?;
+        let tag = BpfTag::from_str(tag).ok()?;
         let prog = BpfProg {
             addr,
             name: Box::from(name),
@@ -228,9 +263,9 @@ impl BpfProg {
     ) -> Result<ResolvedSym<'_>> {
         let code_info = if opts.code_info() {
             let line_info = self.line_info.get_or_try_init(|| {
-                let prog_info = info_cache.lookup_and_take(self.tag)?.ok_or_not_found(|| {
+                let prog_info = info_cache.lookup(self.tag)?.ok_or_not_found(|| {
                     format!(
-                        "failed to information for BPF program with tag {:#x}",
+                        "failed to find information for BPF program with tag {}",
                         self.tag
                     )
                 })?;
@@ -363,7 +398,7 @@ mod tests {
         let tag = BpfTag::from_ne_bytes(info.tag);
 
         let cache = BpfInfoCache::default();
-        let info = cache.lookup_and_take(tag).unwrap().unwrap();
+        let info = cache.lookup(tag).unwrap().unwrap();
 
         assert_eq!(BpfTag::from_ne_bytes(info.tag), tag);
     }
