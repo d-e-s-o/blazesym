@@ -595,7 +595,10 @@ fn prepare_test_files() {
 
 
 /// Extract vendored libbpf header files into a directory.
-#[cfg(feature = "generate-unit-test-files")]
+#[cfg(all(
+    feature = "generate-unit-test-files",
+    not(feature = "dont-generate-unit-test-files")
+))]
 fn extract_libbpf_headers(target_dir: &Path) {
     use std::fs;
     use std::fs::OpenOptions;
@@ -616,7 +619,10 @@ fn extract_libbpf_headers(target_dir: &Path) {
 }
 
 
-#[cfg(feature = "generate-unit-test-files")]
+#[cfg(all(
+    feature = "generate-unit-test-files",
+    not(feature = "dont-generate-unit-test-files")
+))]
 fn with_bpf_headers<F>(f: F)
 where
     F: FnOnce(&Path),
@@ -628,7 +634,10 @@ where
     let () = f(header_parent_dir.path());
 }
 
-#[cfg(not(feature = "generate-unit-test-files"))]
+#[cfg(any(
+    not(feature = "generate-unit-test-files"),
+    feature = "dont-generate-unit-test-files"
+))]
 fn with_bpf_headers<F>(_f: F)
 where
     F: FnOnce(&Path),
