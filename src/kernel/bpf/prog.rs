@@ -434,6 +434,9 @@ mod tests {
     fn bpf_info_cache_lookup() {
         let mut obj = test_object("getpid.bpf.o");
         let prog = prog_mut(&mut obj, "handle__getpid");
+        let _link = prog
+            .attach_tracepoint("syscalls", "sys_enter_getpid")
+            .expect("failed to attach prog");
 
         // Retrieve the program's BPF tag out-of-band so that we know
         // what to look up.
