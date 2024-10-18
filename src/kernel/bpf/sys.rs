@@ -278,6 +278,12 @@ mod tests {
     /// Check that we can iterate over all active BPF programs.
     #[test]
     fn prog_iteration() {
+        let mut obj = test_object("getpid.bpf.o");
+        let prog = prog_mut(&mut obj, "handle__getpid");
+        let _link = prog
+            .attach_tracepoint("syscalls", "sys_enter_getpid")
+            .expect("failed to attach prog");
+
         let mut next_prog_id = 0;
         while let Ok(prog_id) = bpf_prog_get_next_id(next_prog_id) {
             let fd = bpf_prog_get_fd_from_id(prog_id).unwrap();
