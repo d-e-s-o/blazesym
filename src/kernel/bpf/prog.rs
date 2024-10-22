@@ -268,7 +268,9 @@ impl BpfProg {
     /// line.
     pub fn parse(s: &str, addr: Addr) -> Option<Self> {
         let s = s.strip_prefix(BPF_PROG_PREFIX)?;
-        let (tag, name) = s.split_once('_')?;
+        let mut split = s.split('_');
+        let tag = split.next()?;
+        let name = split.next().unwrap_or("");
 
         let tag = BpfTag::from_str(tag).ok()?;
         let prog = BpfProg {
@@ -422,6 +424,12 @@ mod tests {
             bpf_prog.tag,
             BpfTag::from([0x30, 0x30, 0x4e, 0x82, 0xb4, 0x03, 0x3e, 0xa3])
         );
+        assert_eq!(bpf_prog.tag.to_string(), "30304e82b4033ea3");
+
+        let name = "bpf_prog_30304e82b4033ea3";
+        let bpf_prog = BpfProg::parse(name, addr).unwrap();
+        assert_eq!(bpf_prog.addr, addr);
+        assert_eq!(bpf_prog.name, "");
         assert_eq!(bpf_prog.tag.to_string(), "30304e82b4033ea3");
 
         let name = "bpf_prog_run";
