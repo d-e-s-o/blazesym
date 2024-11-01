@@ -567,6 +567,114 @@ impl Debug for Cache<'_> {
     }
 }
 
+#[derive(Clone, Debug)]
+struct EhdrExt2<'bcknd> {
+    /// The ELF header.
+    ehdr: Cow<'bcknd, Elf64_Ehdr>,
+    /// Override of `ehdr.e_shnum`, handling of which is special-cased by
+    /// the ELF standard.
+    shnum: usize,
+    /// Override of `ehdr.e_phnum`, handling of which is special-cased by
+    /// the ELF standard.
+    phnum: usize,
+}
+
+struct Cache2<'bcknd, B> {
+    /// A slice of the raw ELF data that we are about to parse.
+    backend: &'bcknd B,
+    /// The cached ELF header.
+    ehdr: OnceCell<EhdrExt2<'bcknd>>,
+}
+
+impl<'bcknd, B> Cache2<'bcknd, B>
+where
+    B: Backend<'bcknd>,
+{
+    /// Create a new `Cache2` using the provided backend.
+    fn new(backend: &'bcknd B) -> Self {
+        Self {
+            backend,
+            ehdr: OnceCell::new(),
+        }
+    }
+}
+
+impl<'bcknd, B> Cache2<'bcknd, B>
+where
+    B: Backend<'bcknd>,
+{
+    /// Read the very first section header.
+    ///
+    /// ELF contains a couple of clauses that special case data ranges
+    /// of certain member variables to reference data from this header,
+    /// which otherwise is zeroed out.
+    #[inline]
+    fn read_first_shdr(&self, ehdr: &Elf64_Ehdr) -> Result<Cow<'bcknd, Elf64_Shdr>> {
+        let shdr = self
+            .backend
+            .read_pod::<Elf64_Shdr>(ehdr.e_shoff as _)
+            .context("failed to read Elf64_Shdr")?;
+        Ok(shdr)
+    }
+
+    fn parse_ehdr(&self) -> Result<EhdrExt2<'bcknd>> {
+        let ehdr = self
+            .backend
+            .read_pod::<Elf64_Ehdr>(0)
+            .context("failed to read Elf64_Ehdr")?;
+        if !(ehdr.e_ident[0] == 0x7f
+            && ehdr.e_ident[1] == b'E'
+            && ehdr.e_ident[2] == b'L'
+            && ehdr.e_ident[3] == b'F')
+        {
+            return Err(Error::with_invalid_data(format!(
+                "encountered unexpected e_ident: {:x?}",
+                &ehdr.e_ident[0..4]
+            )))
+        }
+
+        // "If the number of entries in the section header table is larger than
+        // or equal to SHN_LORESERVE, e_shnum holds the value zero and the real
+        // number of entries in the section header table is held in the sh_size
+        // member of the initial entry in section header table."
+        let shnum = if ehdr.e_shnum == 0 {
+            let shdr = self.read_first_shdr(&ehdr)?;
+            usize::try_from(shdr.sh_size).ok().ok_or_invalid_data(|| {
+                format!(
+                    "ELF file contains unsupported number of sections ({})",
+                    shdr.sh_size
+                )
+            })?
+        } else {
+            ehdr.e_shnum.into()
+        };
+
+        // "If the number of entries in the program header table is
+        // larger than or equal to PN_XNUM (0xffff), this member holds
+        // PN_XNUM (0xffff) and the real number of entries in the
+        // program header table is held in the sh_info member of the
+        // initial entry in section header table."
+        let phnum = if ehdr.e_phnum == PN_XNUM {
+            let shdr = self.read_first_shdr(&ehdr)?;
+            usize::try_from(shdr.sh_info).ok().ok_or_invalid_data(|| {
+                format!(
+                    "ELF file contains unsupported number of program headers ({})",
+                    shdr.sh_info
+                )
+            })?
+        } else {
+            ehdr.e_phnum.into()
+        };
+
+        let ehdr = EhdrExt2 { ehdr, shnum, phnum };
+        Ok(ehdr)
+    }
+
+    fn ensure_ehdr(&self) -> Result<&EhdrExt2<'bcknd>> {
+        self.ehdr.get_or_try_init(|| self.parse_ehdr())
+    }
+}
+
 
 trait Backend<'r> {
     fn read_pod<T>(&self, offset: u64) -> Result<Cow<'r, T>, Error>
