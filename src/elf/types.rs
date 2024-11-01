@@ -12,7 +12,7 @@ type Elf64_Xword = u64;
 pub(crate) const ET_EXEC: u16 = 2;
 pub(crate) const ET_DYN: u16 = 3;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub(crate) struct Elf64_Ehdr {
     pub e_ident: [u8; EI_NIDENT], /* ELF "magic number" */
@@ -36,7 +36,7 @@ unsafe impl Pod for Elf64_Ehdr {}
 
 pub(crate) const PT_LOAD: u32 = 1;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub(crate) struct Elf64_Phdr {
     pub p_type: Elf64_Word,
@@ -56,7 +56,7 @@ pub(crate) const PF_X: Elf64_Word = 1;
 
 pub(crate) const PN_XNUM: u16 = 0xffff;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub(crate) struct Elf64_Shdr {
     pub sh_name: Elf64_Word,       /* Section name, index in string tbl */
@@ -87,7 +87,7 @@ pub(crate) const STT_OBJECT: u8 = 1;
 pub(crate) const STT_FUNC: u8 = 2;
 pub(crate) const STT_GNU_IFUNC: u8 = 10;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub(crate) struct Elf64_Sym {
     pub st_name: Elf64_Word,  /* Symbol name, index in string tbl */
@@ -138,7 +138,7 @@ unsafe impl Pod for Elf64_Sym {}
 
 pub(crate) const NT_GNU_BUILD_ID: Elf64_Word = 3;
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub(crate) struct Elf64_Nhdr {
     pub n_namesz: Elf64_Word,
@@ -150,7 +150,7 @@ pub(crate) struct Elf64_Nhdr {
 unsafe impl Pod for Elf64_Nhdr {}
 
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub(crate) struct Elf64_Chdr {
     /// Compression format.
