@@ -144,7 +144,7 @@ pub(crate) trait Has32BitTy {
 }
 
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 #[repr(C)]
 pub(crate) struct Elf32_Ehdr {
     pub e_ident: [u8; EI_NIDENT],
@@ -167,7 +167,7 @@ pub(crate) struct Elf32_Ehdr {
 unsafe impl Pod for Elf32_Ehdr {}
 
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 #[repr(C)]
 pub(crate) struct Elf64_Ehdr {
     pub e_ident: [u8; EI_NIDENT], /* ELF "magic number" */
@@ -608,7 +608,7 @@ impl ElfN_Sym<'_> {
 pub(crate) const NT_GNU_BUILD_ID: Elf64_Word = 3;
 
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 #[repr(C)]
 pub(crate) struct Elf32_Nhdr {
     pub n_namesz: Elf32_Word, /* Length of the note's name. */
@@ -620,7 +620,7 @@ pub(crate) struct Elf32_Nhdr {
 unsafe impl Pod for Elf32_Nhdr {}
 
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 #[repr(C)]
 pub(crate) struct Elf64_Nhdr {
     pub n_namesz: Elf64_Word,
@@ -636,7 +636,7 @@ impl Has32BitTy for Elf64_Nhdr {
 }
 
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub(crate) struct Elf32_Chdr {
     pub ch_type: Elf32_Word,      /* Compression format. */
@@ -648,7 +648,7 @@ pub(crate) struct Elf32_Chdr {
 unsafe impl Pod for Elf32_Chdr {}
 
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub(crate) struct Elf64_Chdr {
     /// Compression format.
