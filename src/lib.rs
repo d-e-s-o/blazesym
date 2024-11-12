@@ -178,6 +178,7 @@ pub mod helper {
 #[doc(hidden)]
 pub mod __private {
     pub use crate::util::bytes_to_path;
+    pub use crate::util::split_once;
     pub use crate::util::stat;
     pub use crate::util::ReadRaw;
 

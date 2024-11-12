@@ -314,6 +314,8 @@ fn main() -> Result<()> {
         .with_max_level(level)
         .with_span_events(FmtSpan::FULL)
         .with_timer(SystemTime)
+        .with_ansi(false)
+        .without_time()
         .finish();
 
     let () =
