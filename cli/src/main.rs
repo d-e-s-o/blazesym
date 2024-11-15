@@ -21,12 +21,10 @@ use blazesym::SymType;
 
 use clap::Parser as _;
 
-use tracing::subscriber::set_global_default as set_global_subscriber;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::fmt::time::SystemTime;
-use tracing_subscriber::FmtSubscriber;
 
 const ADDR_WIDTH: usize = 16;
 
@@ -308,16 +306,12 @@ fn main() -> Result<()> {
         _ => LevelFilter::TRACE,
     };
 
-    let format = fmt::format().with_target(false).compact();
-    let subscriber = FmtSubscriber::builder()
-        .event_format(format)
+    fmt()
+        .pretty()
         .with_max_level(level)
         .with_span_events(FmtSpan::FULL)
         .with_timer(SystemTime)
-        .finish();
-
-    let () =
-        set_global_subscriber(subscriber).with_context(|| "failed to set tracing subscriber")?;
+        .init();
 
     match args.command {
         args::Command::Inspect(inspect) => self::inspect(inspect),
