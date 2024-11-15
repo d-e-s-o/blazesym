@@ -1,6 +1,7 @@
 #![allow(clippy::let_and_return, clippy::let_unit_value)]
 
 mod args;
+mod trace;
 
 use std::cmp::max;
 use std::ops::ControlFlow;
@@ -26,7 +27,9 @@ use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::fmt::time::SystemTime;
+use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::Registry;
 
 const ADDR_WIDTH: usize = 16;
 
@@ -301,21 +304,24 @@ fn symbolize(symbolize: args::symbolize::Symbolize) -> Result<()> {
 
 fn main() -> Result<()> {
     let args = args::Args::parse();
-    let level = match args.verbosity {
+    let filter = match args.verbosity {
         0 => LevelFilter::WARN,
         1 => LevelFilter::INFO,
         2 => LevelFilter::DEBUG,
         _ => LevelFilter::TRACE,
     };
 
-    let format = fmt::format().with_target(false).compact();
+    //let format = fmt::format().with_target(false).pretty();
+    //let format = trace::Hierarchical::new();
     let subscriber = FmtSubscriber::builder()
         .event_format(format)
-        .with_max_level(level)
+        .with_max_level(filter)
         .with_span_events(FmtSpan::FULL)
         .with_timer(SystemTime)
         .finish();
 
+    let subscriber = Registry::default().with(layer);
+    let subscriber = filter.with_subscriber(subscriber);
     let () =
         set_global_subscriber(subscriber).with_context(|| "failed to set tracing subscriber")?;
 
