@@ -21,12 +21,11 @@ use blazesym::SymType;
 
 use clap::Parser as _;
 
-use tracing::subscriber::set_global_default as set_global_subscriber;
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::fmt;
-use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_subscriber::fmt::time::SystemTime;
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::registry::Registry;
+use tracing_tree::time::LocalDateTime;
+use tracing_tree::HierarchicalLayer;
 
 const ADDR_WIDTH: usize = 16;
 
@@ -308,16 +307,21 @@ fn main() -> Result<()> {
         _ => LevelFilter::TRACE,
     };
 
-    let format = fmt::format().with_target(false).compact();
-    let subscriber = FmtSubscriber::builder()
-        .event_format(format)
-        .with_max_level(level)
-        .with_span_events(FmtSpan::FULL)
-        .with_timer(SystemTime)
-        .finish();
+    let layer = HierarchicalLayer::default()
+        .with_ansi(true)
+        .with_bracketed_fields(true)
+        .with_indent_lines(false)
+        .with_indent_amount(2)
+        .with_verbose_exit(true)
+        .with_verbose_entry(true)
+        .with_targets(true)
+        // TODO: Try `()`.
+        .with_timer(LocalDateTime {
+            higher_precision: false,
+        });
 
-    let () =
-        set_global_subscriber(subscriber).with_context(|| "failed to set tracing subscriber")?;
+    let subscriber = Registry::default().with(layer);
+    tracing::subscriber::set_global_default(subscriber).unwrap();
 
     match args.command {
         args::Command::Inspect(inspect) => self::inspect(inspect),
