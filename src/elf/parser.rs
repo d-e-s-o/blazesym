@@ -318,7 +318,9 @@ impl<'mmap> SymbolTableCache<'mmap> {
 }
 
 
-struct Cache<'bcknd> {
+struct Cache<'bcknd, B> {
+    /// The backend being used for reading ELF data.
+    backend: B,
     /// A slice of the raw ELF data that we are about to parse.
     elf_data: &'bcknd [u8],
     /// The cached ELF header.
@@ -336,10 +338,11 @@ struct Cache<'bcknd> {
     section_data: OnceCell<Box<[OnceCell<Cow<'bcknd, [u8]>>]>>,
 }
 
-impl<'bcknd> Cache<'bcknd> {
+impl<'bcknd, B> Cache<'bcknd, B> {
     /// Create a new `Cache` using the provided raw ELF object data.
-    fn new(elf_data: &'bcknd [u8]) -> Self {
+    fn new(backend: B, elf_data: &'bcknd [u8]) -> Self {
         Self {
+            backend,
             elf_data,
             ehdr: OnceCell::new(),
             shdrs: OnceCell::new(),
@@ -781,7 +784,7 @@ impl<'bcknd> Cache<'bcknd> {
     }
 }
 
-impl Debug for Cache<'_> {
+impl<B> Debug for Cache<'_, B> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "Cache")
     }
@@ -889,11 +892,28 @@ pub(crate) struct ElfParser<B = Mmap> {
     //         this member. Rather, they should never outlive `self`.
     //         Furthermore, this member has to be listed before `_mmap`
     //         to make sure we never end up with a dangling reference.
-    cache: Cache<'static>,
+    cache: Cache<'static, B>,
     /// The path to the ELF file being worked on, if available.
     path: Option<PathBuf>,
     /// The backend used.
     _backend: B,
+}
+
+impl ElfParser<File> {
+    pub(crate) fn __open__file<P>(file: File, path: P) -> Self
+    where
+        P: Into<PathBuf>,
+    {
+        let elf_data = &[];
+
+        let parser = Self {
+            // XXX: Cloning should be avoided.
+            cache: Cache::new(file.try_clone().unwrap(), elf_data),
+            path: Some(path.into()),
+            _backend: file,
+        };
+        parser
+    }
 }
 
 impl ElfParser<Mmap> {
@@ -915,9 +935,9 @@ impl ElfParser<Mmap> {
         let elf_data = unsafe { mem::transmute::<&[u8], &'static [u8]>(mmap.deref()) };
 
         let parser = ElfParser {
-            _backend: mmap,
-            cache: Cache::new(elf_data),
+            cache: Cache::new(mmap.clone(), elf_data),
             path,
+            _backend: mmap,
         };
         parser
     }
