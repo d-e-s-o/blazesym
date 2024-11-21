@@ -222,25 +222,25 @@ impl<'mmap> SymbolTableCache<'mmap> {
 }
 
 
-struct Cache<'mmap> {
+struct Cache<'bcknd> {
     /// A slice of the raw ELF data that we are about to parse.
-    elf_data: &'mmap [u8],
+    elf_data: &'bcknd [u8],
     /// The cached ELF header.
-    ehdr: OnceCell<EhdrExt<'mmap>>,
+    ehdr: OnceCell<EhdrExt<'bcknd>>,
     /// The cached ELF section headers.
-    shdrs: OnceCell<&'mmap [Elf64_Shdr]>,
-    shstrtab: OnceCell<&'mmap [u8]>,
+    shdrs: OnceCell<&'bcknd [Elf64_Shdr]>,
+    shstrtab: OnceCell<&'bcknd [u8]>,
     /// The cached ELF program headers.
-    phdrs: OnceCell<&'mmap [Elf64_Phdr]>,
+    phdrs: OnceCell<&'bcknd [Elf64_Phdr]>,
     /// The cached symbol table.
-    symtab: OnceCell<SymbolTableCache<'mmap>>,
+    symtab: OnceCell<SymbolTableCache<'bcknd>>,
     /// The cached dynamic symbol table.
-    dynsym: OnceCell<SymbolTableCache<'mmap>>,
+    dynsym: OnceCell<SymbolTableCache<'bcknd>>,
 }
 
-impl<'mmap> Cache<'mmap> {
+impl<'bcknd> Cache<'bcknd> {
     /// Create a new `Cache` using the provided raw ELF object data.
-    fn new(elf_data: &'mmap [u8]) -> Self {
+    fn new(elf_data: &'bcknd [u8]) -> Self {
         Self {
             elf_data,
             ehdr: OnceCell::new(),
@@ -254,7 +254,7 @@ impl<'mmap> Cache<'mmap> {
 
     /// Retrieve the raw section data for the ELF section at index
     /// `idx`, along with it's section header.
-    fn section_data_raw(&self, idx: usize) -> Result<(&'mmap Elf64_Shdr, &'mmap [u8])> {
+    fn section_data_raw(&self, idx: usize) -> Result<(&'bcknd Elf64_Shdr, &'bcknd [u8])> {
         let shdrs = self.ensure_shdrs()?;
         let shdr = shdrs
             .get(idx)
@@ -275,7 +275,7 @@ impl<'mmap> Cache<'mmap> {
 
     /// Retrieve the raw section data for the ELF section at index
     /// `idx`.
-    fn section_data(&self, idx: usize) -> Result<&'mmap [u8]> {
+    fn section_data(&self, idx: usize) -> Result<&'bcknd [u8]> {
         self.section_data_raw(idx).map(|(_section, data)| data)
     }
 
@@ -285,7 +285,7 @@ impl<'mmap> Cache<'mmap> {
     /// of certain member variables to reference data from this header,
     /// which otherwise is zeroed out.
     #[inline]
-    fn read_first_shdr(&self, ehdr: &Elf64_Ehdr) -> Result<&'mmap Elf64_Shdr> {
+    fn read_first_shdr(&self, ehdr: &Elf64_Ehdr) -> Result<&'bcknd Elf64_Shdr> {
         let shdr = self
             .elf_data
             .get(ehdr.e_shoff as usize..)
@@ -295,7 +295,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(shdr)
     }
 
-    fn parse_ehdr(&self) -> Result<EhdrExt<'mmap>> {
+    fn parse_ehdr(&self) -> Result<EhdrExt<'bcknd>> {
         let mut elf_data = self.elf_data;
         let ehdr = elf_data
             .read_pod_ref::<Elf64_Ehdr>()
@@ -348,11 +348,11 @@ impl<'mmap> Cache<'mmap> {
         Ok(ehdr)
     }
 
-    fn ensure_ehdr(&self) -> Result<&EhdrExt<'mmap>> {
+    fn ensure_ehdr(&self) -> Result<&EhdrExt<'bcknd>> {
         self.ehdr.get_or_try_init(|| self.parse_ehdr())
     }
 
-    fn parse_shdrs(&self) -> Result<&'mmap [Elf64_Shdr]> {
+    fn parse_shdrs(&self) -> Result<&'bcknd [Elf64_Shdr]> {
         let ehdr = self.ensure_ehdr()?;
         let shdrs = self
             .elf_data
@@ -363,11 +363,11 @@ impl<'mmap> Cache<'mmap> {
         Ok(shdrs)
     }
 
-    fn ensure_shdrs(&self) -> Result<&'mmap [Elf64_Shdr]> {
+    fn ensure_shdrs(&self) -> Result<&'bcknd [Elf64_Shdr]> {
         self.shdrs.get_or_try_init(|| self.parse_shdrs()).copied()
     }
 
-    fn parse_phdrs(&self) -> Result<&'mmap [Elf64_Phdr]> {
+    fn parse_phdrs(&self) -> Result<&'bcknd [Elf64_Phdr]> {
         let ehdr = self.ensure_ehdr()?;
         let phdrs = self
             .elf_data
@@ -378,7 +378,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(phdrs)
     }
 
-    fn ensure_phdrs(&self) -> Result<&'mmap [Elf64_Phdr]> {
+    fn ensure_phdrs(&self) -> Result<&'bcknd [Elf64_Phdr]> {
         self.phdrs.get_or_try_init(|| self.parse_phdrs()).copied()
     }
 
@@ -401,21 +401,21 @@ impl<'mmap> Cache<'mmap> {
         Ok(shstrndx)
     }
 
-    fn parse_shstrtab(&self) -> Result<&'mmap [u8]> {
+    fn parse_shstrtab(&self) -> Result<&'bcknd [u8]> {
         let ehdr = self.ensure_ehdr()?;
         let shstrndx = self.shstrndx(ehdr.ehdr)?;
         let shstrtab = self.section_data(shstrndx)?;
         Ok(shstrtab)
     }
 
-    fn ensure_shstrtab(&self) -> Result<&'mmap [u8]> {
+    fn ensure_shstrtab(&self) -> Result<&'bcknd [u8]> {
         self.shstrtab
             .get_or_try_init(|| self.parse_shstrtab())
             .copied()
     }
 
     /// Get the name of the section at a given index.
-    fn section_name(&self, idx: usize) -> Result<&'mmap str> {
+    fn section_name(&self, idx: usize) -> Result<&'bcknd str> {
         let shdrs = self.ensure_shdrs()?;
         let shstrtab = self.ensure_shstrtab()?;
 
@@ -434,7 +434,7 @@ impl<'mmap> Cache<'mmap> {
     }
 
     #[cfg(test)]
-    fn symbol(&self, idx: usize) -> Result<&'mmap Elf64_Sym> {
+    fn symbol(&self, idx: usize) -> Result<&'bcknd Elf64_Sym> {
         let symtab = self.ensure_symtab()?;
         let symbol = symtab
             .get(idx)
@@ -456,7 +456,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(None)
     }
 
-    fn parse_syms(&self, section: &str) -> Result<Vec<&'mmap Elf64_Sym>> {
+    fn parse_syms(&self, section: &str) -> Result<Vec<&'bcknd Elf64_Sym>> {
         let idx = if let Some(idx) = self.find_section(section)? {
             idx
         } else {
@@ -495,7 +495,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(syms)
     }
 
-    fn ensure_symtab_cache(&self) -> Result<&SymbolTableCache<'mmap>> {
+    fn ensure_symtab_cache(&self) -> Result<&SymbolTableCache<'bcknd>> {
         self.symtab.get_or_try_init(|| {
             let syms = self.parse_syms(".symtab")?;
             let strtab = self.parse_strs(".strtab")?;
@@ -504,7 +504,7 @@ impl<'mmap> Cache<'mmap> {
         })
     }
 
-    fn ensure_dynsym_cache(&self) -> Result<&SymbolTableCache<'mmap>> {
+    fn ensure_dynsym_cache(&self) -> Result<&SymbolTableCache<'bcknd>> {
         self.dynsym.get_or_try_init(|| {
             // TODO: We really should check the `.dynamic` section for
             //       information on what symbol and string tables to
@@ -516,17 +516,17 @@ impl<'mmap> Cache<'mmap> {
         })
     }
 
-    fn ensure_symtab(&self) -> Result<&[&'mmap Elf64_Sym]> {
+    fn ensure_symtab(&self) -> Result<&[&'bcknd Elf64_Sym]> {
         let symtab = self.ensure_symtab_cache()?;
         Ok(&symtab.syms)
     }
 
-    fn ensure_dynsym(&self) -> Result<&[&'mmap Elf64_Sym]> {
+    fn ensure_dynsym(&self) -> Result<&[&'bcknd Elf64_Sym]> {
         let dynsym = self.ensure_dynsym_cache()?;
         Ok(&dynsym.syms)
     }
 
-    fn parse_strs(&self, section: &str) -> Result<&'mmap [u8]> {
+    fn parse_strs(&self, section: &str) -> Result<&'bcknd [u8]> {
         let strs = if let Some(idx) = self.find_section(section)? {
             self.section_data(idx)?
         } else {
@@ -535,13 +535,13 @@ impl<'mmap> Cache<'mmap> {
         Ok(strs)
     }
 
-    fn ensure_str2symtab(&self) -> Result<&[(&'mmap str, usize)]> {
+    fn ensure_str2symtab(&self) -> Result<&[(&'bcknd str, usize)]> {
         let symtab = self.ensure_symtab_cache()?;
         let str2sym = symtab.ensure_str2sym(|_sym| true)?;
         Ok(str2sym)
     }
 
-    fn ensure_str2dynsym(&self) -> Result<&[(&'mmap str, usize)]> {
+    fn ensure_str2dynsym(&self) -> Result<&[(&'bcknd str, usize)]> {
         let symtab = self.ensure_symtab_cache()?;
         let dynsym = self.ensure_dynsym_cache()?;
         let str2sym = dynsym.ensure_str2sym(|sym| {
