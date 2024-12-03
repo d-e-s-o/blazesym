@@ -51,7 +51,7 @@ path = "benches/capi.rs"
 harness = false
 
 [build-dependencies]
-cbindgen = {version = "0.27", optional = true}
+cbindgen = {version = "0.27", optional = true, git = "https://github.com/danielocfb/cbindgen.git", branch = "topic/associated_constants_rename_base_name"}
 which = {version = "7.0.0", optional = true}
 
 [dependencies]
