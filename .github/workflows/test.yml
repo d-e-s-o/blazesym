@@ -361,6 +361,7 @@ jobs:
     steps:
     - name: Install development dependencies
       run: |
+        sudo ln --force --symbolic /usr/include/x86_64-linux-gnu/bits /usr/include/bits
         sudo apt-get install -y libelf-dev zlib1g-dev
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
