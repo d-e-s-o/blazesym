@@ -23,6 +23,7 @@ use blazesym::SymType;
 use clap::Parser as _;
 
 use tracing::subscriber::set_global_default as set_global_subscriber;
+use tracing::Level;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -304,24 +305,27 @@ fn symbolize(symbolize: args::symbolize::Symbolize) -> Result<()> {
 
 fn main() -> Result<()> {
     let args = args::Args::parse();
-    let filter = match args.verbosity {
-        0 => LevelFilter::WARN,
-        1 => LevelFilter::INFO,
-        2 => LevelFilter::DEBUG,
-        _ => LevelFilter::TRACE,
+    let level = match args.verbosity {
+        0 => Level::WARN,
+        1 => Level::INFO,
+        2 => Level::DEBUG,
+        _ => Level::TRACE,
     };
 
+    let subscriber = trace::Hierarchical::builder()
+        .with_max_level(Some(level))
+        .build();
     //let format = fmt::format().with_target(false).pretty();
     //let format = trace::Hierarchical::new();
-    let subscriber = FmtSubscriber::builder()
-        .event_format(format)
-        .with_max_level(filter)
-        .with_span_events(FmtSpan::FULL)
-        .with_timer(SystemTime)
-        .finish();
+    //let subscriber = FmtSubscriber::builder()
+    //    .event_format(format)
+    //    .with_max_level(filter)
+    //    //.with_span_events(FmtSpan::FULL)
+    //    //.with_timer(SystemTime)
+    //    .finish();
 
-    let subscriber = Registry::default().with(layer);
-    let subscriber = filter.with_subscriber(subscriber);
+    //let subscriber = Registry::default().with(layer);
+    //let subscriber = filter.with_subscriber(subscriber);
     let () =
         set_global_subscriber(subscriber).with_context(|| "failed to set tracing subscriber")?;
 
