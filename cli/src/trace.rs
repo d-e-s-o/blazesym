@@ -192,9 +192,9 @@ impl Hierarchical<Stderr> {
             fn write_names(writer: &mut StderrLock<'_>, meta: &SpanMeta) -> fmt::Result {
                 let prefix = if let Some((_id, parent)) = &meta.parent {
                     let () = write_names(writer, parent)?;
-                    ""
-                } else {
                     ":"
+                } else {
+                    ""
                 };
 
                 let name = meta.metadata.name();
