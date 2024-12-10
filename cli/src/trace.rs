@@ -24,7 +24,6 @@ use tracing::Event;
 use tracing::Level;
 use tracing::Metadata;
 use tracing::Subscriber;
-use tracing_core::span::Current;
 use tracing_subscriber::fmt::format;
 use tracing_subscriber::fmt::time::FormatTime as _;
 use tracing_subscriber::fmt::time::SystemTime;
