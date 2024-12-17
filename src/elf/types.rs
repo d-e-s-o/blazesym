@@ -197,39 +197,40 @@ pub(crate) struct Elf64_Ehdr {
     pub e_shstrndx: Elf64_Half,
 }
 
+impl Elf64_Ehdr {
+    pub fn is_32bit(&self) -> bool {
+        let class = self.e_ident[4];
+        class == ELFCLASS32
+    }
+}
+
+impl From<&Elf32_Ehdr> for Elf64_Ehdr {
+    #[cold]
+    fn from(other: &Elf32_Ehdr) -> Self {
+        Self {
+            e_ident: other.e_ident,
+            e_type: other.e_type,
+            e_machine: other.e_machine,
+            e_version: other.e_version,
+            e_entry: other.e_entry.into(),
+            e_phoff: other.e_phoff.into(),
+            e_shoff: other.e_shoff.into(),
+            e_flags: other.e_flags,
+            e_ehsize: other.e_ehsize,
+            e_phentsize: other.e_phentsize,
+            e_phnum: other.e_phnum,
+            e_shentsize: other.e_shentsize,
+            e_shnum: other.e_shnum,
+            e_shstrndx: other.e_shstrndx,
+        }
+    }
+}
+
 // SAFETY: `Elf64_Ehdr` is valid for any bit pattern.
 unsafe impl Pod for Elf64_Ehdr {}
 
 impl Has32BitTy for Elf64_Ehdr {
     type Ty32Bit = Elf32_Ehdr;
-}
-
-pub(crate) type ElfN_Ehdr<'elf> = ElfN<'elf, Elf64_Ehdr>;
-
-impl ElfN_Ehdr<'_> {
-    #[inline]
-    pub fn shoff(&self) -> Elf64_Off {
-        match self {
-            ElfN::B32(ehdr) => ehdr.e_shoff.into(),
-            ElfN::B64(ehdr) => ehdr.e_shoff,
-        }
-    }
-
-    #[inline]
-    pub fn phoff(&self) -> Elf64_Off {
-        match self {
-            ElfN::B32(ehdr) => ehdr.e_phoff.into(),
-            ElfN::B64(ehdr) => ehdr.e_phoff,
-        }
-    }
-
-    #[inline]
-    pub fn shstrndx(&self) -> Elf64_Half {
-        match self {
-            ElfN::B32(ehdr) => ehdr.e_shstrndx,
-            ElfN::B64(ehdr) => ehdr.e_shstrndx,
-        }
-    }
 }
 
 
@@ -698,6 +699,9 @@ mod tests {
     /// Exercise some trivial type conversion functions.
     #[test]
     fn conversions() {
+        let ehdr32 = Elf32_Ehdr::default();
+        let _ehdr64 = Elf64_Ehdr::from(&ehdr32);
+
         let ehdr64 = Elf64_Ehdr::default();
         let ehdr = ElfN::B64(&ehdr64);
         #[allow(clippy::clone_on_copy)]
@@ -716,10 +720,6 @@ mod tests {
     /// Exercise some accessor functions.
     #[test]
     fn accessors() {
-        let ehdr32 = Elf32_Ehdr::default();
-        let ehdr = ElfN_Ehdr::B32(&ehdr32);
-        let _val = ehdr.phoff();
-
         let shdr32 = Elf32_Shdr::default();
         let shdr = ElfN_Shdr::B32(&shdr32);
         let _val = shdr.addr();

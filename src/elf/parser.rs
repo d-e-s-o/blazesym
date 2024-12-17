@@ -38,7 +38,6 @@ use super::types::Elf64_Phdr;
 use super::types::Elf64_Shdr;
 use super::types::Elf64_Sym;
 use super::types::ElfN_BoxedSyms;
-use super::types::ElfN_Ehdr;
 use super::types::ElfN_Phdrs;
 use super::types::ElfN_Shdr;
 use super::types::ElfN_Shdrs;
@@ -163,9 +162,9 @@ fn decompress_zstd(_data: &[u8]) -> Result<Vec<u8>> {
 
 
 #[derive(Debug)]
-struct EhdrExt<'mmap> {
+struct EhdrExt {
     /// The ELF header.
-    ehdr: ElfN_Ehdr<'mmap>,
+    ehdr: Elf64_Ehdr,
     /// Override of `ehdr.e_shnum`, handling of which is special-cased by
     /// the ELF standard.
     shnum: usize,
@@ -174,7 +173,7 @@ struct EhdrExt<'mmap> {
     phnum: usize,
 }
 
-impl EhdrExt<'_> {
+impl EhdrExt {
     fn is_32bit(&self) -> bool {
         self.ehdr.is_32bit()
     }
@@ -249,7 +248,7 @@ struct Cache<'mmap> {
     /// A slice of the raw ELF data that we are about to parse.
     elf_data: &'mmap [u8],
     /// The cached ELF header.
-    ehdr: OnceCell<EhdrExt<'mmap>>,
+    ehdr: OnceCell<EhdrExt>,
     /// The cached ELF section headers.
     shdrs: OnceCell<ElfN_Shdrs<'mmap>>,
     shstrtab: OnceCell<&'mmap [u8]>,
@@ -377,10 +376,10 @@ impl<'mmap> Cache<'mmap> {
     /// of certain member variables to reference data from this header,
     /// which otherwise is zeroed out.
     #[inline]
-    fn read_first_shdr(&self, ehdr: ElfN_Ehdr<'_>) -> Result<ElfN_Shdr<'mmap>> {
+    fn read_first_shdr(&self, ehdr: &Elf64_Ehdr) -> Result<ElfN_Shdr<'mmap>> {
         let mut data = self
             .elf_data
-            .get(ehdr.shoff() as usize..)
+            .get(ehdr.e_shoff as usize..)
             .ok_or_invalid_data(|| "ELF e_shoff is invalid")?;
 
         let shdr = if ehdr.is_32bit() {
@@ -393,7 +392,7 @@ impl<'mmap> Cache<'mmap> {
         Ok(shdr)
     }
 
-    fn parse_ehdr(&self) -> Result<EhdrExt<'mmap>> {
+    fn parse_ehdr(&self) -> Result<EhdrExt> {
         let mut elf_data = self.elf_data;
         let e_ident = elf_data
             .peek_array::<EI_NIDENT>()
@@ -413,24 +412,23 @@ impl<'mmap> Cache<'mmap> {
         }
 
         let bit32 = class == ELFCLASS32;
-        let (ehdr, e_shnum, e_phnum) = if bit32 {
-            let ehdr = elf_data
+        let ehdr = if bit32 {
+            elf_data
                 .read_pod_ref::<Elf32_Ehdr>()
-                .ok_or_invalid_data(|| "failed to read ELF header")?;
-            (ElfN_Ehdr::B32(ehdr), ehdr.e_shnum, ehdr.e_phnum)
+                .map(Elf64_Ehdr::from)
+                .ok_or_invalid_data(|| "failed to read ELF header")?
         } else {
-            let ehdr = elf_data
-                .read_pod_ref::<Elf64_Ehdr>()
-                .ok_or_invalid_data(|| "failed to read ELF header")?;
-            (ElfN_Ehdr::B64(ehdr), ehdr.e_shnum, ehdr.e_phnum)
+            elf_data
+                .read_pod::<Elf64_Ehdr>()
+                .ok_or_invalid_data(|| "failed to read ELF header")?
         };
 
         // "If the number of entries in the section header table is larger than
         // or equal to SHN_LORESERVE, e_shnum holds the value zero and the real
         // number of entries in the section header table is held in the sh_size
         // member of the initial entry in section header table."
-        let shnum = if e_shnum == 0 {
-            let shdr = self.read_first_shdr(ehdr)?.to_64bit();
+        let shnum = if ehdr.e_shnum == 0 {
+            let shdr = self.read_first_shdr(&ehdr)?.to_64bit();
             usize::try_from(shdr.sh_size).ok().ok_or_invalid_data(|| {
                 format!(
                     "ELF file contains unsupported number of sections ({})",
@@ -438,7 +436,7 @@ impl<'mmap> Cache<'mmap> {
                 )
             })?
         } else {
-            e_shnum.into()
+            ehdr.e_shnum.into()
         };
 
         // "If the number of entries in the program header table is
@@ -446,8 +444,8 @@ impl<'mmap> Cache<'mmap> {
         // PN_XNUM (0xffff) and the real number of entries in the
         // program header table is held in the sh_info member of the
         // initial entry in section header table."
-        let phnum = if e_phnum == PN_XNUM {
-            let shdr = self.read_first_shdr(ehdr)?.to_64bit();
+        let phnum = if ehdr.e_phnum == PN_XNUM {
+            let shdr = self.read_first_shdr(&ehdr)?.to_64bit();
             usize::try_from(shdr.sh_info).ok().ok_or_invalid_data(|| {
                 format!(
                     "ELF file contains unsupported number of program headers ({})",
@@ -455,14 +453,14 @@ impl<'mmap> Cache<'mmap> {
                 )
             })?
         } else {
-            e_phnum.into()
+            ehdr.e_phnum.into()
         };
 
         let ehdr = EhdrExt { ehdr, shnum, phnum };
         Ok(ehdr)
     }
 
-    fn ensure_ehdr(&self) -> Result<&EhdrExt<'mmap>> {
+    fn ensure_ehdr(&self) -> Result<&EhdrExt> {
         self.ehdr.get_or_try_init(|| self.parse_ehdr())
     }
 
@@ -471,7 +469,7 @@ impl<'mmap> Cache<'mmap> {
 
         let mut data = self
             .elf_data
-            .get(ehdr.ehdr.shoff() as usize..)
+            .get(ehdr.ehdr.e_shoff as usize..)
             .ok_or_invalid_data(|| "ELF e_shoff is invalid")?;
 
         let shdrs = if ehdr.is_32bit() {
@@ -495,7 +493,7 @@ impl<'mmap> Cache<'mmap> {
 
         let mut data = self
             .elf_data
-            .get(ehdr.ehdr.phoff() as usize..)
+            .get(ehdr.ehdr.e_phoff as usize..)
             .ok_or_invalid_data(|| "ELF e_phoff is invalid")?;
 
         let phdrs = if ehdr.is_32bit() {
@@ -514,17 +512,16 @@ impl<'mmap> Cache<'mmap> {
         self.phdrs.get_or_try_init(|| self.parse_phdrs()).copied()
     }
 
-    fn shstrndx(&self, ehdr: ElfN_Ehdr<'_>) -> Result<usize> {
-        let e_shstrndx = ehdr.shstrndx();
+    fn shstrndx(&self, ehdr: &Elf64_Ehdr) -> Result<usize> {
         // "If the index of section name string table section is larger
         // than or equal to SHN_LORESERVE (0xff00), this member holds
         // SHN_XINDEX (0xffff) and  the real index of the section name
         // string table section is held in the sh_link member of the
         // initial entry in section header table."
-        let shstrndx = if e_shstrndx == SHN_XINDEX {
+        let shstrndx = if ehdr.e_shstrndx == SHN_XINDEX {
             self.read_first_shdr(ehdr)?.link()
         } else {
-            u32::from(e_shstrndx)
+            u32::from(ehdr.e_shstrndx)
         };
 
         let shstrndx = usize::try_from(shstrndx).ok().ok_or_invalid_data(|| {
@@ -535,7 +532,7 @@ impl<'mmap> Cache<'mmap> {
 
     fn parse_shstrtab(&self) -> Result<&'mmap [u8]> {
         let ehdr = self.ensure_ehdr()?;
-        let shstrndx = self.shstrndx(ehdr.ehdr)?;
+        let shstrndx = self.shstrndx(&ehdr.ehdr)?;
         let shstrtab = self.section_data_raw(shstrndx)?;
         Ok(shstrtab)
     }
@@ -1094,7 +1091,7 @@ mod tests {
             e_shstrndx: 29,
         };
         let ehdr = EhdrExt {
-            ehdr: ElfN_Ehdr::B64(&ehdr),
+            ehdr,
             shnum: 42,
             phnum: 0,
         };
@@ -1233,7 +1230,7 @@ mod tests {
 
         let parser = ElfParser::open_file(file.as_file(), file.path()).unwrap();
         let ehdr = parser.cache.ensure_ehdr().unwrap();
-        let shstrndx = parser.cache.shstrndx(ehdr.ehdr).unwrap();
+        let shstrndx = parser.cache.shstrndx(&ehdr.ehdr).unwrap();
         assert_eq!(shstrndx, usize::from(SHSTRNDX));
     }
 
@@ -1538,7 +1535,7 @@ mod tests {
             e_shstrndx: 1,
         };
         let ehdr = EhdrExt {
-            ehdr: ElfN_Ehdr::B64(&ehdr),
+            ehdr,
             shnum: 3,
             phnum: 0,
         };
