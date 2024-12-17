@@ -149,7 +149,7 @@ jobs:
       LLVM_GSYMUTIL: /usr/bin/llvm-gsymutil-18
     steps:
     - name: Install development dependencies
-      run: sudo apt-get install -y llvm-18 gcc-multilib libelf-dev zlib1g-dev
+      run: sudo apt-get install -y gcc-multilib libelf-dev zlib1g-dev
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@nightly
     - name: Check incremental rebuilds
@@ -171,7 +171,7 @@ jobs:
       LLVM_GSYMUTIL: /usr/bin/llvm-gsymutil-18
     steps:
     - name: Install development dependencies
-      run: sudo apt-get install -y llvm-18 gcc-multilib libelf-dev zlib1g-dev
+      run: sudo apt-get install -y gcc-multilib libelf-dev zlib1g-dev
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@nightly
     - uses: Swatinem/rust-cache@v2
@@ -255,7 +255,7 @@ jobs:
       LLVM_GSYMUTIL: /usr/bin/llvm-gsymutil-18
     steps:
     - name: Install development dependencies
-      run: sudo apt-get install -y llvm-18 gcc-multilib libelf-dev zlib1g-dev
+      run: sudo apt-get install -y gcc-multilib libelf-dev zlib1g-dev
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
     - run: cargo check --package=blazesym-dev --features=generate-unit-test-files
@@ -302,8 +302,6 @@ jobs:
         key: ${{ matrix.sanitizer }}
     - name: Enable debug symbols
       run: |
-          # to get the symbolizer for debug symbol resolution
-          sudo apt-get install -y llvm-18
           cat Cargo.toml
     - name: cargo test -Zsanitizer=${{ matrix.sanitizer }}
       env:
@@ -322,7 +320,7 @@ jobs:
       LLVM_GSYMUTIL: /usr/bin/llvm-gsymutil-18
     steps:
     - name: Install development dependencies
-      run: sudo apt-get install -y llvm-18 gcc-multilib libelf-dev zlib1g-dev liblzma-dev
+      run: sudo apt-get install -y gcc-multilib libelf-dev zlib1g-dev liblzma-dev
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
@@ -388,7 +386,7 @@ jobs:
       LLVM_GSYMUTIL: /usr/bin/llvm-gsymutil-18
     steps:
     - name: Install development dependencies
-      run: sudo apt-get install -y llvm-18 gcc-multilib libelf-dev zlib1g-dev
+      run: sudo apt-get install -y gcc-multilib libelf-dev zlib1g-dev
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@nightly
     - name: Run benchmarks
