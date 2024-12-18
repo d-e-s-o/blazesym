@@ -169,9 +169,9 @@ fn decompress_zstd(_data: &[u8]) -> Result<Vec<u8>> {
 
 
 #[derive(Debug)]
-struct EhdrExt<'mmap> {
+struct EhdrExt<'bcknd> {
     /// The ELF header.
-    ehdr: ElfN_Ehdr<'mmap>,
+    ehdr: ElfN_Ehdr<'bcknd>,
     /// Override of `ehdr.e_shnum`, handling of which is special-cased by
     /// the ELF standard.
     shnum: usize,
@@ -270,7 +270,10 @@ struct Cache<'bcknd, B> {
     section_data: OnceCell<Box<[OnceCell<Cow<'bcknd, [u8]>>]>>,
 }
 
-impl<'bcknd, B> Cache<'bcknd, B> {
+impl<'bcknd, B> Cache<'bcknd, B>
+where
+    B: BackendImpl<'bcknd>,
+{
     /// Create a new `Cache` using the provided raw ELF object data.
     fn new(backend: B, elf_data: &'bcknd [u8]) -> Self {
         Self {
@@ -385,27 +388,22 @@ impl<'bcknd, B> Cache<'bcknd, B> {
     /// which otherwise is zeroed out.
     #[inline]
     fn read_first_shdr(&self, ehdr: &ElfN_Ehdr<'_>) -> Result<ElfN_Shdr<'bcknd>> {
-        let mut data = self
-            .elf_data
-            .get(ehdr.shoff() as usize..)
-            .ok_or_invalid_data(|| "ELF e_shoff is invalid")?;
-
         let shdr = if ehdr.is_32bit() {
-            data.read_pod_ref::<Elf32_Shdr>()
-                .map(Cow::Borrowed)
+            self.backend
+                .read_pod_obj::<Elf32_Shdr>(ehdr.shoff() as _)
                 .map(ElfN_Shdr::B32)
         } else {
-            data.read_pod_ref::<Elf64_Shdr>()
-                .map(Cow::Borrowed)
+            self.backend
+                .read_pod_obj::<Elf64_Shdr>(ehdr.shoff() as _)
                 .map(ElfN_Shdr::B64)
         }
-        .ok_or_invalid_data(|| "failed to read ELF section header")?;
+        .context("failed to read ELF section header")?;
 
         Ok(shdr)
     }
 
     fn parse_ehdr(&self) -> Result<EhdrExt<'bcknd>> {
-        let mut elf_data = self.elf_data;
+        let elf_data = self.elf_data;
         let e_ident = elf_data
             .peek_array::<EI_NIDENT>()
             .ok_or_invalid_data(|| "failed to read ELF e_ident information")?;
@@ -425,17 +423,15 @@ impl<'bcknd, B> Cache<'bcknd, B> {
 
         let bit32 = class == ELFCLASS32;
         let ehdr = if bit32 {
-            elf_data
-                .read_pod_ref::<Elf32_Ehdr>()
-                .map(Cow::Borrowed)
+            self.backend
+                .read_pod_obj::<Elf32_Ehdr>(0)
                 .map(ElfN_Ehdr::B32)
-                .ok_or_invalid_data(|| "failed to read ELF header")?
+                .context("failed to read ELF header")?
         } else {
-            elf_data
-                .read_pod_ref::<Elf64_Ehdr>()
-                .map(Cow::Borrowed)
+            self.backend
+                .read_pod_obj::<Elf64_Ehdr>(0)
                 .map(ElfN_Ehdr::B64)
-                .ok_or_invalid_data(|| "failed to read ELF header")?
+                .context("failed to read ELF header")?
         };
 
         // "If the number of entries in the section header table is larger than
@@ -837,17 +833,20 @@ impl<'bcknd> BackendImpl<'bcknd> for &File {
 
 /// A parser for ELF64 files.
 #[derive(Debug)]
-pub(crate) struct ElfParser<B = Mmap> {
+pub(crate) struct ElfParser<B = Mmap>
+where
+    B: Backend,
+{
     /// A cache for relevant parts of the ELF file.
     // SAFETY: We must not hand out references with a 'static lifetime to
     //         this member. Rather, they should never outlive `self`.
     //         Furthermore, this member has to be listed before `_mmap`
     //         to make sure we never end up with a dangling reference.
-    cache: Cache<'static, B>,
+    cache: Cache<'static, B::ImplTy<'static>>,
     /// The path to the ELF file being worked on, if available.
     path: Option<PathBuf>,
     /// The backend used.
-    _backend: B,
+    _backend: B::ObjTy,
 }
 
 impl ElfParser<File> {
@@ -856,12 +855,13 @@ impl ElfParser<File> {
         P: Into<PathBuf>,
     {
         let elf_data = &[];
+        let _backend = Box::new(file);
+        let file_ref = unsafe { mem::transmute::<&File, &'static File>(_backend.deref()) };
 
         let parser = Self {
-            // XXX: Cloning should be avoided.
-            cache: Cache::new(file.try_clone().unwrap(), elf_data),
+            cache: Cache::new(file_ref, elf_data),
             path: Some(path.into()),
-            _backend: file,
+            _backend,
         };
         parser
     }
@@ -879,16 +879,18 @@ impl ElfParser<Mmap> {
 
     /// Create an `ElfParser` from mmap'ed data.
     pub(crate) fn from_mmap(mmap: Mmap, path: Option<PathBuf>) -> Self {
+        let elf_data = &[];
         // We transmute the mmap's lifetime to static here as that is a
         // necessity for self-referentiality.
         // SAFETY: We never hand out any 'static references to cache
         //         data.
-        let elf_data = unsafe { mem::transmute::<&[u8], &'static [u8]>(mmap.deref()) };
+        let data = unsafe { mem::transmute::<&[u8], &'static [u8]>(mmap.deref()) };
+        let _backend = mmap;
 
         let parser = ElfParser {
-            cache: Cache::new(mmap.clone(), elf_data),
+            cache: Cache::new(data, elf_data),
             path,
-            _backend: mmap,
+            _backend,
         };
         parser
     }
@@ -901,7 +903,10 @@ impl ElfParser<Mmap> {
     }
 }
 
-impl<B> ElfParser<B> {
+impl<B> ElfParser<B>
+where
+    B: Backend,
+{
     /// Retrieve the data corresponding to the ELF section at index
     /// `idx`, optionally decompressing it if it is compressed.
     pub(crate) fn section_data(&self, idx: usize) -> Result<&[u8]> {
@@ -1713,6 +1718,7 @@ mod tests {
         let () = aligned_data.align(8).unwrap();
 
         let cache = Cache {
+            backend: aligned_data,
             elf_data: aligned_data,
             ehdr: OnceCell::from(ehdr),
             shdrs: OnceCell::from(ElfN_Shdrs::B64(shdrs.as_slice())),
