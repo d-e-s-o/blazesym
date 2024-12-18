@@ -232,7 +232,7 @@ mod tests {
 
     #[cfg(not(feature = "breakpad"))]
     use std::path::Path;
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     use crate::ErrorKind;
 
@@ -292,7 +292,7 @@ mod tests {
 
         let _results = inspector.lookup(&Source::Elf(elf.clone()), &["factorial"]);
         let data2 = data();
-        assert!(Rc::ptr_eq(
+        assert!(Arc::ptr_eq(
             data1.dwarf.get().unwrap(),
             data2.dwarf.get().unwrap()
         ));
@@ -303,7 +303,7 @@ mod tests {
 
         let _results = inspector.lookup(&Source::Elf(elf.clone()), &["factorial"]);
         let data3 = data();
-        assert!(!Rc::ptr_eq(
+        assert!(!Arc::ptr_eq(
             data1.dwarf.get().unwrap(),
             data3.elf.get().unwrap()
         ));

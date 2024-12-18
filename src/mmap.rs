@@ -2,7 +2,7 @@ use std::fs::File;
 use std::ops::Deref;
 use std::ops::Range;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use memmap2::Mmap as Mapping;
 use memmap2::MmapOptions;
@@ -63,7 +63,7 @@ impl Builder {
             }?;
 
             Mmap {
-                mapping: Some(Rc::new(mapping)),
+                mapping: Some(Arc::new(mapping)),
                 view: 0..len as u64,
             }
         };
@@ -76,7 +76,7 @@ impl Builder {
 #[derive(Clone, Debug)]
 pub struct Mmap {
     /// The actual memory mapping.
-    mapping: Option<Rc<Mapping>>,
+    mapping: Option<Arc<Mapping>>,
     /// The view on the memory mapping that this object represents.
     view: Range<u64>,
 }

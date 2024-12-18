@@ -4,7 +4,7 @@ use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::path::Path;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[cfg(feature = "dwarf")]
 use crate::dwarf::DwarfResolver;
@@ -30,8 +30,8 @@ use super::ElfParser;
 #[derive(Clone, Debug)]
 enum ElfBackend {
     #[cfg(feature = "dwarf")]
-    Dwarf(Rc<DwarfResolver>), // ELF w/ DWARF
-    Elf(Rc<ElfParser>), // ELF w/o DWARF
+    Dwarf(Arc<DwarfResolver>), // ELF w/ DWARF
+    Elf(Arc<ElfParser>), // ELF w/o DWARF
 }
 
 
@@ -39,9 +39,9 @@ enum ElfBackend {
 #[derive(Clone, Debug)]
 pub(crate) struct ElfResolverData {
     /// A bare-bones ELF resolver.
-    pub elf: OnceCell<Rc<ElfResolver>>,
+    pub elf: OnceCell<Arc<ElfResolver>>,
     /// An ELF resolver with debug information enabled.
-    pub dwarf: OnceCell<Rc<ElfResolver>>,
+    pub dwarf: OnceCell<Arc<ElfResolver>>,
 }
 
 impl FileCache<ElfResolverData> {
@@ -55,7 +55,7 @@ impl FileCache<ElfResolverData> {
         &'slf self,
         path: &Path,
         debug_dirs: Option<&[PathBuf]>,
-    ) -> Result<&'slf Rc<ElfResolver>> {
+    ) -> Result<&'slf Arc<ElfResolver>> {
         let (file, cell) = self.entry(path)?;
         let resolver = if let Some(data) = cell.get() {
             if debug_dirs.is_some() {
@@ -66,7 +66,7 @@ impl FileCache<ElfResolverData> {
                     //         `elf` part *must* be present.
                     let parser = data.elf.get().unwrap().parser().clone();
                     let resolver = ElfResolver::from_parser(parser, debug_dirs)?;
-                    let resolver = Rc::new(resolver);
+                    let resolver = Arc::new(resolver);
                     Result::<_, Error>::Ok(resolver)
                 })?
             } else {
@@ -77,15 +77,15 @@ impl FileCache<ElfResolverData> {
                     //         `dwarf` part *must* be present.
                     let parser = data.dwarf.get().unwrap().parser().clone();
                     let resolver = ElfResolver::from_parser(parser, debug_dirs)?;
-                    let resolver = Rc::new(resolver);
+                    let resolver = Arc::new(resolver);
                     Result::<_, Error>::Ok(resolver)
                 })?
             }
             .clone()
         } else {
-            let parser = Rc::new(ElfParser::open_file(file, path)?);
+            let parser = Arc::new(ElfParser::open_file(file, path)?);
             let resolver = ElfResolver::from_parser(parser, debug_dirs)?;
-            Rc::new(resolver)
+            Arc::new(resolver)
         };
 
         let data = cell.get_or_init(|| {
@@ -125,7 +125,7 @@ impl ElfResolver {
         P: AsRef<Path>,
     {
         let path = path.as_ref();
-        let parser = Rc::new(ElfParser::open(path).unwrap());
+        let parser = Arc::new(ElfParser::open(path).unwrap());
         Self::from_parser(
             parser,
             Some(
@@ -142,13 +142,13 @@ impl ElfResolver {
     /// If `debug_dirs` is `Some`, interpret DWARF debug information. If it is
     /// `None`, just look at ELF symbols.
     pub(crate) fn from_parser(
-        parser: Rc<ElfParser>,
+        parser: Arc<ElfParser>,
         debug_dirs: Option<&[PathBuf]>,
     ) -> Result<Self> {
         #[cfg(feature = "dwarf")]
         let backend = if let Some(debug_dirs) = debug_dirs {
             let dwarf = DwarfResolver::from_parser(parser, debug_dirs)?;
-            let backend = ElfBackend::Dwarf(Rc::new(dwarf));
+            let backend = ElfBackend::Dwarf(Arc::new(dwarf));
             backend
         } else {
             ElfBackend::Elf(parser)
@@ -161,7 +161,7 @@ impl ElfResolver {
         Ok(resolver)
     }
 
-    fn parser(&self) -> &Rc<ElfParser> {
+    fn parser(&self) -> &Arc<ElfParser> {
         match &self.backend {
             #[cfg(feature = "dwarf")]
             ElfBackend::Dwarf(dwarf) => dwarf.parser(),
@@ -235,7 +235,7 @@ mod tests {
             .join("data")
             .join("test-stable-addrs.bin");
 
-        let parser = Rc::new(ElfParser::open(&path).unwrap());
+        let parser = Arc::new(ElfParser::open(&path).unwrap());
         let resolver = ElfResolver::from_parser(parser.clone(), None).unwrap();
         let dbg = format!("{resolver:?}");
         assert!(dbg.starts_with("Elf("), "{dbg}");

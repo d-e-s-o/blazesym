@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::elf::ElfResolver;
 use crate::symbolize::FindSymOpts;
@@ -20,15 +20,15 @@ use super::ksym::KsymResolver;
 
 
 pub(crate) struct KernelResolver {
-    ksym_resolver: Option<Rc<KsymResolver>>,
-    elf_resolver: Option<Rc<ElfResolver>>,
+    ksym_resolver: Option<Arc<KsymResolver>>,
+    elf_resolver: Option<Arc<ElfResolver>>,
     kaslr_offset: u64,
 }
 
 impl KernelResolver {
     pub(crate) fn new(
-        ksym_resolver: Option<Rc<KsymResolver>>,
-        elf_resolver: Option<Rc<ElfResolver>>,
+        ksym_resolver: Option<Arc<KsymResolver>>,
+        elf_resolver: Option<Arc<ElfResolver>>,
         kaslr_offset: Option<u64>,
     ) -> Result<KernelResolver> {
         if ksym_resolver.is_none() && elf_resolver.is_none() {
@@ -117,7 +117,7 @@ mod tests {
     /// Exercise the `Debug` representation of various types.
     #[test]
     fn debug_repr() {
-        let ksym = Rc::new(KsymResolver::load_file_name(Path::new(KALLSYMS)).unwrap());
+        let ksym = Arc::new(KsymResolver::load_file_name(Path::new(KALLSYMS)).unwrap());
         let kernel = KernelResolver::new(Some(ksym), None, Some(0)).unwrap();
         assert_ne!(format!("{kernel:?}"), "");
     }
