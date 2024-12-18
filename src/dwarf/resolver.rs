@@ -11,7 +11,7 @@ use std::ops::ControlFlow;
 use std::ops::Deref as _;
 use std::path::Path;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use gimli::AbbreviationsCacheStrategy;
 use gimli::Dwarf;
@@ -115,7 +115,7 @@ fn find_debug_file(file: &OsStr, linker: Option<&Path>, debug_dirs: &[PathBuf]) 
 fn try_deref_debug_link(
     parser: &ElfParser,
     debug_dirs: &[PathBuf],
-) -> Result<Option<Rc<ElfParser>>> {
+) -> Result<Option<Arc<ElfParser>>> {
     if let Some((file, checksum)) = read_debug_link(parser)? {
         match find_debug_file(file, parser.path(), debug_dirs) {
             Some(path) => {
@@ -131,7 +131,7 @@ fn try_deref_debug_link(
                     )))
                 }
 
-                let dst_parser = Rc::new(ElfParser::from_mmap(mmap, Some(path)));
+                let dst_parser = Arc::new(ElfParser::from_mmap(mmap, Some(path)));
                 Ok(Some(dst_parser))
             }
             None => Ok(None),
@@ -151,20 +151,20 @@ pub(crate) struct DwarfResolver {
     //         and `linkee_parser` to make sure we never end up with a
     //         dangling reference.
     units: Units<'static>,
-    parser: Rc<ElfParser>,
+    parser: Arc<ElfParser>,
     /// If the source file contains a valid debug link, this parser
     /// represents it.
-    linkee_parser: Option<Rc<ElfParser>>,
+    linkee_parser: Option<Arc<ElfParser>>,
 }
 
 impl DwarfResolver {
     /// Retrieve the resolver's underlying `ElfParser`.
-    pub(crate) fn parser(&self) -> &Rc<ElfParser> {
+    pub(crate) fn parser(&self) -> &Arc<ElfParser> {
         &self.parser
     }
 
     pub(crate) fn from_parser(
-        parser: Rc<ElfParser>,
+        parser: Arc<ElfParser>,
         debug_dirs: &[PathBuf],
     ) -> Result<Self, Error> {
         let linkee_parser = try_deref_debug_link(&parser, debug_dirs)?;
@@ -206,7 +206,7 @@ impl DwarfResolver {
             .iter()
             .map(PathBuf::from)
             .collect::<Vec<_>>();
-        Self::from_parser(Rc::new(parser), debug_dirs.as_slice())
+        Self::from_parser(Arc::new(parser), debug_dirs.as_slice())
     }
 
     /// Try converting a `Function` into a `SymInfo`.

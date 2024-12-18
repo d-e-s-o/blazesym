@@ -14,8 +14,8 @@ use std::os::fd::AsFd as _;
 use std::os::fd::AsRawFd as _;
 use std::os::fd::BorrowedFd;
 use std::path::Path;
-use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::inspect::SymInfo;
 use crate::log;
@@ -97,7 +97,7 @@ pub struct BpfInfoCache {
     ///
     /// Program information is reference counted, because it can be
     /// shared with sub-programs.
-    cache: RefCell<HashMap<BpfTag, Rc<sys::bpf_prog_info>>>,
+    cache: RefCell<HashMap<BpfTag, Arc<sys::bpf_prog_info>>>,
 }
 
 impl BpfInfoCache {
@@ -153,7 +153,7 @@ impl BpfInfoCache {
                     format!("failed to retrieve BPF program information for program {prog_id}")
                 })?;
 
-            let info = Rc::new(info);
+            let info = Arc::new(info);
 
             // We need to map all the known sub-programs to the
             // information that we are working with as well.
@@ -161,7 +161,7 @@ impl BpfInfoCache {
                 if found.is_none() && tag == prog_tag {
                     found = Some(*info);
                 }
-                let _prev = cache.insert(prog_tag, Rc::clone(&info));
+                let _prev = cache.insert(prog_tag, Arc::clone(&info));
             }
 
             next_prog_id = prog_id;
@@ -173,7 +173,7 @@ impl BpfInfoCache {
 
 #[derive(Debug)]
 struct LineInfoRecord {
-    path: Rc<Path>,
+    path: Arc<Path>,
     line: u32,
     col: u16,
 }
@@ -244,14 +244,14 @@ fn query_line_info(
             // around.
             let path = match file_cache.entry(file) {
                 Entry::Vacant(vacancy) => {
-                    let path = Rc::<Path>::from(Path::new(file));
+                    let path = Arc::<Path>::from(Path::new(file));
                     vacancy.insert(path)
                 }
                 Entry::Occupied(occupancy) => occupancy.into_mut(),
             };
 
             let record = LineInfoRecord {
-                path: Rc::clone(path),
+                path: Arc::clone(path),
                 line: info.line(),
                 col: info.column(),
             };
