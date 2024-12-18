@@ -1,6 +1,7 @@
 Unreleased
 ----------
 - Added support for 32 bit ELF binaries
+- Bumped minimum supported Rust version to `1.70`
 
 
 0.2.0-rc.2
