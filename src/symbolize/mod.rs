@@ -516,9 +516,9 @@ where
 ///
 /// Refer to [`Builder::set_apk_dispatcher`] and
 /// [`Builder::set_process_dispatcher`] for additional details.
-pub trait Resolve: Symbolize + TranslateFileOffset {}
+pub trait Resolve: Symbolize + TranslateFileOffset + Send {}
 
-impl<R> Resolve for R where R: Symbolize + TranslateFileOffset {}
+impl<R> Resolve for R where R: Symbolize + TranslateFileOffset + Send {}
 
 
 /// A trait representing the ability to convert file offsets into virtual
