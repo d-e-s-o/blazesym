@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::cell::OnceCell;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -9,6 +8,7 @@ use std::ops::ControlFlow;
 use std::ops::Deref as _;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
@@ -189,7 +189,7 @@ struct SymbolTableCache<'mmap> {
     /// The string table.
     strs: &'mmap [u8],
     /// The cached name to symbol index table (in dictionary order).
-    str2sym: OnceCell<Box<[(&'mmap str, usize)]>>,
+    str2sym: OnceLock<Box<[(&'mmap str, usize)]>>,
 }
 
 impl<'mmap> SymbolTableCache<'mmap> {
@@ -197,7 +197,7 @@ impl<'mmap> SymbolTableCache<'mmap> {
         Self {
             syms,
             strs,
-            str2sym: OnceCell::new(),
+            str2sym: OnceLock::new(),
         }
     }
 
@@ -250,19 +250,19 @@ struct Cache<'mmap> {
     /// A slice of the raw ELF data that we are about to parse.
     elf_data: &'mmap [u8],
     /// The cached ELF header.
-    ehdr: OnceCell<EhdrExt<'mmap>>,
+    ehdr: OnceLock<EhdrExt<'mmap>>,
     /// The cached ELF section headers.
-    shdrs: OnceCell<ElfN_Shdrs<'mmap>>,
-    shstrtab: OnceCell<&'mmap [u8]>,
+    shdrs: OnceLock<ElfN_Shdrs<'mmap>>,
+    shstrtab: OnceLock<&'mmap [u8]>,
     /// The cached ELF program headers.
-    phdrs: OnceCell<ElfN_Phdrs<'mmap>>,
+    phdrs: OnceLock<ElfN_Phdrs<'mmap>>,
     /// The cached symbol table.
-    symtab: OnceCell<SymbolTableCache<'mmap>>,
+    symtab: OnceLock<SymbolTableCache<'mmap>>,
     /// The cached dynamic symbol table.
-    dynsym: OnceCell<SymbolTableCache<'mmap>>,
+    dynsym: OnceLock<SymbolTableCache<'mmap>>,
     /// The section data.
     #[allow(clippy::type_complexity)]
-    section_data: OnceCell<Box<[OnceCell<Cow<'mmap, [u8]>>]>>,
+    section_data: OnceLock<Box<[OnceLock<Cow<'mmap, [u8]>>]>>,
 }
 
 impl<'mmap> Cache<'mmap> {
@@ -270,13 +270,13 @@ impl<'mmap> Cache<'mmap> {
     fn new(elf_data: &'mmap [u8]) -> Self {
         Self {
             elf_data,
-            ehdr: OnceCell::new(),
-            shdrs: OnceCell::new(),
-            shstrtab: OnceCell::new(),
-            phdrs: OnceCell::new(),
-            symtab: OnceCell::new(),
-            dynsym: OnceCell::new(),
-            section_data: OnceCell::new(),
+            ehdr: OnceLock::new(),
+            shdrs: OnceLock::new(),
+            shstrtab: OnceLock::new(),
+            phdrs: OnceLock::new(),
+            symtab: OnceLock::new(),
+            dynsym: OnceLock::new(),
+            section_data: OnceLock::new(),
         }
     }
 
@@ -320,7 +320,7 @@ impl<'mmap> Cache<'mmap> {
         if shdr.type_() != SHT_NOBITS {
             let datas = self.section_data.get_or_init(|| {
                 (0..shdrs.len())
-                    .map(|_| OnceCell::new())
+                    .map(|_| OnceLock::new())
                     .collect::<Box<[_]>>()
             });
 
@@ -1591,13 +1591,13 @@ mod tests {
 
         let cache = Cache {
             elf_data: aligned_data,
-            ehdr: OnceCell::from(ehdr),
-            shdrs: OnceCell::from(ElfN_Shdrs::B64(shdrs.as_slice())),
-            shstrtab: OnceCell::from(b".shstrtab\x00.symtab\x00".as_slice()),
-            phdrs: OnceCell::new(),
-            symtab: OnceCell::new(),
-            dynsym: OnceCell::new(),
-            section_data: OnceCell::new(),
+            ehdr: OnceLock::from(ehdr),
+            shdrs: OnceLock::from(ElfN_Shdrs::B64(shdrs.as_slice())),
+            shstrtab: OnceLock::from(b".shstrtab\x00.symtab\x00".as_slice()),
+            phdrs: OnceLock::new(),
+            symtab: OnceLock::new(),
+            dynsym: OnceLock::new(),
+            section_data: OnceLock::new(),
         };
 
         assert_eq!(cache.find_section(".symtab").unwrap(), Some(2));
