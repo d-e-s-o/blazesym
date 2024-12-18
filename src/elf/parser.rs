@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -19,13 +20,13 @@ use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
 use crate::inspect::SymInfo;
 use crate::mmap::Mmap;
-use crate::once::OnceCell;
 use crate::symbolize::FindSymOpts;
 use crate::symbolize::Reason;
 use crate::symbolize::ResolvedSym;
 use crate::symbolize::SrcLang;
 use crate::util::find_match_or_lower_bound_by_key;
 use crate::util::Pod;
+use crate::util::OnceExt as _;
 use crate::util::ReadRaw as _;
 use crate::Addr;
 use crate::Error;
@@ -307,7 +308,7 @@ impl<'elf> SymbolTableCache<'elf> {
     {
         let str2sym = self
             .str2sym
-            .get_or_try_init(|| {
+            .get_or_try_init_(|| {
                 let str2sym = self.create_str2sym(filter)?;
                 Result::<_, Error>::Ok(str2sym)
             })?
@@ -389,7 +390,7 @@ where
     fn section_data(&self, idx: usize) -> Result<&[u8]> {
         let shdr = self.section_hdr(idx)?;
         if shdr.type_() != SHT_NOBITS {
-            let datas = self.section_data.get_or_try_init(|| {
+            let datas = self.section_data.get_or_try_init_(|| {
                 let shdrs = self.ensure_shdrs()?;
                 let datas = (0..shdrs.len())
                     .map(|_| OnceCell::new())
@@ -400,7 +401,7 @@ where
             datas
                 .get(idx)
                 .ok_or_invalid_input(|| format!("ELF section index ({idx}) out of bounds"))?
-                .get_or_try_init(|| -> Result<Cow<'elf, [u8]>> {
+                .get_or_try_init_(|| -> Result<Cow<'elf, [u8]>> {
                     let data = self
                                 .backend
                                 .read_pod_slice::<u8>(shdr.offset(), shdr.size() as usize)
@@ -535,7 +536,7 @@ where
     }
 
     fn ensure_ehdr(&self) -> Result<&EhdrExt<'elf>> {
-        self.ehdr.get_or_try_init(|| self.parse_ehdr())
+        self.ehdr.get_or_try_init_(|| self.parse_ehdr())
     }
 
     fn parse_shdrs(&self) -> Result<ElfN_Shdrs<'elf>> {
@@ -557,7 +558,7 @@ where
     }
 
     fn ensure_shdrs(&self) -> Result<&ElfN_Shdrs<'elf>> {
-        self.shdrs.get_or_try_init(|| self.parse_shdrs())
+        self.shdrs.get_or_try_init_(|| self.parse_shdrs())
     }
 
     fn parse_phdrs(&self) -> Result<ElfN_Phdrs<'elf>> {
@@ -579,7 +580,7 @@ where
     }
 
     fn ensure_phdrs(&self) -> Result<&ElfN_Phdrs<'elf>> {
-        self.phdrs.get_or_try_init(|| self.parse_phdrs())
+        self.phdrs.get_or_try_init_(|| self.parse_phdrs())
     }
 
     fn shstrndx(&self, ehdr: &ElfN_Ehdr<'_>) -> Result<usize> {
@@ -609,7 +610,7 @@ where
     }
 
     fn ensure_shstrtab(&self) -> Result<&Cow<'elf, [u8]>> {
-        self.shstrtab.get_or_try_init(|| self.parse_shstrtab())
+        self.shstrtab.get_or_try_init_(|| self.parse_shstrtab())
     }
 
     /// Get the name of the section at a given index.
@@ -705,7 +706,7 @@ where
     }
 
     fn ensure_symtab_cache(&self) -> Result<&SymbolTableCache<'elf>> {
-        self.symtab.get_or_try_init(|| {
+        self.symtab.get_or_try_init_(|| {
             let syms = self.parse_syms(".symtab")?;
             let strtab = self.parse_strs(".strtab")?;
             let cache = SymbolTableCache::new(syms, strtab);
@@ -714,7 +715,7 @@ where
     }
 
     fn ensure_dynsym_cache(&self) -> Result<&SymbolTableCache<'elf>> {
-        self.dynsym.get_or_try_init(|| {
+        self.dynsym.get_or_try_init_(|| {
             // TODO: We really should check the `.dynamic` section for
             //       information on what symbol and string tables to
             //       use instead of hard coding names here.
