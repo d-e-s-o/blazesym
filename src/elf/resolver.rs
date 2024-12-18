@@ -227,6 +227,11 @@ impl Debug for ElfResolver {
 mod tests {
     use super::*;
 
+    use crate::test_helper::assert_impls_send;
+
+
+    const _: () = assert_impls_send::<ElfResolver>();
+
 
     /// Exercise the `Debug` representation of various types.
     #[test]

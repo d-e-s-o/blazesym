@@ -1279,6 +1279,11 @@ mod tests {
     #[cfg(feature = "nightly")]
     use test::Bencher;
 
+    use crate::test_helper::assert_impls_send;
+
+
+    const _: () = assert_impls_send::<ElfParser>();
+
 
     /// Exercise the `Debug` representation of various types.
     #[test]

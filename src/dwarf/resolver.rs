@@ -468,7 +468,11 @@ mod tests {
 
     use test_log::test;
 
+    use crate::test_helper::assert_impls_send;
     use crate::ErrorKind;
+
+
+    const _: () = assert_impls_send::<DwarfResolver>();
 
 
     /// Exercise the `Debug` representation of various types.
