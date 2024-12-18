@@ -58,3 +58,12 @@ pub fn find_the_answer_fn_in_zip(mmap: &Mmap) -> (inspect::SymInfo<'static>, Add
     let (sym, the_answer_addr) = find_the_answer_fn(&elf_mmap);
     (sym, the_answer_addr)
 }
+
+
+/// Assert that a type implements `Send`.
+#[cfg(test)]
+pub const fn assert_impls_send<T>()
+where
+    T: Send,
+{
+}

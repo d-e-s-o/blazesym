@@ -1433,6 +1433,10 @@ mod tests {
     use crate::maps::Perm;
     use crate::symbolize;
     use crate::symbolize::CodeInfo;
+    use crate::test_helper::assert_impls_send;
+
+
+    const _: () = assert_impls_send::<Symbolizer>();
 
 
     /// Exercise the `Debug` representation of various types.
