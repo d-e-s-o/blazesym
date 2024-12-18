@@ -192,13 +192,13 @@ struct SymbolTableCache<'mmap> {
     /// The cached symbols (in address order).
     syms: ElfN_BoxedSyms<'mmap>,
     /// The string table.
-    strs: &'mmap [u8],
+    strs: Cow<'mmap, [u8]>,
     /// The cached name to symbol index table (in dictionary order).
     str2sym: OnceCell<Box<[(&'mmap str, usize)]>>,
 }
 
 impl<'mmap> SymbolTableCache<'mmap> {
-    fn new(syms: ElfN_BoxedSyms<'mmap>, strs: &'mmap [u8]) -> Self {
+    fn new(syms: ElfN_BoxedSyms<'mmap>, strs: Cow<'mmap, [u8]>) -> Self {
         Self {
             syms,
             strs,
@@ -233,7 +233,7 @@ impl<'mmap> SymbolTableCache<'mmap> {
         Ok(str2sym)
     }
 
-    fn ensure_str2sym<F>(&self, filter: F) -> Result<&[(&'mmap str, usize)]>
+    fn ensure_str2sym<F>(&self, filter: F) -> Result<&[(&str, usize)]>
     where
         F: FnMut(&ElfN_Sym<'_>) -> bool,
     {
@@ -257,7 +257,7 @@ struct Cache<'bcknd, B> {
     ehdr: OnceCell<EhdrExt<'bcknd>>,
     /// The cached ELF section headers.
     shdrs: OnceCell<ElfN_Shdrs<'bcknd>>,
-    shstrtab: OnceCell<&'bcknd [u8]>,
+    shstrtab: OnceCell<Cow<'bcknd, [u8]>>,
     /// The cached ELF program headers.
     phdrs: OnceCell<ElfN_Phdrs<'bcknd>>,
     /// The cached symbol table.
@@ -294,22 +294,18 @@ where
     /// This method returns potentially compressed data, but adheres is
     /// able to do so with 'bcknd lifetime. To transparently decompress,
     /// use [`Cache::section_data`] instead.
-    fn section_data_raw(&self, idx: usize) -> Result<&'bcknd [u8]> {
+    fn section_data_raw(&self, idx: usize) -> Result<Cow<'bcknd, [u8]>> {
         let shdrs = self.ensure_shdrs()?;
         let shdr = shdrs
             .get(idx)
             .ok_or_invalid_input(|| format!("ELF section index ({idx}) out of bounds"))?;
 
         if shdr.type_() != SHT_NOBITS {
-            let data = self
-                .elf_data
-                .get(shdr.offset() as usize..)
-                .ok_or_invalid_data(|| "failed to read ELF section data: invalid offset")?
-                .read_slice(shdr.size() as usize)
-                .ok_or_invalid_data(|| "failed to read ELF section data: invalid size")?;
-            Ok(data)
+            self.backend
+                .read_pod_slice::<u8>(shdr.offset(), shdr.size() as usize)
+                .context("failed to read ELF section data")
         } else {
-            Ok(&[])
+            Ok(Cow::Borrowed(&[]))
         }
     }
 
@@ -335,14 +331,13 @@ where
                 .get(idx)
                 .ok_or_invalid_input(|| format!("ELF section index ({idx}) out of bounds"))?
                 .get_or_try_init(|| -> Result<Cow<'bcknd, [u8]>> {
-                    let mut data = self
-                        .elf_data
-                        .get(shdr.offset() as usize..)
-                        .ok_or_invalid_data(|| "failed to read ELF section data: invalid offset")?
-                        .read_slice(shdr.size() as usize)
-                        .ok_or_invalid_data(|| "failed to read ELF section data: invalid size")?;
+                    let data = self
+                                .backend
+                                .read_pod_slice::<u8>(shdr.offset(), shdr.size() as usize)
+                                .context("failed to read ELF section data")?;
 
                     if shdr.flags() & SHF_COMPRESSED != 0 {
+                        let mut data = data.deref();
                         // Compression header is contained in the actual section
                         // data.
                         let (ch_type, ch_size) = if shdr.is_32bit() {
@@ -358,8 +353,8 @@ where
                         };
 
                         let decompressed = match ch_type {
-                            t if t == ELFCOMPRESS_ZLIB => decompress_zlib(data),
-                            t if t == ELFCOMPRESS_ZSTD => decompress_zstd(data),
+                            t if t == ELFCOMPRESS_ZLIB => decompress_zlib(&data),
+                            t if t == ELFCOMPRESS_ZSTD => decompress_zstd(&data),
                             _ => Err(Error::with_unsupported(format!(
                                 "ELF section is compressed with unknown compression algorithm ({ch_type})",
                             ))),
@@ -371,7 +366,7 @@ where
                         );
                         Ok(Cow::Owned(decompressed))
                     } else {
-                        Ok(Cow::Borrowed(data))
+                        Ok(data)
                     }
                 }).map(Cow::deref)
         } else {
@@ -497,22 +492,18 @@ where
 
     fn parse_phdrs(&self) -> Result<ElfN_Phdrs<'bcknd>> {
         let ehdr = self.ensure_ehdr()?;
-
-        let mut data = self
-            .elf_data
-            .get(ehdr.ehdr.phoff() as usize..)
-            .ok_or_invalid_data(|| "ELF e_phoff is invalid")?;
+        let e_phoff = ehdr.ehdr.phoff();
 
         let phdrs = if ehdr.is_32bit() {
-            data.read_pod_slice_ref::<Elf32_Phdr>(ehdr.phnum)
-                .map(Cow::Borrowed)
+            self.backend
+                .read_pod_slice::<Elf32_Phdr>(e_phoff, ehdr.phnum)
                 .map(ElfN_Phdrs::B32)
         } else {
-            data.read_pod_slice_ref::<Elf64_Phdr>(ehdr.phnum)
-                .map(Cow::Borrowed)
+            self.backend
+                .read_pod_slice::<Elf64_Phdr>(e_phoff, ehdr.phnum)
                 .map(ElfN_Phdrs::B64)
         }
-        .ok_or_invalid_data(|| "failed to read ELF program headers")?;
+        .context("failed to read ELF program headers")?;
 
         Ok(phdrs)
     }
@@ -540,21 +531,19 @@ where
         Ok(shstrndx)
     }
 
-    fn parse_shstrtab(&self) -> Result<&'bcknd [u8]> {
+    fn parse_shstrtab(&self) -> Result<Cow<'bcknd, [u8]>> {
         let ehdr = self.ensure_ehdr()?;
         let shstrndx = self.shstrndx(&ehdr.ehdr)?;
         let shstrtab = self.section_data_raw(shstrndx)?;
         Ok(shstrtab)
     }
 
-    fn ensure_shstrtab(&self) -> Result<&'bcknd [u8]> {
-        self.shstrtab
-            .get_or_try_init(|| self.parse_shstrtab())
-            .copied()
+    fn ensure_shstrtab(&self) -> Result<&Cow<'bcknd, [u8]>> {
+        self.shstrtab.get_or_try_init(|| self.parse_shstrtab())
     }
 
     /// Get the name of the section at a given index.
-    fn section_name(&self, idx: usize) -> Result<&'bcknd str> {
+    fn section_name(&self, idx: usize) -> Result<&str> {
         let shdrs = self.ensure_shdrs()?;
         let shstrtab = self.ensure_shstrtab()?;
 
@@ -694,11 +683,11 @@ where
         Ok(&dynsym.syms)
     }
 
-    fn parse_strs(&self, section: &str) -> Result<&'bcknd [u8]> {
+    fn parse_strs(&self, section: &str) -> Result<Cow<'bcknd, [u8]>> {
         let strs = if let Some(idx) = self.find_section(section)? {
             self.section_data_raw(idx)?
         } else {
-            &[]
+            Cow::Borrowed([].as_slice())
         };
         Ok(strs)
     }
@@ -717,7 +706,7 @@ where
             // to prevent any duplicates from showing up.
             let result = find_sym(
                 &symtab.syms,
-                symtab.strs,
+                &symtab.strs,
                 sym.value(),
                 // SANITY: We filter out all unsupported symbol types,
                 //         so this conversion should always succeed.
@@ -852,12 +841,11 @@ impl ElfParser<File> {
     where
         P: Into<PathBuf>,
     {
-        let elf_data = &[];
         let _backend = Box::new(file);
         let file_ref = unsafe { mem::transmute::<&File, &'static File>(_backend.deref()) };
 
         let parser = Self {
-            cache: Cache::new(file_ref, elf_data),
+            cache: Cache::new(file_ref),
             path: Some(path.into()),
             _backend,
         };
@@ -877,7 +865,6 @@ impl ElfParser<Mmap> {
 
     /// Create an `ElfParser` from mmap'ed data.
     pub(crate) fn from_mmap(mmap: Mmap, path: Option<PathBuf>) -> Self {
-        let elf_data = &[];
         // We transmute the mmap's lifetime to static here as that is a
         // necessity for self-referentiality.
         // SAFETY: We never hand out any 'static references to cache
@@ -886,7 +873,7 @@ impl ElfParser<Mmap> {
         let _backend = mmap;
 
         let parser = ElfParser {
-            cache: Cache::new(data, elf_data),
+            cache: Cache::new(data),
             path,
             _backend,
         };
@@ -930,7 +917,7 @@ where
         let symtab_cache = self.cache.ensure_symtab_cache()?;
         if let Some(sym) = find_sym(
             &symtab_cache.syms,
-            symtab_cache.strs,
+            &symtab_cache.strs,
             addr,
             SymType::Undefined,
         )? {
@@ -940,7 +927,7 @@ where
         let dynsym_cache = self.cache.ensure_dynsym_cache()?;
         if let Some(sym) = find_sym(
             &dynsym_cache.syms,
-            dynsym_cache.strs,
+            &dynsym_cache.strs,
             addr,
             SymType::Undefined,
         )? {
