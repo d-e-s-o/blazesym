@@ -193,10 +193,10 @@ pub struct ApkMemberInfo<'dat> {
 /// is returned, the default dispatcher will be used instead.
 // TODO: Use a trait alias once stable.
 #[cfg(feature = "apk")]
-pub trait ApkDispatch: Fn(ApkMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> {}
+pub trait ApkDispatch: Fn(ApkMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> + Send {}
 
 #[cfg(feature = "apk")]
-impl<F> ApkDispatch for F where F: Fn(ApkMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> {}
+impl<F> ApkDispatch for F where F: Fn(ApkMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> + Send {}
 
 
 /// The signature of a dispatcher function for process symbolization.
@@ -207,9 +207,15 @@ impl<F> ApkDispatch for F where F: Fn(ApkMemberInfo<'_>) -> Result<Option<Box<dy
 /// If this function returns `Some` resolver, this resolver will be used
 /// for addresses belonging to the represented process member. If `None`
 /// is returned, the default dispatcher will be used instead.
-pub trait ProcessDispatch: Fn(ProcessMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> {}
+pub trait ProcessDispatch:
+    Fn(ProcessMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> + Send
+{
+}
 
-impl<F> ProcessDispatch for F where F: Fn(ProcessMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> {}
+impl<F> ProcessDispatch for F where
+    F: Fn(ProcessMemberInfo<'_>) -> Result<Option<Box<dyn Resolve>>> + Send
+{
+}
 
 
 #[cfg(feature = "apk")]
