@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -13,12 +14,12 @@ use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
 use crate::inspect::SymInfo;
 use crate::mmap::Mmap;
-use crate::once::OnceCell;
 use crate::symbolize::FindSymOpts;
 use crate::symbolize::Reason;
 use crate::symbolize::ResolvedSym;
 use crate::symbolize::SrcLang;
 use crate::util::find_match_or_lower_bound_by_key;
+use crate::util::OnceExt as _;
 use crate::util::ReadRaw as _;
 use crate::Addr;
 use crate::Error;
@@ -233,7 +234,7 @@ impl<'mmap> SymbolTableCache<'mmap> {
     {
         let str2sym = self
             .str2sym
-            .get_or_try_init(|| {
+            .get_or_try_init_(|| {
                 let str2sym = self.create_str2sym(filter)?;
                 Result::<_, Error>::Ok(str2sym)
             })?
@@ -324,7 +325,7 @@ impl<'mmap> Cache<'mmap> {
             datas
                 .get(idx)
                 .ok_or_invalid_input(|| format!("ELF section index ({idx}) out of bounds"))?
-                .get_or_try_init(|| -> Result<Cow<'mmap, [u8]>> {
+                .get_or_try_init_(|| -> Result<Cow<'mmap, [u8]>> {
                     let mut data = self
                         .elf_data
                         .get(shdr.offset() as usize..)
@@ -461,7 +462,7 @@ impl<'mmap> Cache<'mmap> {
     }
 
     fn ensure_ehdr(&self) -> Result<&EhdrExt<'mmap>> {
-        self.ehdr.get_or_try_init(|| self.parse_ehdr())
+        self.ehdr.get_or_try_init_(|| self.parse_ehdr())
     }
 
     fn parse_shdrs(&self) -> Result<ElfN_Shdrs<'mmap>> {
@@ -485,7 +486,7 @@ impl<'mmap> Cache<'mmap> {
     }
 
     fn ensure_shdrs(&self) -> Result<&ElfN_Shdrs<'mmap>> {
-        self.shdrs.get_or_try_init(|| self.parse_shdrs())
+        self.shdrs.get_or_try_init_(|| self.parse_shdrs())
     }
 
     fn parse_phdrs(&self) -> Result<ElfN_Phdrs<'mmap>> {
@@ -509,7 +510,7 @@ impl<'mmap> Cache<'mmap> {
     }
 
     fn ensure_phdrs(&self) -> Result<&ElfN_Phdrs<'mmap>> {
-        self.phdrs.get_or_try_init(|| self.parse_phdrs())
+        self.phdrs.get_or_try_init_(|| self.parse_phdrs())
     }
 
     fn shstrndx(&self, ehdr: &ElfN_Ehdr<'_>) -> Result<usize> {
@@ -540,7 +541,7 @@ impl<'mmap> Cache<'mmap> {
 
     fn ensure_shstrtab(&self) -> Result<&'mmap [u8]> {
         self.shstrtab
-            .get_or_try_init(|| self.parse_shstrtab())
+            .get_or_try_init_(|| self.parse_shstrtab())
             .copied()
     }
 
@@ -655,7 +656,7 @@ impl<'mmap> Cache<'mmap> {
     }
 
     fn ensure_symtab_cache(&self) -> Result<&SymbolTableCache<'mmap>> {
-        self.symtab.get_or_try_init(|| {
+        self.symtab.get_or_try_init_(|| {
             let syms = self.parse_syms(".symtab")?;
             let strtab = self.parse_strs(".strtab")?;
             let cache = SymbolTableCache::new(syms, strtab);
@@ -664,7 +665,7 @@ impl<'mmap> Cache<'mmap> {
     }
 
     fn ensure_dynsym_cache(&self) -> Result<&SymbolTableCache<'mmap>> {
-        self.dynsym.get_or_try_init(|| {
+        self.dynsym.get_or_try_init_(|| {
             // TODO: We really should check the `.dynamic` section for
             //       information on what symbol and string tables to
             //       use instead of hard coding names here.

@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::ffi::CStr;
 use std::ffi::CString;
@@ -18,6 +19,28 @@ use std::slice;
 use std::str::from_utf8;
 
 use crate::Addr;
+
+
+// TODO: Remove once `OnceCell::get_or_try_init()` is stable.
+pub(crate) trait OnceExt<T> {
+    fn get_or_try_init_<F, E>(&self, f: F) -> Result<&T, E>
+    where
+        F: FnOnce() -> Result<T, E>;
+}
+
+impl<T> OnceExt<T> for OnceCell<T> {
+    fn get_or_try_init_<F, E>(&self, f: F) -> Result<&T, E>
+    where
+        F: FnOnce() -> Result<T, E>,
+    {
+        if let Some(value) = self.get() {
+            Ok(value)
+        } else {
+            let value = f()?;
+            Ok(self.get_or_init(|| value))
+        }
+    }
+}
 
 
 #[cfg(feature = "tracing")]
