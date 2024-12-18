@@ -9,6 +9,7 @@ Unreleased
 - Adjusted `vmlinux` based kernel address symbolization logic to take
   into account system KASLR state
   - Added `kaslr_offset` member to `symbolize::Kernel`
+- Bumped minimum supported Rust version to `1.70`
 
 
 0.2.0-rc.2
