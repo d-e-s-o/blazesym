@@ -253,8 +253,6 @@ impl<'mmap> SymbolTableCache<'mmap> {
 struct Cache<'bcknd, B> {
     /// The backend being used for reading ELF data.
     backend: B,
-    /// A slice of the raw ELF data that we are about to parse.
-    elf_data: &'bcknd [u8],
     /// The cached ELF header.
     ehdr: OnceCell<EhdrExt<'bcknd>>,
     /// The cached ELF section headers.
@@ -275,10 +273,9 @@ where
     B: BackendImpl<'bcknd>,
 {
     /// Create a new `Cache` using the provided raw ELF object data.
-    fn new(backend: B, elf_data: &'bcknd [u8]) -> Self {
+    fn new(backend: B) -> Self {
         Self {
             backend,
-            elf_data,
             ehdr: OnceCell::new(),
             shdrs: OnceCell::new(),
             shstrtab: OnceCell::new(),
@@ -403,10 +400,10 @@ where
     }
 
     fn parse_ehdr(&self) -> Result<EhdrExt<'bcknd>> {
-        let elf_data = self.elf_data;
-        let e_ident = elf_data
-            .peek_array::<EI_NIDENT>()
-            .ok_or_invalid_data(|| "failed to read ELF e_ident information")?;
+        let e_ident = self
+            .backend
+            .read_pod_slice::<u8>(0, EI_NIDENT)
+            .context("failed to read ELF e_ident information")?;
         if !(e_ident[0] == 0x7f && e_ident[1] == b'E' && e_ident[2] == b'L' && e_ident[3] == b'F') {
             return Err(Error::with_invalid_data(format!(
                 "encountered unexpected e_ident: {:x?}",
@@ -477,22 +474,18 @@ where
 
     fn parse_shdrs(&self) -> Result<ElfN_Shdrs<'bcknd>> {
         let ehdr = self.ensure_ehdr()?;
-
-        let mut data = self
-            .elf_data
-            .get(ehdr.ehdr.shoff() as usize..)
-            .ok_or_invalid_data(|| "ELF e_shoff is invalid")?;
+        let e_shoff = ehdr.ehdr.shoff();
 
         let shdrs = if ehdr.is_32bit() {
-            data.read_pod_slice_ref::<Elf32_Shdr>(ehdr.shnum)
-                .map(Cow::Borrowed)
+            self.backend
+                .read_pod_slice::<Elf32_Shdr>(e_shoff, ehdr.shnum)
                 .map(ElfN_Shdrs::B32)
         } else {
-            data.read_pod_slice_ref::<Elf64_Shdr>(ehdr.shnum)
-                .map(Cow::Borrowed)
+            self.backend
+                .read_pod_slice::<Elf64_Shdr>(e_shoff, ehdr.shnum)
                 .map(ElfN_Shdrs::B64)
         }
-        .ok_or_invalid_data(|| "failed to read ELF section headers")?;
+        .context("failed to read ELF section headers")?;
 
         Ok(shdrs)
     }
