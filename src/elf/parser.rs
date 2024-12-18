@@ -485,9 +485,11 @@ where
 
         let shdrs = if ehdr.is_32bit() {
             data.read_pod_slice_ref::<Elf32_Shdr>(ehdr.shnum)
+                .map(Cow::Borrowed)
                 .map(ElfN_Shdrs::B32)
         } else {
             data.read_pod_slice_ref::<Elf64_Shdr>(ehdr.shnum)
+                .map(Cow::Borrowed)
                 .map(ElfN_Shdrs::B64)
         }
         .ok_or_invalid_data(|| "failed to read ELF section headers")?;
@@ -509,9 +511,11 @@ where
 
         let phdrs = if ehdr.is_32bit() {
             data.read_pod_slice_ref::<Elf32_Phdr>(ehdr.phnum)
+                .map(Cow::Borrowed)
                 .map(ElfN_Phdrs::B32)
         } else {
             data.read_pod_slice_ref::<Elf64_Phdr>(ehdr.phnum)
+                .map(Cow::Borrowed)
                 .map(ElfN_Phdrs::B64)
         }
         .ok_or_invalid_data(|| "failed to read ELF program headers")?;
@@ -1721,7 +1725,7 @@ mod tests {
             backend: aligned_data,
             elf_data: aligned_data,
             ehdr: OnceCell::from(ehdr),
-            shdrs: OnceCell::from(ElfN_Shdrs::B64(shdrs.as_slice())),
+            shdrs: OnceCell::from(ElfN_Shdrs::B64(Cow::Borrowed(shdrs.as_slice()))),
             shstrtab: OnceCell::from(b".shstrtab\x00.symtab\x00".as_slice()),
             phdrs: OnceCell::new(),
             symtab: OnceCell::new(),
