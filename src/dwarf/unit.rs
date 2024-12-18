@@ -25,7 +25,7 @@
 // > IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // > DEALINGS IN THE SOFTWARE.
 
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 
 use crate::util::OnceExt as _;
 
@@ -49,8 +49,8 @@ pub(super) struct Unit<'dwarf> {
     offset: gimli::DebugInfoOffset<<R<'dwarf> as gimli::Reader>::Offset>,
     dw_unit: gimli::Unit<R<'dwarf>>,
     lang: Option<gimli::DwLang>,
-    lines: OnceCell<Lines<'dwarf>>,
-    funcs: OnceCell<Functions<'dwarf>>,
+    lines: OnceLock<Lines<'dwarf>>,
+    funcs: OnceLock<Functions<'dwarf>>,
 }
 
 impl<'dwarf> Unit<'dwarf> {
@@ -58,14 +58,14 @@ impl<'dwarf> Unit<'dwarf> {
         offset: gimli::DebugInfoOffset<<R<'dwarf> as gimli::Reader>::Offset>,
         unit: gimli::Unit<R<'dwarf>>,
         lang: Option<gimli::DwLang>,
-        lines: OnceCell<Lines<'dwarf>>,
+        lines: OnceLock<Lines<'dwarf>>,
     ) -> Self {
         Self {
             offset,
             dw_unit: unit,
             lang,
             lines,
-            funcs: OnceCell::new(),
+            funcs: OnceLock::new(),
         }
     }
 

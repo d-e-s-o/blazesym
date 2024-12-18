@@ -25,8 +25,8 @@
 // > IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // > DEALINGS IN THE SOFTWARE.
 
-use std::cell::OnceCell;
 use std::ops::ControlFlow;
+use std::sync::OnceLock;
 
 use crate::log::warn;
 use crate::util::OnceExt as _;
@@ -189,7 +189,7 @@ impl<'dwarf> Units<'dwarf> {
                 }
             }
 
-            let lines = OnceCell::new();
+            let lines = OnceLock::new();
             if !have_unit_range {
                 // The unit did not declare any ranges.
                 // Try to get some ranges from the line program sequences.

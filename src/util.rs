@@ -17,6 +17,7 @@ use std::path::Path;
 use std::slice;
 #[cfg(not(unix))]
 use std::str::from_utf8;
+use std::sync::OnceLock;
 
 use crate::Addr;
 
@@ -29,6 +30,20 @@ pub(crate) trait OnceExt<T> {
 }
 
 impl<T> OnceExt<T> for OnceCell<T> {
+    fn get_or_try_init_<F, E>(&self, f: F) -> Result<&T, E>
+    where
+        F: FnOnce() -> Result<T, E>,
+    {
+        if let Some(value) = self.get() {
+            Ok(value)
+        } else {
+            let value = f()?;
+            Ok(self.get_or_init(|| value))
+        }
+    }
+}
+
+impl<T> OnceExt<T> for OnceLock<T> {
     fn get_or_try_init_<F, E>(&self, f: F) -> Result<&T, E>
     where
         F: FnOnce() -> Result<T, E>,

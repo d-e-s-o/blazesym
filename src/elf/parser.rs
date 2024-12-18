@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::cell::OnceCell;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -15,6 +14,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::slice;
 use std::str;
+use std::sync::OnceLock;
 
 use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
@@ -25,8 +25,8 @@ use crate::symbolize::Reason;
 use crate::symbolize::ResolvedSym;
 use crate::symbolize::SrcLang;
 use crate::util::find_match_or_lower_bound_by_key;
-use crate::util::Pod;
 use crate::util::OnceExt as _;
+use crate::util::Pod;
 use crate::util::ReadRaw as _;
 use crate::Addr;
 use crate::Error;
@@ -220,20 +220,20 @@ struct SymbolTableCache<'elf> {
     syms: ElfN_Syms<'elf>,
     /// An index over `syms` that is sorted by address and that only
     /// contains a relevant subset of symbols.
-    by_addr_idx: OnceCell<Box<[usize]>>,
+    by_addr_idx: OnceLock<Box<[usize]>>,
     /// The string table.
     strs: Cow<'elf, [u8]>,
     /// The cached name to symbol index table (in dictionary order).
-    str2sym: OnceCell<Box<[(SymName, usize)]>>,
+    str2sym: OnceLock<Box<[(SymName, usize)]>>,
 }
 
 impl<'elf> SymbolTableCache<'elf> {
     fn new(syms: ElfN_Syms<'elf>, strs: Cow<'elf, [u8]>) -> Self {
         Self {
             syms,
-            by_addr_idx: OnceCell::new(),
+            by_addr_idx: OnceLock::new(),
             strs,
-            str2sym: OnceCell::new(),
+            str2sym: OnceLock::new(),
         }
     }
 
@@ -323,18 +323,18 @@ struct Cache<'elf, B> {
     /// The backend being used for reading ELF data.
     backend: B,
     /// The cached ELF header.
-    ehdr: OnceCell<EhdrExt<'elf>>,
+    ehdr: OnceLock<EhdrExt<'elf>>,
     /// The cached ELF section headers.
-    shdrs: OnceCell<ElfN_Shdrs<'elf>>,
-    shstrtab: OnceCell<Cow<'elf, [u8]>>,
+    shdrs: OnceLock<ElfN_Shdrs<'elf>>,
+    shstrtab: OnceLock<Cow<'elf, [u8]>>,
     /// The cached ELF program headers.
-    phdrs: OnceCell<ElfN_Phdrs<'elf>>,
+    phdrs: OnceLock<ElfN_Phdrs<'elf>>,
     /// The cached symbol table.
-    symtab: OnceCell<SymbolTableCache<'elf>>,
+    symtab: OnceLock<SymbolTableCache<'elf>>,
     /// The cached dynamic symbol table.
-    dynsym: OnceCell<SymbolTableCache<'elf>>,
+    dynsym: OnceLock<SymbolTableCache<'elf>>,
     /// The section data.
-    section_data: OnceCell<Box<[OnceCell<Cow<'elf, [u8]>>]>>,
+    section_data: OnceLock<Box<[OnceLock<Cow<'elf, [u8]>>]>>,
 }
 
 impl<'elf, B> Cache<'elf, B>
@@ -345,13 +345,13 @@ where
     fn new(backend: B) -> Self {
         Self {
             backend,
-            ehdr: OnceCell::new(),
-            shdrs: OnceCell::new(),
-            shstrtab: OnceCell::new(),
-            phdrs: OnceCell::new(),
-            symtab: OnceCell::new(),
-            dynsym: OnceCell::new(),
-            section_data: OnceCell::new(),
+            ehdr: OnceLock::new(),
+            shdrs: OnceLock::new(),
+            shstrtab: OnceLock::new(),
+            phdrs: OnceLock::new(),
+            symtab: OnceLock::new(),
+            dynsym: OnceLock::new(),
+            section_data: OnceLock::new(),
         }
     }
 
@@ -393,7 +393,7 @@ where
             let datas = self.section_data.get_or_try_init_(|| {
                 let shdrs = self.ensure_shdrs()?;
                 let datas = (0..shdrs.len())
-                    .map(|_| OnceCell::new())
+                    .map(|_| OnceLock::new())
                     .collect::<Box<[_]>>();
                 Result::<_, Error>::Ok(datas)
             })?;
@@ -1828,13 +1828,13 @@ mod tests {
 
         let cache = Cache {
             backend: aligned_data,
-            ehdr: OnceCell::from(ehdr),
-            shdrs: OnceCell::from(ElfN_Shdrs::B64(Cow::Borrowed(shdrs.as_slice()))),
-            shstrtab: OnceCell::from(Cow::Borrowed(b".shstrtab\x00.symtab\x00".as_slice())),
-            phdrs: OnceCell::new(),
-            symtab: OnceCell::new(),
-            dynsym: OnceCell::new(),
-            section_data: OnceCell::new(),
+            ehdr: OnceLock::from(ehdr),
+            shdrs: OnceLock::from(ElfN_Shdrs::B64(Cow::Borrowed(shdrs.as_slice()))),
+            shstrtab: OnceLock::from(Cow::Borrowed(b".shstrtab\x00.symtab\x00".as_slice())),
+            phdrs: OnceLock::new(),
+            symtab: OnceLock::new(),
+            dynsym: OnceLock::new(),
+            section_data: OnceLock::new(),
         };
 
         assert_eq!(cache.find_section(".symtab").unwrap(), Some(2));

@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::cell::OnceCell;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -12,6 +11,7 @@ use std::ops::ControlFlow;
 use std::ops::Deref as _;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
@@ -171,7 +171,7 @@ impl<'kfunc> TryFrom<&'kfunc Kfunc> for SymInfo<'kfunc> {
 /// a copy from other devices.
 pub(crate) struct KsymResolver {
     /// An index over `syms` that is sorted by name.
-    by_name_idx: OnceCell<Box<[usize]>>,
+    by_name_idx: OnceLock<Box<[usize]>>,
     syms: Box<[Ksym]>,
     file_name: PathBuf,
     bpf_info_cache: BpfInfoCache,
@@ -223,7 +223,7 @@ impl KsymResolver {
 
         let slf = Self {
             syms: syms.into_boxed_slice(),
-            by_name_idx: OnceCell::new(),
+            by_name_idx: OnceLock::new(),
             file_name: path.to_path_buf(),
             bpf_info_cache: BpfInfoCache::default(),
         };
@@ -241,7 +241,7 @@ impl KsymResolver {
                 .map(Ksym::Kfunc)
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
-            by_name_idx: OnceCell::new(),
+            by_name_idx: OnceLock::new(),
             file_name: PathBuf::new(),
             bpf_info_cache: BpfInfoCache::default(),
         }
@@ -364,7 +364,7 @@ mod tests {
     fn debug_repr() {
         let resolver = KsymResolver {
             syms: Box::default(),
-            by_name_idx: OnceCell::new(),
+            by_name_idx: OnceLock::new(),
             file_name: PathBuf::new(),
             bpf_info_cache: BpfInfoCache::default(),
         };
