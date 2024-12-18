@@ -495,7 +495,7 @@ pub trait AsSymbolize {
 /// The trait for types providing address symbolization services.
 pub trait Symbolize
 where
-    Self: AsSymbolize + Debug,
+    Self: AsSymbolize + Debug + Send,
 {
     /// Find the symbol corresponding to the given address.
     fn find_sym(&self, addr: Addr, opts: &FindSymOpts) -> Result<Result<ResolvedSym<'_>, Reason>>;
