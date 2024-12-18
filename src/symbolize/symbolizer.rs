@@ -9,7 +9,7 @@ use std::ops::Deref as _;
 use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[cfg(feature = "breakpad")]
 use crate::breakpad::BreakpadResolver;
@@ -220,7 +220,7 @@ fn default_apk_dispatcher(
     // Create an Android-style binary-in-APK path for
     // reporting purposes.
     let apk_elf_path = create_apk_elf_path(info.apk_path, info.member_path)?;
-    let parser = Rc::new(ElfParser::from_mmap(info.member_mmap, Some(apk_elf_path)));
+    let parser = Arc::new(ElfParser::from_mmap(info.member_mmap, Some(apk_elf_path)));
     let resolver = ElfResolver::from_parser(parser, debug_dirs)?;
     let resolver = Box::new(resolver);
     Ok(resolver)
@@ -627,7 +627,7 @@ pub struct Symbolizer {
     elf_cache: FileCache<ElfResolverData>,
     #[cfg(feature = "gsym")]
     gsym_cache: FileCache<GsymResolver<'static>>,
-    ksym_cache: FileCache<Rc<KSymResolver>>,
+    ksym_cache: FileCache<Arc<KSymResolver>>,
     perf_map_cache: FileCache<PerfMap>,
     process_cache: InsertMap<PathName, Option<Box<dyn Resolve>>>,
     find_sym_opts: FindSymOpts,
@@ -924,13 +924,13 @@ impl Symbolizer {
         Ok(handler.all_symbols)
     }
 
-    fn create_ksym_resolver(&self, path: &Path, file: &File) -> Result<Rc<KSymResolver>> {
+    fn create_ksym_resolver(&self, path: &Path, file: &File) -> Result<Arc<KSymResolver>> {
         let resolver = KSymResolver::load_from_reader(file, path)?;
-        let resolver = Rc::new(resolver);
+        let resolver = Arc::new(resolver);
         Ok(resolver)
     }
 
-    fn ksym_resolver<'slf>(&'slf self, path: &Path) -> Result<&'slf Rc<KSymResolver>> {
+    fn ksym_resolver<'slf>(&'slf self, path: &Path) -> Result<&'slf Arc<KSymResolver>> {
         let (file, cell) = self.ksym_cache.entry(path)?;
         let resolver = cell.get_or_try_init_(|| self.create_ksym_resolver(path, file))?;
         Ok(resolver)
@@ -1147,7 +1147,7 @@ impl Symbolizer {
                     }
                 };
 
-                let resolver = Rc::new(self.create_kernel_resolver(kernel)?);
+                let resolver = Arc::new(self.create_kernel_resolver(kernel)?);
                 let symbols = self.symbolize_addrs(addrs, &Resolver::Uncached(resolver.deref()))?;
                 Ok(symbols)
             }
@@ -1193,7 +1193,7 @@ impl Symbolizer {
                     }
                 };
 
-                let resolver = Rc::new(GsymResolver::with_data(data)?);
+                let resolver = Arc::new(GsymResolver::with_data(data)?);
                 let symbols = self.symbolize_addrs(addrs, &Resolver::Uncached(resolver.deref()))?;
                 Ok(symbols)
             }
@@ -1322,7 +1322,7 @@ impl Symbolizer {
                     }
                 };
 
-                let resolver = Rc::new(self.create_kernel_resolver(kernel)?);
+                let resolver = Arc::new(self.create_kernel_resolver(kernel)?);
                 self.symbolize_with_resolver(addr, &Resolver::Uncached(resolver.deref()))
             }
             Source::Process(Process {
@@ -1373,7 +1373,7 @@ impl Symbolizer {
                     }
                 };
 
-                let resolver = Rc::new(GsymResolver::with_data(data)?);
+                let resolver = Arc::new(GsymResolver::with_data(data)?);
                 self.symbolize_with_resolver(addr, &Resolver::Uncached(resolver.deref()))
             }
             #[cfg(feature = "gsym")]
@@ -1442,7 +1442,7 @@ mod tests {
         let test_elf = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
             .join("test-stable-addrs.bin");
-        let parser = Rc::new(ElfParser::open(&test_elf).unwrap());
+        let parser = Arc::new(ElfParser::open(&test_elf).unwrap());
         let resolver = ElfResolver::from_parser(parser, None).unwrap();
         let resolver = Resolver::Cached(&resolver);
         assert_ne!(format!("{resolver:?}"), "");
