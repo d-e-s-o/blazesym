@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::cell::OnceCell;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -16,6 +15,7 @@ use std::os::fd::BorrowedFd;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::inspect::SymInfo;
 use crate::log;
@@ -270,7 +270,7 @@ pub struct BpfProg {
     addr: Addr,
     name: Box<str>,
     tag: BpfTag,
-    line_info: OnceCell<Option<Box<[(Addr, LineInfoRecord)]>>>,
+    line_info: OnceLock<Option<Box<[(Addr, LineInfoRecord)]>>>,
 }
 
 impl BpfProg {
@@ -292,7 +292,7 @@ impl BpfProg {
             addr,
             name: Box::from(name),
             tag,
-            line_info: OnceCell::new(),
+            line_info: OnceLock::new(),
         };
         Some(prog)
     }
