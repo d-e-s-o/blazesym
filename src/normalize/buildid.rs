@@ -7,6 +7,7 @@ use crate::elf::types::ElfN_Nhdr;
 use crate::elf::ElfParser;
 use crate::file_cache::FileCache;
 use crate::util::align_up_u32;
+use crate::util::OnceExt as _;
 use crate::util::ReadRaw as _;
 use crate::Error;
 use crate::IntoError as _;
@@ -105,7 +106,7 @@ impl<'src> BuildIdReader<'src> for CachingBuildIdReader<'src> {
     fn read_build_id_fallible(&self, path: &Path) -> Result<Option<BuildId<'src>>> {
         let (file, cell) = self.cache.entry(path)?;
         let build_id = cell
-            .get_or_try_init(|| {
+            .get_or_try_init_(|| {
                 let parser = ElfParser::open_file(file, path)?;
                 let buildid = read_build_id(&parser)?.map(|buildid| Cow::Owned(buildid.to_vec()));
                 Result::<_, Error>::Ok(buildid)

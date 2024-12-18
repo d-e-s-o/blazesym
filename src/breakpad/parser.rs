@@ -26,6 +26,7 @@
 //!
 //! See <https://github.com/google/breakpad/blob/main/docs/symbol_files.md>
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::Write as _;
@@ -59,7 +60,6 @@ use nom::Offset as _;
 use super::types::*;
 
 use crate::error::IntoCowStr;
-use crate::once::OnceCell;
 use crate::Error;
 use crate::ErrorExt;
 use crate::Result;

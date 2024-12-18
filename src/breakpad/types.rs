@@ -22,9 +22,9 @@
 // > FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // > DEALINGS IN THE SOFTWARE.
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 
-use crate::once::OnceCell;
 use crate::util::find_lowest_match_by_key;
 use crate::util::find_match_or_lower_bound_by_key;
 use crate::util::Either;

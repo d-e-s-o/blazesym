@@ -44,6 +44,7 @@ use crate::util::uname_release;
 use crate::util::Dbg;
 #[cfg(feature = "tracing")]
 use crate::util::Hexify;
+use crate::util::OnceExt as _;
 #[cfg(feature = "apk")]
 use crate::zip;
 use crate::Addr;
@@ -756,7 +757,7 @@ impl Symbolizer {
     #[cfg(feature = "gsym")]
     fn gsym_resolver<'slf>(&'slf self, path: &Path) -> Result<&'slf GsymResolver<'static>> {
         let (file, cell) = self.gsym_cache.entry(path)?;
-        let resolver = cell.get_or_try_init(|| self.create_gsym_resolver(path, file))?;
+        let resolver = cell.get_or_try_init_(|| self.create_gsym_resolver(path, file))?;
         Ok(resolver)
     }
 
@@ -824,7 +825,7 @@ impl Symbolizer {
         debug_syms: bool,
     ) -> Result<Option<(&'slf dyn Resolve, Addr)>> {
         let (file, cell) = self.apk_cache.entry(path)?;
-        let (apk, resolvers) = cell.get_or_try_init(|| {
+        let (apk, resolvers) = cell.get_or_try_init_(|| {
             let apk = zip::Archive::with_mmap(Mmap::builder().map(file)?)?;
             let resolvers = InsertMap::new();
             Result::<_, Error>::Ok((apk, resolvers))
@@ -844,7 +845,7 @@ impl Symbolizer {
     #[cfg(feature = "breakpad")]
     fn breakpad_resolver<'slf>(&'slf self, path: &Path) -> Result<&'slf BreakpadResolver> {
         let (file, cell) = self.breakpad_cache.entry(path)?;
-        let resolver = cell.get_or_try_init(|| self.create_breakpad_resolver(path, file))?;
+        let resolver = cell.get_or_try_init_(|| self.create_breakpad_resolver(path, file))?;
         Ok(resolver)
     }
 
@@ -858,7 +859,7 @@ impl Symbolizer {
 
         match self.perf_map_cache.entry(&path) {
             Ok((file, cell)) => {
-                let perf_map = cell.get_or_try_init(|| self.create_perf_map(&path, file))?;
+                let perf_map = cell.get_or_try_init_(|| self.create_perf_map(&path, file))?;
                 Ok(Some(perf_map))
             }
             Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
@@ -930,7 +931,7 @@ impl Symbolizer {
 
     fn ksym_resolver<'slf>(&'slf self, path: &Path) -> Result<&'slf Rc<KsymResolver>> {
         let (file, cell) = self.ksym_cache.entry(path)?;
-        let resolver = cell.get_or_try_init(|| self.create_ksym_resolver(path, file))?;
+        let resolver = cell.get_or_try_init_(|| self.create_ksym_resolver(path, file))?;
         Ok(resolver)
     }
 
