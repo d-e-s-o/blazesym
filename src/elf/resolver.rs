@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -13,12 +14,12 @@ use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
 use crate::inspect::Inspect;
 use crate::inspect::SymInfo;
-use crate::once::OnceCell;
 use crate::symbolize::FindSymOpts;
 use crate::symbolize::Reason;
 use crate::symbolize::ResolvedSym;
 use crate::symbolize::Symbolize;
 use crate::symbolize::TranslateFileOffset;
+use crate::util::OnceExt as _;
 use crate::Addr;
 use crate::Error;
 use crate::Result;
@@ -58,7 +59,7 @@ impl FileCache<ElfResolverData> {
         let (file, cell) = self.entry(path)?;
         let resolver = if let Some(data) = cell.get() {
             if debug_dirs.is_some() {
-                data.dwarf.get_or_try_init(|| {
+                data.dwarf.get_or_try_init_(|| {
                     // SANITY: We *know* a `ElfResolverData` object is
                     //         present and given that we are
                     //         initializing the `dwarf` part of it, the
@@ -69,7 +70,7 @@ impl FileCache<ElfResolverData> {
                     Result::<_, Error>::Ok(resolver)
                 })?
             } else {
-                data.elf.get_or_try_init(|| {
+                data.elf.get_or_try_init_(|| {
                     // SANITY: We *know* a `ElfResolverData` object is
                     //         present and given that we are
                     //         initializing the `elf` part of it, the

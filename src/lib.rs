@@ -80,7 +80,6 @@ mod kernel;
 mod maps;
 mod mmap;
 pub mod normalize;
-mod once;
 mod perf_map;
 mod pid;
 pub mod symbolize;
