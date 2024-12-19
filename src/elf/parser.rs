@@ -184,13 +184,31 @@ impl EhdrExt<'_> {
 
 
 #[derive(Debug)]
+struct SymName {
+    /// The index of the first byte of the name.
+    idx: usize,
+    /// The length of the name.
+    len: usize,
+}
+
+impl SymName {
+    fn name<'mmap>(&self, strs: &'mmap [u8]) -> Result<&'mmap str> {
+        let bytes = &strs[self.idx..self.idx + self.len];
+        str::from_utf8(bytes)
+            .ok()
+            .ok_or_invalid_data(|| "symbol name `{bytes:?}` is invalid")
+    }
+}
+
+
+#[derive(Debug)]
 struct SymbolTableCache<'mmap> {
     /// The cached symbols (in address order).
     syms: ElfN_BoxedSyms<'mmap>,
     /// The string table.
     strs: &'mmap [u8],
     /// The cached name to symbol index table (in dictionary order).
-    str2sym: OnceCell<Box<[(&'mmap [u8], usize)]>>,
+    str2sym: OnceCell<Box<[(SymName, usize)]>>,
 }
 
 impl<'mmap> SymbolTableCache<'mmap> {
@@ -202,7 +220,7 @@ impl<'mmap> SymbolTableCache<'mmap> {
         }
     }
 
-    fn create_str2sym<F>(&self, mut filter: F) -> Result<Box<[(&'mmap [u8], usize)]>>
+    fn create_str2sym<F>(&self, mut filter: F) -> Result<Box<[(SymName, usize)]>>
     where
         F: FnMut(&ElfN_Sym<'_>) -> bool,
     {
@@ -212,13 +230,19 @@ impl<'mmap> SymbolTableCache<'mmap> {
             .filter(|sym| filter(sym))
             .enumerate()
             .map(|(i, sym)| {
-                let name = self
+                let idx = sym.name() as usize;
+                let cname = self
                     .strs
-                    .get(sym.name() as usize..)
+                    .get(idx..)
                     .ok_or_invalid_input(|| "ELF string table index out of bounds")?
                     .read_cstr()
-                    .map(CStr::to_bytes)
                     .ok_or_invalid_input(|| "no valid string found in ELF string table")?;
+                let name = SymName {
+                    idx,
+                    // TODO: May want to use `CStr::count_bytes` once
+                    //       our MSRV is >=1.79.
+                    len: cname.to_bytes().len(),
+                };
                 Ok((name, i))
             })
             .collect::<Result<Box<[_]>>>()?;
@@ -227,7 +251,7 @@ impl<'mmap> SymbolTableCache<'mmap> {
         Ok(str2sym)
     }
 
-    fn ensure_str2sym<F>(&self, filter: F) -> Result<&[(&'mmap [u8], usize)]>
+    fn ensure_str2sym<F>(&self, filter: F) -> Result<&[(SymName, usize)]>
     where
         F: FnMut(&ElfN_Sym<'_>) -> bool,
     {
