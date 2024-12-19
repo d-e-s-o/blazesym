@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::ffi::CStr;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -8,6 +9,7 @@ use std::ops::ControlFlow;
 use std::ops::Deref as _;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str;
 
 use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
@@ -188,7 +190,7 @@ struct SymbolTableCache<'mmap> {
     /// The string table.
     strs: &'mmap [u8],
     /// The cached name to symbol index table (in dictionary order).
-    str2sym: OnceCell<Box<[(&'mmap str, usize)]>>,
+    str2sym: OnceCell<Box<[(&'mmap [u8], usize)]>>,
 }
 
 impl<'mmap> SymbolTableCache<'mmap> {
@@ -200,7 +202,7 @@ impl<'mmap> SymbolTableCache<'mmap> {
         }
     }
 
-    fn create_str2sym<F>(&self, mut filter: F) -> Result<Box<[(&'mmap str, usize)]>>
+    fn create_str2sym<F>(&self, mut filter: F) -> Result<Box<[(&'mmap [u8], usize)]>>
     where
         F: FnMut(&ElfN_Sym<'_>) -> bool,
     {
@@ -215,10 +217,8 @@ impl<'mmap> SymbolTableCache<'mmap> {
                     .get(sym.name() as usize..)
                     .ok_or_invalid_input(|| "ELF string table index out of bounds")?
                     .read_cstr()
-                    .ok_or_invalid_input(|| "no valid string found in ELF string table")?
-                    .to_str()
-                    .map_err(Error::with_invalid_data)
-                    .context("invalid ELF symbol name")?;
+                    .map(CStr::to_bytes)
+                    .ok_or_invalid_input(|| "no valid string found in ELF string table")?;
                 Ok((name, i))
             })
             .collect::<Result<Box<[_]>>>()?;
@@ -227,7 +227,7 @@ impl<'mmap> SymbolTableCache<'mmap> {
         Ok(str2sym)
     }
 
-    fn ensure_str2sym<F>(&self, filter: F) -> Result<&[(&'mmap str, usize)]>
+    fn ensure_str2sym<F>(&self, filter: F) -> Result<&[(&'mmap [u8], usize)]>
     where
         F: FnMut(&ElfN_Sym<'_>) -> bool,
     {
@@ -694,13 +694,13 @@ impl<'mmap> Cache<'mmap> {
         Ok(strs)
     }
 
-    fn ensure_str2symtab(&self) -> Result<&[(&'mmap str, usize)]> {
+    fn ensure_str2symtab(&self) -> Result<&[(&'mmap [u8], usize)]> {
         let symtab = self.ensure_symtab_cache()?;
         let str2sym = symtab.ensure_str2sym(|_sym| true)?;
         Ok(str2sym)
     }
 
-    fn ensure_str2dynsym(&self) -> Result<&[(&'mmap str, usize)]> {
+    fn ensure_str2dynsym(&self) -> Result<&[(&'mmap [u8], usize)]> {
         let symtab = self.ensure_symtab_cache()?;
         let dynsym = self.ensure_dynsym_cache()?;
         let str2sym = dynsym.ensure_str2sym(|sym| {
@@ -859,14 +859,14 @@ impl ElfParser {
         opts: &FindAddrOpts,
         shdrs: &ElfN_Shdrs<'_>,
         syms: &ElfN_BoxedSyms,
-        str2sym: &'slf [(&'slf str, usize)],
+        str2sym: &'slf [(&'slf [u8], usize)],
     ) -> Result<Vec<SymInfo<'slf>>> {
-        let r = find_match_or_lower_bound_by_key(str2sym, name, |&(name, _i)| name);
+        let r = find_match_or_lower_bound_by_key(str2sym, name.as_bytes(), |&(name, _i)| name);
         match r {
             Some(idx) => {
                 let mut found = vec![];
                 for (name_visit, sym_i) in str2sym.iter().skip(idx) {
-                    if *name_visit != name {
+                    if *name_visit != name.as_bytes() {
                         break
                     }
                     let sym_ref = &syms.get(*sym_i).ok_or_invalid_input(|| {
@@ -875,7 +875,12 @@ impl ElfParser {
                     let sym = sym_ref.to_64bit();
                     if sym.st_shndx != SHN_UNDEF {
                         found.push(SymInfo {
-                            name: Cow::Borrowed(name_visit),
+                            name: str::from_utf8(name_visit)
+                                .ok()
+                                .map(Cow::Borrowed)
+                                .ok_or_invalid_data(|| {
+                                    "symbol `{name_visit:?}` has invalid name"
+                                })?,
                             addr: sym.st_value as Addr,
                             size: sym.st_size as usize,
                             // SANITY: We filter out all unsupported symbol
@@ -920,7 +925,7 @@ impl ElfParser {
         &self,
         opts: &FindAddrOpts,
         syms: &ElfN_BoxedSyms<'_>,
-        str2sym: &[(&str, usize)],
+        str2sym: &[(&[u8], usize)],
         f: &mut ForEachFn<'_>,
     ) -> Result<()> {
         let shdrs = self.cache.ensure_shdrs()?;
@@ -933,7 +938,10 @@ impl ElfParser {
 
             if sym.matches(opts.sym_type) && sym.st_shndx != SHN_UNDEF {
                 let sym_info = SymInfo {
-                    name: Cow::Borrowed(name),
+                    name: str::from_utf8(name)
+                        .ok()
+                        .map(Cow::Borrowed)
+                        .ok_or_invalid_data(|| "symbol `{name:?}` has invalid name")?,
                     addr: sym.st_value as Addr,
                     size: sym.st_size as usize,
                     // SANITY: We filter out all unsupported symbol
