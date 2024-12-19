@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -15,7 +14,9 @@ use std::os::fd::BorrowedFd;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::sync::PoisonError;
 
 use crate::inspect::SymInfo;
 use crate::log;
@@ -97,14 +98,14 @@ pub struct BpfInfoCache {
     ///
     /// Program information is reference counted, because it can be
     /// shared with sub-programs.
-    cache: RefCell<HashMap<BpfTag, Arc<sys::bpf_prog_info>>>,
+    cache: Mutex<HashMap<BpfTag, Arc<sys::bpf_prog_info>>>,
 }
 
 impl BpfInfoCache {
     /// Look up BPF program information from the cache.
     #[cfg_attr(feature = "tracing", crate::log::instrument(level = tracing::Level::TRACE, skip_all, fields(tag, result), err(level = tracing::Level::INFO)))]
     fn lookup(&self, tag: BpfTag) -> Result<Option<sys::bpf_prog_info>> {
-        let mut cache = self.cache.borrow_mut();
+        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(info) = cache.get(&tag) {
             return Ok(Some(**info))
         }
