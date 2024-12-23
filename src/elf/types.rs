@@ -216,7 +216,8 @@ impl ElfN_Ehdr<'_> {
 }
 
 
-pub(crate) const PT_LOAD: u32 = 1;
+pub(crate) const PT_LOAD: u32 = 1; /* Loadable program segment */
+pub(crate) const PT_NOTE: u32 = 4; /* Auxiliary information */
 
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -273,6 +274,16 @@ impl Has32BitTy for Elf64_Phdr {
 
 pub(crate) type ElfN_Phdr<'elf> = ElfN<'elf, Elf64_Phdr>;
 pub(crate) type ElfN_Phdrs<'elf> = ElfNSlice<'elf, Elf64_Phdr>;
+
+impl ElfN_Phdr<'_> {
+    #[inline]
+    pub fn type_(&self) -> Elf64_Word {
+        match self {
+            ElfN::B32(phdr) => phdr.p_type,
+            ElfN::B64(phdr) => phdr.p_type,
+        }
+    }
+}
 
 
 pub(crate) const PF_X: Elf64_Word = 1;

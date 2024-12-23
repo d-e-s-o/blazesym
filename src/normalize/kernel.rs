@@ -203,10 +203,10 @@ fn determine_kaslr_state() -> Result<KaslrState> {
 
 /// Find and read the `KERNELOFFSET` note in a "kcore" file represented by
 /// `parser` (i.e., already opened as an ELF).
-fn find_kcore_kernel_offset_note(parser: &ElfParser) -> Result<Option<&[u8]>> {
-    let shdrs = parser.section_headers()?;
-    for (idx, shdr) in shdrs.iter().enumerate() {
-        if shdr.sh_type != elf::types::SHT_NOTE {
+fn find_kcore_kernel_offset_note(parser: &ElfParser<File>) -> Result<Option<&[u8]>> {
+    let phdrs = parser.program_headers()?;
+    for (idx, phdr) in phdrs.iter(0).enumerate() {
+        if phdr.type_() != elf::types::PT_NOTE {
             continue
         }
 
@@ -216,17 +216,20 @@ fn find_kcore_kernel_offset_note(parser: &ElfParser) -> Result<Option<&[u8]>> {
         let header = bytes
             .read_pod_ref::<Elf64_Nhdr>()
             .ok_or_invalid_data(|| "failed to read notes section header")?;
-        let name = bytes
+        if let Some(name) = bytes
             .read_slice(header.n_namesz as _)
             .and_then(|mut name| name.read_cstr())
-            .ok_or_invalid_data(|| "failed to read build ID section name")?;
-        // No point in checking `header.n_type`, as we have seen it be
-        // simply 0 on valid kcore instances.
-        if name.to_bytes() == b"VMCOREINFO\0" {
-            let info = bytes
-                .read_slice(header.n_descsz as _)
-                .ok_or_invalid_data(|| "failed to read VMCOREINFO note section contents")?;
-            return Ok(Some(info))
+        {
+            //.ok_or_invalid_data(|| "failed to read build ID section name")?;
+            // No point in checking `header.n_type`, as we have seen it be
+            // simply 0 on valid kcore instances.
+            if name.to_bytes() == b"VMCOREINFO\0" {
+                let info = bytes
+                    .read_slice(header.n_descsz as _)
+                    .ok_or_invalid_data(|| "failed to read VMCOREINFO note section contents")?;
+                println!("FOUND {info:?}");
+                return Ok(Some(info))
+            }
         }
     }
     Ok(None)
@@ -285,7 +288,7 @@ mod tests {
         let _state = determine_kaslr_state().unwrap();
         println!("system KASLR state: {_state:?}");
 
-        let parser = ElfParser::open(Path::new("/proc/kcore")).unwrap();
+        let parser = ElfParser::open_non_mmap("/proc/kcore").unwrap();
         let notes = find_kcore_kernel_offset_note(&parser).unwrap().unwrap();
         println!("{notes:?}");
     }
