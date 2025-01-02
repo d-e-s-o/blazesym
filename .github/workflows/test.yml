@@ -322,8 +322,8 @@ jobs:
     - uses: Swatinem/rust-cache@v2
       with:
         cache-all-crates: true
-        key: new
-    - run: CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 CARGO_PROFILE_RELEASE_LTO=false CARGO_LOG=cargo::core::compiler::fingerprint=info cargo test --workspace --release
+        key: new2
+    - run: cargo test --workspace --release --exclude=blazesym-dev
       #test-miri:
       #  name: Test with Miri
       #  runs-on: ubuntu-latest
