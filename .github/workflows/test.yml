@@ -322,8 +322,10 @@ jobs:
     - uses: Swatinem/rust-cache@v2
       with:
         cache-all-crates: true
-        key: new2
-    - run: cargo test --workspace --release --exclude=blazesym-dev
+        key: new3
+    - run: |
+        cargo build --workspace --release
+        cargo test --workspace --release
       #test-miri:
       #  name: Test with Miri
       #  runs-on: ubuntu-latest
