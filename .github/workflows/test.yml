@@ -321,8 +321,7 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
       with:
-        cache-all-crates: true
-        key: new4
+        key: new5
     - run: |
         cargo build --tests --workspace --release
         cargo test --workspace --release
