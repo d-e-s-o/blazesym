@@ -322,9 +322,9 @@ jobs:
     - uses: Swatinem/rust-cache@v2
       with:
         cache-all-crates: true
-        key: new3
+        key: new4
     - run: |
-        cargo build --workspace --release
+        cargo build --tests --workspace --release
         cargo test --workspace --release
       #test-miri:
       #  name: Test with Miri
