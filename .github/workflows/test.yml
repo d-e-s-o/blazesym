@@ -321,7 +321,7 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
       with:
-        key: new7
+        key: new8
     - env:
         CARGO_PROFILE_RELEASE_INCREMENTAL: true
         CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 256
