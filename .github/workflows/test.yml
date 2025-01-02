@@ -321,11 +321,13 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
       with:
-        key: new6
+        key: new7
     - env:
         CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 256
         CARGO_PROFILE_RELEASE_LTO: false
-      run: cargo test --workspace --release
+      run: |
+        cargo build --tests --workspace --release
+        cargo test --workspace --release
       #test-miri:
       #  name: Test with Miri
       #  runs-on: ubuntu-latest
