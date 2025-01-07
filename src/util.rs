@@ -34,11 +34,19 @@ impl<T> OnceExt<T> for OnceCell<T> {
     where
         F: FnOnce() -> Result<T, E>,
     {
+        #[cold]
+        fn outlined_call<T, F, E>(slf: &OnceCell<T>, f: F) -> Result<&T, E>
+        where
+            F: FnOnce() -> Result<T, E>,
+        {
+            let value = f()?;
+            Ok(slf.get_or_init(|| value))
+        }
+
         if let Some(value) = self.get() {
             Ok(value)
         } else {
-            let value = f()?;
-            Ok(self.get_or_init(|| value))
+            outlined_call(self, f)
         }
     }
 }
@@ -48,11 +56,19 @@ impl<T> OnceExt<T> for OnceLock<T> {
     where
         F: FnOnce() -> Result<T, E>,
     {
+        #[cold]
+        fn outlined_call<T, F, E>(slf: &OnceLock<T>, f: F) -> Result<&T, E>
+        where
+            F: FnOnce() -> Result<T, E>,
+        {
+            let value = f()?;
+            Ok(slf.get_or_init(|| value))
+        }
+
         if let Some(value) = self.get() {
             Ok(value)
         } else {
-            let value = f()?;
-            Ok(self.get_or_init(|| value))
+            outlined_call(self, f)
         }
     }
 }
