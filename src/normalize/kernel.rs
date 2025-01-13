@@ -22,6 +22,8 @@ use crate::Result;
 use super::normalizer::Output;
 
 
+/// The absolute path of the `randomize_va_space` `proc` node.
+const PROC_RANDOMIZE_VA_SPACE: &str = "/proc/sys/kernel/randomize_va_space";
 /// The absolute path to the `kcore` `proc` node.
 const PROC_KCORE: &str = "/proc/kcore";
 /// The name of the `VMCOREINFO` ELF note.
@@ -29,6 +31,82 @@ const PROC_KCORE: &str = "/proc/kcore";
 /// See https://www.kernel.org/doc/html/latest/admin-guide/kdump/vmcoreinfo.html
 const VMCOREINFO_NAME: &[u8] = b"VMCOREINFO\0";
 
+
+/// The kernel address space layout randomization (KASLR) state of the
+/// system.
+#[derive(Debug, PartialEq)]
+enum KaslrState {
+    /// KASLR is known to be disabled.
+    Disabled,
+    /// KASLR is known to be enabled.
+    Enabled,
+    /// The state of KASLR on the system could not be determined.
+    Unknown,
+}
+
+impl FromStr for KaslrState {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let value = usize::from_str(s.trim()).map_err(Error::with_invalid_data)?;
+        match value {
+            0 => Ok(KaslrState::Disabled),
+            1 | 2 => Ok(KaslrState::Enabled),
+            // It's unclear whether we should error out here or map anything
+            // "unknown" to `Unknown`.
+            x => Err(Error::with_invalid_data(format!(
+                "{PROC_RANDOMIZE_VA_SPACE} node value {x} is not understood"
+            ))),
+        }
+    }
+}
+
+
+/// # Notes
+/// Right now this function imposes an arbitrary limit on the maximum
+/// node value content size.
+fn read_proc_node_value<T>(path: &Path) -> Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: StdError + Send + Sync + 'static,
+{
+    let result = File::open(path);
+    let mut file = match result {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    // We don't want to blindly use Read::read_to_end or something like
+    // that if we can avoid it.
+    let mut buffer = [0; u8::MAX as usize];
+    let count = file.read(&mut buffer)?;
+    if count >= size_of_val(&buffer) {
+        return Err(Error::with_invalid_data(format!(
+            "file content is larger than {} bytes",
+            size_of_val(&buffer)
+        )))
+    }
+
+    let s = str::from_utf8(&buffer[0..count]).map_err(Error::with_invalid_data)?;
+    let value = T::from_str(s).map_err(Error::with_invalid_data)?;
+    Ok(Some(value))
+}
+
+
+/// Try to determine the KASLR state of the system.
+fn determine_kaslr_state() -> Result<KaslrState> {
+    // https://www.kernel.org/doc/html/latest/admin-guide/sysctl/kernel.html#randomize-va-space
+    let kaslr = read_proc_node_value::<KaslrState>(Path::new(PROC_RANDOMIZE_VA_SPACE))
+        .with_context(|| {
+            format!(
+                "failed to determine KASLR state from {}",
+                PROC_RANDOMIZE_VA_SPACE
+            )
+        })?
+        .unwrap_or(KaslrState::Unknown);
+    Ok(kaslr)
+}
 
 /// "Parse" the VMCOREINFO descriptor.
 ///
@@ -110,6 +188,16 @@ mod tests {
     use crate::ErrorKind;
 
 
+    /// Make sure that we can parse the KASLR state string correctly.
+    #[test]
+    fn kaslr_state_parsing() {
+        assert_eq!(KaslrState::from_str("0").unwrap(), KaslrState::Disabled);
+        assert_eq!(KaslrState::from_str("1").unwrap(), KaslrState::Enabled);
+        assert_eq!(KaslrState::from_str("2").unwrap(), KaslrState::Enabled);
+        assert!(KaslrState::from_str("3").is_err());
+        assert!(KaslrState::from_str("!@&*()&#!@@#").is_err());
+    }
+
     /// Check that we can parse a dummy VMCOREINFO descriptor.
     #[test]
     fn vmcoreinfo_desc_parsing() {
@@ -129,7 +217,9 @@ PAGESIZE=4096
 
     /// Check that we can determine the system's KASLR state.
     #[test]
-    fn kaslr_offset_reading() {
+    fn kaslr_detection() {
+        let state = determine_kaslr_state().unwrap();
+
         // Always attempt reading the KASLR to exercise the VMCOREINFO
         // parsing path.
         // Note that we cannot use the regular mmap based ELF parser
@@ -140,8 +230,19 @@ PAGESIZE=4096
             Err(err) if err.kind() == ErrorKind::NotFound => return,
             Err(err) => panic!("{err}"),
         };
-        // We care about the parsing logic, but can't make any claims
-        // about the expected offset at this point.
-        let _offset = find_kaslr_offset(&parser).unwrap();
+        let offset = find_kaslr_offset(&parser).unwrap();
+
+        match state {
+            KaslrState::Enabled => assert_ne!(offset, None),
+            KaslrState::Disabled => {
+                assert!(
+                    offset.is_none() || matches!(offset, Some(0)),
+                    "{offset:#x?}"
+                );
+            }
+            KaslrState::Unknown => {
+                // Anything is game.
+            }
+        }
     }
 }
