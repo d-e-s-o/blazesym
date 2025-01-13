@@ -51,6 +51,3 @@ libc = "0.2.137"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = "0.24"
-
-[patch.crates-io]
-symbolic = { git = "https://github.com/d-e-s-o/symbolic.git", branch = "topic/fix-windows" }
