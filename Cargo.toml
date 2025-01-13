@@ -170,3 +170,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [lints.rust]
 unexpected_cfgs = {level = "warn", check-cfg = ['cfg(has_procmap_query_ioctl)', 'cfg(has_large_test_files)']}
+
+[patch.crates-io]
+symbolic = { git = "https://github.com/d-e-s-o/symbolic.git", branch = "topic/fix-windows" }
