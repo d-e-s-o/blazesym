@@ -1071,7 +1071,7 @@ where
                         found.push(SymInfo {
                             name: Cow::Borrowed(name_visit.name(strs)?),
                             addr: sym.st_value as Addr,
-                            size: sym.st_size as usize,
+                            size: Some(sym.st_size as usize),
                             // SANITY: We filter out all unsupported symbol
                             //         types, so this conversion should always
                             //         succeed.
@@ -1134,7 +1134,7 @@ where
                 let sym_info = SymInfo {
                     name: Cow::Borrowed(name.name(strs)?),
                     addr: sym.st_value as Addr,
-                    size: sym.st_size as usize,
+                    size: Some(sym.st_size as usize),
                     // SANITY: We filter out all unsupported symbol
                     //         types, so this conversion should always
                     //         succeed.
@@ -1508,7 +1508,7 @@ mod tests {
         let opts = FindAddrOpts::default();
         let addr_r = parser.find_addr(name, &opts).unwrap();
         assert_eq!(addr_r.len(), 1);
-        assert!(addr_r.iter().any(|x| x.addr == addr && x.size == size));
+        assert!(addr_r.iter().any(|x| x.addr == addr && x.size == Some(size)));
     }
 
     /// Validate our two methods of symbol file offset calculation against each

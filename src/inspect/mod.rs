@@ -45,7 +45,7 @@ pub struct SymInfo<'src> {
     /// Start address (the first byte) of the symbol.
     pub addr: Addr,
     /// The size of the symbol. The size of a function for example.
-    pub size: usize,
+    pub size: Option<usize>,
     /// A function or a variable.
     pub sym_type: SymType,
     /// The offset in the object file.
