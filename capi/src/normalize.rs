@@ -22,6 +22,8 @@ use blazesym::normalize::UserMeta;
 use blazesym::normalize::UserOutput;
 use blazesym::Addr;
 
+use tracing::error;
+
 use crate::blaze_err;
 #[cfg(doc)]
 use crate::blaze_err_last;
@@ -193,6 +195,7 @@ pub unsafe extern "C" fn blaze_normalizer_new_opts(
     opts: *const blaze_normalizer_opts,
 ) -> *mut blaze_normalizer {
     if !input_zeroed!(opts, blaze_normalizer_opts) {
+        error!("blaze_normalizer_opts input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null_mut()
     }
@@ -683,6 +686,7 @@ pub unsafe extern "C" fn blaze_normalize_user_addrs_opts(
     opts: *const blaze_normalize_opts,
 ) -> *mut blaze_normalized_user_output {
     if !input_zeroed!(opts, blaze_normalize_opts) {
+        error!("blaze_normalizer_opts input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null_mut()
     }

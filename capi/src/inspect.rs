@@ -24,6 +24,8 @@ use blazesym::inspect::SymInfo;
 use blazesym::Addr;
 use blazesym::SymType;
 
+use tracing::error;
+
 use crate::blaze_err;
 #[cfg(doc)]
 use crate::blaze_err_last;
@@ -296,6 +298,7 @@ pub unsafe extern "C" fn blaze_inspect_syms_elf(
     name_cnt: usize,
 ) -> *const *const blaze_sym_info {
     if !input_zeroed!(src, blaze_inspect_elf_src) {
+        error!("blaze_inspect_elf_src input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null()
     }
