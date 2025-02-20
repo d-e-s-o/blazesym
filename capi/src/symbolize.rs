@@ -29,6 +29,8 @@ use blazesym::symbolize::Symbolizer;
 use blazesym::Addr;
 use blazesym::MaybeDefault;
 
+use tracing::error;
+
 use crate::blaze_err;
 #[cfg(doc)]
 use crate::blaze_err_last;
@@ -688,6 +690,7 @@ pub unsafe extern "C" fn blaze_symbolizer_new_opts(
     opts: *const blaze_symbolizer_opts,
 ) -> *mut blaze_symbolizer {
     if !input_zeroed!(opts, blaze_symbolizer_opts) {
+        error!("blaze_symbolizer_opts input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null_mut()
     }
@@ -774,6 +777,7 @@ pub unsafe extern "C" fn blaze_symbolize_cache_process(
     cache: *const blaze_cache_src_process,
 ) {
     if !input_zeroed!(cache, blaze_cache_src_process) {
+        error!("blaze_cache_src_process input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return
     }
@@ -1003,6 +1007,7 @@ pub unsafe extern "C" fn blaze_symbolize_process_abs_addrs(
     abs_addr_cnt: usize,
 ) -> *const blaze_syms {
     if !input_zeroed!(src, blaze_symbolize_src_process) {
+        error!("blaze_symbolize_src_process input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null()
     }
@@ -1036,6 +1041,7 @@ pub unsafe extern "C" fn blaze_symbolize_kernel_abs_addrs(
     abs_addr_cnt: usize,
 ) -> *const blaze_syms {
     if !input_zeroed!(src, blaze_symbolize_src_kernel) {
+        error!("blaze_symbolize_src_kernel input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null()
     }
@@ -1069,6 +1075,7 @@ pub unsafe extern "C" fn blaze_symbolize_elf_virt_offsets(
     virt_offset_cnt: usize,
 ) -> *const blaze_syms {
     if !input_zeroed!(src, blaze_symbolize_src_elf) {
+        error!("blaze_symbolize_src_elf input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null()
     }
@@ -1108,6 +1115,7 @@ pub unsafe extern "C" fn blaze_symbolize_elf_file_offsets(
     file_offset_cnt: usize,
 ) -> *const blaze_syms {
     if !input_zeroed!(src, blaze_symbolize_src_elf) {
+        error!("blaze_symbolize_src_elf input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null()
     }
@@ -1148,6 +1156,7 @@ pub unsafe extern "C" fn blaze_symbolize_gsym_data_virt_offsets(
     virt_offset_cnt: usize,
 ) -> *const blaze_syms {
     if !input_zeroed!(src, blaze_symbolize_src_gsym_data) {
+        error!("blaze_symbolize_src_gsym_data input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null()
     }
@@ -1187,6 +1196,7 @@ pub unsafe extern "C" fn blaze_symbolize_gsym_file_virt_offsets(
     virt_offset_cnt: usize,
 ) -> *const blaze_syms {
     if !input_zeroed!(src, blaze_symbolize_src_gsym_file) {
+        error!("blaze_symbolize_src_gsym_file input is not properly zeroed");
         let () = set_last_err(blaze_err::BLAZE_ERR_INVALID_INPUT);
         return ptr::null()
     }
