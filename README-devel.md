@@ -25,7 +25,7 @@ testing.
 
 ### Running Miri
 [Miri][miri] is used for testing the crate for any undefined behavior.
-The interpreter is restricted to functionality that does not cross FFI
+The interpreter is limited to functionality that does not cross FFI
 boundaries and won't perform I/O. To run all eligible tests, use:
 ```sh
 # Miri usage conflicts with custom test runners, so don't over write it.
