@@ -63,7 +63,7 @@ impl Inspector {
 
     #[cfg(feature = "breakpad")]
     fn breakpad_resolver<'slf>(&'slf self, path: &Path) -> Result<&'slf BreakpadResolver> {
-        let (file, cell) = self.breakpad_cache.entry(path)?;
+        let (file, cell) = self.breakpad_cache.entry(path.to_path_buf())?;
         let resolver = cell.get_or_try_init(|| self.create_breakpad_resolver(path, file))?;
         Ok(resolver)
     }
@@ -278,7 +278,7 @@ mod tests {
         let data = || {
             inspector
                 .elf_cache
-                .entry(&test_elf)
+                .entry(test_elf.to_path_buf())
                 .unwrap()
                 .1
                 .get()

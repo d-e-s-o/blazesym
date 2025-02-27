@@ -1,5 +1,7 @@
 use std::fs::File;
+use std::hash::Hash;
 use std::marker::PhantomData;
+use std::ops::Deref as _;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -39,16 +41,31 @@ impl From<&libc::stat> for FileMeta {
 }
 
 
+pub(crate) trait PathLike
+where
+    Self: Eq + Hash + PartialEq,
+{
+    fn path(&self) -> &Path;
+}
+
+
+impl PathLike for PathBuf {
+    fn path(&self) -> &Path {
+        self.deref()
+    }
+}
+
+
 #[derive(Debug, Eq, Hash, PartialEq)]
-struct EntryMeta {
-    path: PathBuf,
+struct EntryMeta<P> {
+    path: P,
     meta: Option<FileMeta>,
 }
 
-impl EntryMeta {
+impl<P> EntryMeta<P> {
     /// Create a new [`EntryMeta`] object. If `stat` is [`None`] file
     /// modification times and other meta data are effectively ignored.
-    fn new(path: PathBuf, stat: Option<&libc::stat>) -> Self {
+    fn new(path: P, stat: Option<&libc::stat>) -> Self {
         Self {
             path,
             meta: stat.map(FileMeta::from),
@@ -77,17 +94,17 @@ impl<T> Entry<T> {
 ///
 /// By default all features are enabled.
 #[derive(Clone, Debug)]
-pub(crate) struct Builder<T> {
+pub(crate) struct Builder<T, P> {
     /// Whether to attempt to gather source code location information.
     ///
     /// This setting implies usage of debug symbols and forces the corresponding
     /// flag to `true`.
     auto_reload: bool,
     /// Phantom data for our otherwise "unused" generic argument.
-    _phantom: PhantomData<T>,
+    _phantom: PhantomData<(T, P)>,
 }
 
-impl<T> Builder<T> {
+impl<T, P> Builder<T, P> {
     /// Enable/disable auto reloading of files when stale.
     pub(crate) fn enable_auto_reload(mut self, enable: bool) -> Self {
         self.auto_reload = enable;
@@ -95,7 +112,7 @@ impl<T> Builder<T> {
     }
 
     /// Create the [`FileCache`] object.
-    pub(crate) fn build(self) -> FileCache<T> {
+    pub(crate) fn build(self) -> FileCache<T, P> {
         let Builder {
             auto_reload,
             _phantom: _,
@@ -108,7 +125,7 @@ impl<T> Builder<T> {
     }
 }
 
-impl<T> Default for Builder<T> {
+impl<T, P> Default for Builder<T, P> {
     fn default() -> Self {
         Self {
             auto_reload: true,
@@ -125,39 +142,44 @@ impl<T> Default for Builder<T> {
 /// new entry if so.
 /// Note that stale/old entries are never evicted.
 #[derive(Debug)]
-pub(crate) struct FileCache<T> {
+pub(crate) struct FileCache<T, P = PathBuf> {
     /// The map we use for associating file meta data with user-defined
     /// data.
-    cache: InsertMap<EntryMeta, Entry<T>>,
+    cache: InsertMap<EntryMeta<P>, Entry<T>>,
     /// Whether or not to automatically reload files that were updated
     /// since the last open.
     auto_reload: bool,
 }
 
-impl<T> FileCache<T> {
+impl<T, P> FileCache<T, P> {
     /// Retrieve a [`Builder`] object for configurable construction of a
     /// [`FileCache`].
-    pub(crate) fn builder() -> Builder<T> {
-        Builder::<T>::default()
+    pub(crate) fn builder() -> Builder<T, P> {
+        Builder::default()
     }
 
     /// Retrieve an entry for the file at the given `path`.
-    pub(crate) fn entry(&self, path: &Path) -> Result<(&File, &OnceCell<T>)> {
+    pub(crate) fn entry(&self, path: P) -> Result<(&File, &OnceCell<T>)>
+    where
+        P: PathLike,
+    {
+        let fs_path = path.path().to_path_buf();
         let stat = if self.auto_reload {
-            let stat = stat(path).with_context(|| format!("failed to stat {}", path.display()))?;
+            let stat = stat(&fs_path)
+                .with_context(|| format!("failed to stat `{}`", fs_path.display()))?;
             Some(stat)
         } else {
             None
         };
 
-        let meta = EntryMeta::new(path.to_path_buf(), stat.as_ref());
+        let meta = EntryMeta::new(path, stat.as_ref());
         let entry = self.cache.get_or_try_insert(meta, || {
             // We may end up associating this file with a potentially
             // outdated `stat` (which could have changed), but the only
             // consequence is that we'd create a new entry again in the
             // future. On the bright side, we save one `stat` call.
-            let file = File::open(path)
-                .with_context(|| format!("failed to open file {}", path.display()))?;
+            let file = File::open(&fs_path)
+                .with_context(|| format!("failed to open file `{}`", fs_path.display()))?;
             let entry = Entry::new(file);
             Ok(entry)
         })?;
@@ -166,7 +188,7 @@ impl<T> FileCache<T> {
     }
 }
 
-impl<T> Default for FileCache<T> {
+impl<T, P> Default for FileCache<T, P> {
     fn default() -> Self {
         Self::builder().build()
     }
@@ -205,14 +227,14 @@ mod tests {
         let tmpfile = NamedTempFile::new().unwrap();
 
         {
-            let (_file, cell) = cache.entry(tmpfile.path()).unwrap();
+            let (_file, cell) = cache.entry(tmpfile.path().to_path_buf()).unwrap();
             assert_eq!(cell.get(), None);
 
             let () = cell.set(42).unwrap();
         }
 
         {
-            let (_file, cell) = cache.entry(tmpfile.path()).unwrap();
+            let (_file, cell) = cache.entry(tmpfile.path().to_path_buf()).unwrap();
             assert_eq!(cell.get(), Some(&42));
         }
     }
@@ -231,10 +253,10 @@ mod tests {
         let () = symlink(tmpfile.path(), &link).unwrap();
 
         let cache = FileCache::<usize>::default();
-        let (file1, cell) = cache.entry(tmpfile.path()).unwrap();
+        let (file1, cell) = cache.entry(tmpfile.path().to_path_buf()).unwrap();
         let () = cell.set(42).unwrap();
 
-        let (file2, cell) = cache.entry(&link).unwrap();
+        let (file2, cell) = cache.entry(link).unwrap();
         assert_eq!(cell.get(), None);
 
         assert_ne!(file1.as_raw_fd(), file2.as_raw_fd());
@@ -249,7 +271,7 @@ mod tests {
                 .build();
             let tmpfile = NamedTempFile::new().unwrap();
             let modified = {
-                let (file, cell) = cache.entry(tmpfile.path()).unwrap();
+                let (file, cell) = cache.entry(tmpfile.path().to_path_buf()).unwrap();
                 assert_eq!(cell.get(), None);
 
                 let () = cell.set(42).unwrap();
@@ -269,7 +291,7 @@ mod tests {
             }
 
             {
-                let (mut file, entry) = cache.entry(&path).unwrap();
+                let (mut file, entry) = cache.entry(path).unwrap();
 
                 if auto_reload {
                     assert_eq!(entry.get(), None);

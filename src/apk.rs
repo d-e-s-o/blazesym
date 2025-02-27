@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 
+#[derive(Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ApkPath {
     /// The Android style APK path, including the member.
     path: PathBuf,

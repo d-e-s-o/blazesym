@@ -747,7 +747,7 @@ impl Symbolizer {
 
     #[cfg(feature = "gsym")]
     fn gsym_resolver<'slf>(&'slf self, path: &Path) -> Result<&'slf GsymResolver<'static>> {
-        let (file, cell) = self.gsym_cache.entry(path)?;
+        let (file, cell) = self.gsym_cache.entry(path.to_path_buf())?;
         let resolver = cell.get_or_try_init(|| self.create_gsym_resolver(path, file))?;
         Ok(resolver)
     }
@@ -816,7 +816,7 @@ impl Symbolizer {
         file_off: u64,
         debug_syms: bool,
     ) -> Result<Option<(&'slf dyn Resolve, Addr)>> {
-        let (file, cell) = self.apk_cache.entry(path)?;
+        let (file, cell) = self.apk_cache.entry(path.to_path_buf())?;
         let (apk, resolvers) = cell.get_or_try_init(|| {
             let mmap = Mmap::builder()
                 .map(file)
@@ -840,7 +840,7 @@ impl Symbolizer {
 
     #[cfg(feature = "breakpad")]
     fn breakpad_resolver<'slf>(&'slf self, path: &Path) -> Result<&'slf BreakpadResolver> {
-        let (file, cell) = self.breakpad_cache.entry(path)?;
+        let (file, cell) = self.breakpad_cache.entry(path.to_path_buf())?;
         let resolver = cell.get_or_try_init(|| self.create_breakpad_resolver(path, file))?;
         Ok(resolver)
     }
@@ -853,7 +853,7 @@ impl Symbolizer {
     fn perf_map(&self, pid: Pid) -> Result<Option<&PerfMap>> {
         let path = PerfMap::path(pid);
 
-        match self.perf_map_cache.entry(&path) {
+        match self.perf_map_cache.entry(path.clone()) {
             Ok((file, cell)) => {
                 let perf_map = cell.get_or_try_init(|| self.create_perf_map(&path, file))?;
                 Ok(Some(perf_map))
@@ -941,7 +941,7 @@ impl Symbolizer {
     }
 
     fn ksym_resolver<'slf>(&'slf self, path: &Path) -> Result<&'slf Rc<KsymResolver>> {
-        let (file, cell) = self.ksym_cache.entry(path)?;
+        let (file, cell) = self.ksym_cache.entry(path.to_path_buf())?;
         let resolver = cell.get_or_try_init(|| self.create_ksym_resolver(path, file))?;
         Ok(resolver)
     }

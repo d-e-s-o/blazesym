@@ -55,7 +55,7 @@ impl FileCache<ElfResolverData> {
         path: &Path,
         debug_dirs: Option<&[PathBuf]>,
     ) -> Result<&'slf Rc<ElfResolver>> {
-        let (file, cell) = self.entry(path)?;
+        let (file, cell) = self.entry(path.to_path_buf())?;
         let resolver = if let Some(data) = cell.get() {
             if debug_dirs.is_some() {
                 data.dwarf.get_or_try_init(|| {

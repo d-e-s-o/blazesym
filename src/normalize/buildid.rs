@@ -1,11 +1,15 @@
 use std::borrow::Cow;
 use std::mem::size_of;
 use std::path::Path;
+use std::path::PathBuf;
 
+#[cfg(feature = "apk")]
+use crate::apk::ApkPath;
 use crate::elf;
 use crate::elf::types::ElfN_Nhdr;
 use crate::elf::ElfParser;
 use crate::file_cache::FileCache;
+use crate::file_cache::PathLike;
 use crate::util::align_up_u32;
 use crate::util::ReadRaw as _;
 use crate::Error;
@@ -16,6 +20,25 @@ use crate::Result;
 
 /// A GNU build ID, as raw bytes.
 pub type BuildId<'src> = Cow<'src, [u8]>;
+
+
+/// The path to a file with a build ID.
+#[derive(Debug, Eq, Hash, PartialEq)]
+pub(crate) enum BuildIdPath {
+    Elf(PathBuf),
+    #[cfg(feature = "apk")]
+    Apk(ApkPath),
+}
+
+impl PathLike for BuildIdPath {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Elf(path) => &path,
+            #[cfg(feature = "apk")]
+            Self::Apk(path) => path.filesystem_path(),
+        }
+    }
+}
 
 
 /// Iterate over all note sections to find one of type
@@ -103,7 +126,7 @@ impl<'cache> CachingBuildIdReader<'cache> {
 impl<'src> BuildIdReader<'src> for CachingBuildIdReader<'src> {
     /// Attempt to read an ELF binary's build ID from a file.
     fn read_build_id_fallible(&self, path: &Path) -> Result<Option<BuildId<'src>>> {
-        let (file, cell) = self.cache.entry(path)?;
+        let (file, cell) = self.cache.entry(path.to_path_buf())?;
         let build_id = cell
             .get_or_try_init(|| {
                 let parser = ElfParser::open_file(file, path)?;
