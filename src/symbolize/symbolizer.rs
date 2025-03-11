@@ -537,8 +537,19 @@ impl normalize::Handler<Reason> for SymbolizeHandler<'_> {
                     _ => self.handle_elf_addr(addr, file_off, entry_path),
                 }
             }
-            Some(PathName::Component(..)) => {
-                let () = self.handle_unknown_addr(addr, Reason::Unsupported);
+            Some(PathName::Component(component)) => {
+                match component.as_str() {
+                    "[vdso]" => {
+                        // TODO:
+                        // - open "/proc/<pid>/mem" as regular file
+                        // - seek to the entries range
+                        // - instantiate an ElfResolver there and use it for
+                        //   symbolization
+                    }
+                    _ => {
+                        let () = self.handle_unknown_addr(addr, Reason::Unsupported);
+                    }
+                }
                 Ok(())
             }
             // If there is no path associated with this entry, we don't
