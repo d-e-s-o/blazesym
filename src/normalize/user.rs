@@ -350,7 +350,7 @@ mod tests {
             let pid = Pid::Slf;
             let addrs = [unknown_addr as Addr];
 
-            let mut entry_iter = maps::parse_file(maps.as_bytes(), pid)
+            let mut entry_iter = maps::parse_file(maps.as_bytes(), pid, PathBuf::from("/"))
                 .filter(|result| result.as_ref().map(maps::filter_relevant).unwrap_or(true));
             let entries = |_addr| entry_iter.next();
 

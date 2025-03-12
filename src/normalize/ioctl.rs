@@ -5,6 +5,7 @@ use std::io;
 use std::mem::size_of;
 use std::mem::size_of_val;
 use std::mem::MaybeUninit;
+use std::path::Path;
 
 use libc::ENOENT;
 use libc::ENOTTY;
@@ -143,6 +144,7 @@ fn vma_flags_to_perm(vma_flags: u64) -> Perm {
 pub(crate) fn query_procmap(
     file: &File,
     pid: Pid,
+    root: &Path,
     addr: Addr,
     build_id: bool,
 ) -> Result<Option<MapsEntry>> {
@@ -204,7 +206,7 @@ pub(crate) fn query_procmap(
     // SAFETY: The kernel will have set the member to a valid value.
     let path_buf = unsafe { path_buf.assume_init_ref() };
     let path = &path_buf[0..query.vma_name_size.saturating_sub(1) as usize];
-    let path_name = parse_path_name(path, pid, query.vma_start, query.vma_end)?;
+    let path_name = parse_path_name(path, pid, root, query.vma_start, query.vma_end)?;
 
     let mut entry = MapsEntry {
         range: query.vma_start..query.vma_end,
@@ -228,6 +230,7 @@ pub(crate) fn query_procmap(
 pub(crate) fn query_procmap(
     _file: &File,
     _pid: Pid,
+    _root: &Path,
     _addr: Addr,
     _build_id: bool,
 ) -> Result<Option<MapsEntry>> {
@@ -238,12 +241,13 @@ pub(crate) fn query_procmap(
 /// Check whether the `PROCMAP_QUERY` ioctl is supported by the system.
 pub fn is_procmap_query_supported() -> Result<bool> {
     let pid = Pid::Slf;
+    let root = Path::new("/");
     let path = format!("/proc/{pid}/maps");
     let file = File::open(&path).with_context(|| format!("failed to open `{path}` for reading"))?;
     let addr = 0;
     let build_ids = false;
 
-    let result = query_procmap(&file, pid, addr, build_ids);
+    let result = query_procmap(&file, pid, root, addr, build_ids);
     match result {
         Ok(..) => Ok(true),
         Err(err) if err.kind() == ErrorKind::Unsupported => Ok(false),
@@ -298,10 +302,11 @@ mod tests {
     #[ignore = "test requires PROCMAP_QUERY ioctl kernel support"]
     fn invalid_vma_querying_ioctl() {
         let pid = Pid::Slf;
+        let root = Path::new("/");
         let path = format!("/proc/{pid}/maps");
         let file = File::open(path).unwrap();
         let addr = 0xfffffffff000;
-        let result = query_procmap(&file, pid, addr, false).unwrap();
+        let result = query_procmap(&file, pid, root, addr, false).unwrap();
         assert_eq!(result, None);
     }
 
@@ -312,10 +317,13 @@ mod tests {
     fn valid_vma_querying_ioctl() {
         fn test(build_ids: bool) {
             let pid = Pid::Slf;
+            let root = Path::new("/");
             let path = format!("/proc/{pid}/maps");
             let file = File::open(path).unwrap();
             let addr = valid_vma_querying_ioctl as Addr;
-            let entry = query_procmap(&file, pid, addr, build_ids).unwrap().unwrap();
+            let entry = query_procmap(&file, pid, root, addr, build_ids)
+                .unwrap()
+                .unwrap();
             assert!(
                 entry.range.contains(&addr),
                 "{:#x?} : {addr:#x}",
@@ -366,11 +374,12 @@ mod tests {
         fn parse_ioctl(pid: Pid, from_ioctl: &mut Vec<MapsEntry>) {
             let () = from_ioctl.clear();
 
+            let root = Path::new("/");
             let path = format!("/proc/{pid}/maps");
             let file = File::open(path).unwrap();
             let build_ids = false;
             let mut next_addr = 0;
-            while let Some(entry) = query_procmap(&file, pid, next_addr, build_ids).unwrap() {
+            while let Some(entry) = query_procmap(&file, pid, root, next_addr, build_ids).unwrap() {
                 next_addr = entry.range.end;
                 if maps::filter_relevant(&entry) {
                     let () = from_ioctl.push(entry);

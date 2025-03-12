@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::fs::read_link;
 use std::fs::File;
 use std::ops::Range;
 use std::path::Path;
@@ -249,19 +250,25 @@ impl Normalizer {
         A: ExactSizeIterator<Item = Addr> + Clone,
     {
         if self.use_procmap_query {
+            let path = format!("/proc/{pid}/root");
+            let root = read_link(&path)
+                .with_context(|| format!("failed to dereference symbolic link `{path}`"))?;
+
             let path = format!("/proc/{pid}/maps");
             let file = File::open(&path)
                 .with_context(|| format!("failed to open `{path}` for reading"))?;
 
             if !self.cache_vmas {
                 let entries =
-                    move |addr| query_procmap(&file, pid, addr, self.build_ids).transpose();
+                    move |addr| query_procmap(&file, pid, &root, addr, self.build_ids).transpose();
                 self.normalize_user_addrs_impl(addrs, entries, opts)
             } else {
                 let entries = self.entry_cache.get_or_try_insert(pid, || {
                     let mut entries = Vec::new();
                     let mut next_addr = 0;
-                    while let Some(entry) = query_procmap(&file, pid, next_addr, self.build_ids)? {
+                    while let Some(entry) =
+                        query_procmap(&file, pid, &root, next_addr, self.build_ids)?
+                    {
                         next_addr = entry.range.end;
                         if maps::filter_relevant(&entry) {
                             let () = entries.push(entry);
