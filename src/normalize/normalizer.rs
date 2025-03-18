@@ -1,8 +1,9 @@
 use std::borrow::Cow;
+#[cfg(feature = "apk")]
+use std::ffi::OsString;
 use std::fs::File;
 use std::ops::Range;
 use std::path::Path;
-use std::path::PathBuf;
 
 #[cfg(feature = "apk")]
 use crate::apk::create_apk_elf_path;
@@ -372,7 +373,7 @@ impl Normalizer {
         &self,
         apk_file_off: u64,
         apk_path: &Path,
-    ) -> Result<Option<(u64, PathBuf, Option<BuildId<'static>>)>> {
+    ) -> Result<Option<(u64, OsString, Option<BuildId<'static>>)>> {
         let (file, cell) = self.apk_cache.entry(apk_path)?;
         let (apk, elf_build_ids) = cell.get_or_try_init(|| {
             let mmap = Mmap::builder()

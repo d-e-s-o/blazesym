@@ -1,9 +1,9 @@
+use std::ffi::OsString;
 use std::path::Component;
 use std::path::Path;
-use std::path::PathBuf;
 
 
-pub(crate) fn create_apk_elf_path(apk: &Path, elf: &Path) -> PathBuf {
+pub(crate) fn create_apk_elf_path(apk: &Path, elf: &Path) -> OsString {
     let mut apk = apk.to_path_buf();
     // Append '!' to indicate separation from archive internal contents
     // that follow. This is an Android convention.
@@ -23,8 +23,7 @@ pub(crate) fn create_apk_elf_path(apk: &Path, elf: &Path) -> PathBuf {
         }
     };
     let path = apk.join(elf);
-
-    path
+    path.into_os_string()
 }
 
 
@@ -39,22 +38,22 @@ mod tests {
         let apk = Path::new("/root/test.apk");
         let elf = Path::new("subdir/libc.so");
         let path = create_apk_elf_path(apk, elf);
-        assert_eq!(path, Path::new("/root/test.apk!/subdir/libc.so"));
+        assert_eq!(path, "/root/test.apk!/subdir/libc.so");
 
         let apk = Path::new("/root/test");
         let elf = Path::new("subdir/libc.so");
         let path = create_apk_elf_path(apk, elf);
-        assert_eq!(path, Path::new("/root/test!/subdir/libc.so"));
+        assert_eq!(path, "/root/test!/subdir/libc.so");
 
         let apk = Path::new("/root/test");
         let elf = Path::new("/subdir/libc.so");
         let path = create_apk_elf_path(apk, elf);
-        assert_eq!(path, Path::new("/root/test!/subdir/libc.so"));
+        assert_eq!(path, "/root/test!/subdir/libc.so");
 
         let path = create_apk_elf_path(Path::new(""), elf);
-        assert_eq!(path, Path::new("!/subdir/libc.so"));
+        assert_eq!(path, "!/subdir/libc.so");
 
         let path = create_apk_elf_path(apk, Path::new(""));
-        assert_eq!(path, Path::new("/root/test!/"));
+        assert_eq!(path, "/root/test!/");
     }
 }
