@@ -16,6 +16,7 @@ use std::path::Path;
 use std::slice;
 use std::str;
 
+use crate::abuf::AlignedBuf;
 use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
 use crate::inspect::SymInfo;
@@ -876,6 +877,11 @@ impl Backend for File {
     type ImplTy<'bcknd> = &'bcknd File;
 }
 
+impl Backend for AlignedBuf {
+    type ObjTy = AlignedBuf;
+    type ImplTy<'bcknd> = &'bcknd [u8];
+}
+
 
 pub(crate) trait BackendImpl<'elf> {
     fn read_pod_obj<T>(&self, offset: u64) -> Result<Cow<'elf, T>, Error>
@@ -936,7 +942,7 @@ impl<'elf> BackendImpl<'elf> for &File {
 }
 
 
-/// A parser for ELF64 files.
+/// A parser for ELF files.
 pub(crate) struct ElfParser<B = Mmap>
 where
     B: Backend,
@@ -1032,6 +1038,25 @@ impl ElfParser<Mmap> {
         let module = path.represented_path().as_os_str().to_os_string();
         let path = path.actual_path();
         open_impl(path, module)
+    }
+}
+
+impl ElfParser<AlignedBuf> {
+    /// Create an `ElfParser` using a bunch of memory.
+    pub(crate) fn from_buf(buf: AlignedBuf, module: OsString) -> Self {
+        // We transmute the buffer content's lifetime to static here as
+        // that is a necessity for self-referentiality.
+        // SAFETY: We never hand out any 'static references to cache
+        //         data.
+        let data = unsafe { mem::transmute::<&[u8], &'static [u8]>(buf.deref()) };
+        let _backend = buf;
+
+        let parser = ElfParser {
+            cache: Cache::new(data),
+            module: Some(module),
+            _backend,
+        };
+        parser
     }
 }
 
@@ -1337,7 +1362,10 @@ where
     }
 }
 
-impl Debug for ElfParser {
+impl<B> Debug for ElfParser<B>
+where
+    B: Backend,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         let module = self
             .module
@@ -1356,6 +1384,7 @@ mod tests {
 
     use std::env;
     use std::env::current_exe;
+    use std::fs::read;
     #[cfg(feature = "nightly")]
     use std::hint::black_box;
     use std::io::Write as _;
@@ -1818,6 +1847,26 @@ mod tests {
             .join("data")
             .join("test-stable-addrs-32-no-dwarf.bin");
         let () = test(&path);
+    }
+
+    /// Check that basic ELF parsing functionality works when using the
+    /// `AlignedBuf` backend.
+    #[test]
+    fn find_sym_mem() {
+        let path = Path::new(&env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join("test-stable-addrs-no-dwarf.bin");
+
+        let data = read(&path).unwrap();
+        let mut buf = AlignedBuf::new(data.len(), 4096);
+        let () = buf.as_slice_mut().copy_from_slice(&data);
+
+        let parser = ElfParser::from_buf(buf, path.as_os_str().to_os_string());
+        let sym = parser
+            .find_sym(0x2000200, &FindSymOpts::Basic)
+            .unwrap()
+            .unwrap();
+        assert_eq!(sym.name, "factorial");
     }
 
     /// Make sure that we do not report a symbol if there is no conceivable
