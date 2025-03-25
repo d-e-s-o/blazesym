@@ -64,6 +64,7 @@
 #[cfg(feature = "nightly")]
 extern crate test;
 
+mod abuf;
 #[macro_use]
 mod cfg;
 #[cfg(feature = "apk")]
