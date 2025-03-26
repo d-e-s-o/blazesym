@@ -1009,6 +1009,27 @@ fn symbolize_process_with_custom_dispatch() {
     test(process_no_dispatch);
 }
 
+/// Test that we symbolize addresses in a vDSO.
+#[cfg(linux)]
+#[test]
+fn symbolize_process_vdso() {
+    use libc::clock_gettime;
+    use libc::gettimeofday;
+
+    let src = Source::Process(Process::new(Pid::Slf));
+    // Both functions are typically provided by the vDSO, though there
+    // is no guarantee of that.
+    let addrs = [gettimeofday as Addr, clock_gettime as Addr];
+    let symbolizer = Symbolizer::new();
+    let results = symbolizer
+        .symbolize(&src, Input::AbsAddr(&addrs))
+        .unwrap()
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 2);
+
+    println!("{results:?}");
+}
 
 /// Make sure that we do not fail symbolization when an empty perf
 /// map is present.

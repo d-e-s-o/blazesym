@@ -2,10 +2,16 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
 use std::fs::File;
+use std::hash::DefaultHasher;
+use std::hash::Hasher as _;
+use std::io::Read as _;
+use std::io::Seek as _;
+use std::io::SeekFrom;
 use std::mem::take;
 use std::ops::Deref as _;
 use std::ops::Range;
@@ -13,6 +19,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::abuf::AlignedBuf;
 #[cfg(feature = "apk")]
 use crate::apk::create_apk_elf_path;
 #[cfg(feature = "breakpad")]
@@ -385,7 +392,9 @@ impl Builder {
             gsym_cache: FileCache::builder().enable_auto_reload(auto_reload).build(),
             ksym_cache: FileCache::builder().enable_auto_reload(auto_reload).build(),
             perf_map_cache: FileCache::builder().enable_auto_reload(auto_reload).build(),
+            vdso_cache: InsertMap::new(),
             process_vma_cache: RefCell::new(HashMap::new()),
+            process_vdso_cache: InsertMap::new(),
             process_cache: InsertMap::new(),
             find_sym_opts,
             demangle,
@@ -429,6 +438,11 @@ struct SymbolizeHandler<'sym> {
     /// Whether or not to consult the process' perf map (if any) to
     /// satisfy the request.
     perf_map: bool,
+    /// Whether or not to symbolize addresses in a vDSO (virtual dynamic
+    /// shared object).
+    ///
+    /// Note that for remote processes, this is a privileged operation.
+    //vdso: bool,
     /// Whether to work with `/proc/<pid>/map_files/` entries or with
     /// symbolic paths mentioned in `/proc/<pid>/maps` instead.
     map_files: bool,
@@ -498,6 +512,16 @@ impl SymbolizeHandler<'_> {
         }
         Ok(())
     }
+
+    fn handle_vdso_addr(&mut self, addr: Addr, vdso_range: &Range<Addr>) -> Result<()> {
+        let addr = addr - vdso_range.start;
+        let parser = self.symbolizer.vdso_parser(self.pid, vdso_range)?;
+        let symbolized = self
+            .symbolizer
+            .symbolize_with_resolver(addr, &Resolver::Cached(parser.deref()))?;
+        let () = self.all_symbols.push(symbolized);
+        Ok(())
+    }
 }
 
 impl normalize::Handler<Reason> for SymbolizeHandler<'_> {
@@ -545,8 +569,15 @@ impl normalize::Handler<Reason> for SymbolizeHandler<'_> {
                     _ => self.handle_elf_addr(addr, file_off, entry_path),
                 }
             }
-            Some(PathName::Component(..)) => {
-                let () = self.handle_unknown_addr(addr, Reason::Unsupported);
+            Some(PathName::Component(component)) => {
+                match component.as_str() {
+                    "[vdso]" => {
+                        let () = self.handle_vdso_addr(addr, &entry.range)?;
+                    }
+                    _ => {
+                        let () = self.handle_unknown_addr(addr, Reason::Unsupported);
+                    }
+                }
                 Ok(())
             }
             // If there is no path associated with this entry, we don't
@@ -619,11 +650,24 @@ pub struct Symbolizer {
     gsym_cache: FileCache<GsymResolver<'static>>,
     ksym_cache: FileCache<Rc<KsymResolver>>,
     perf_map_cache: FileCache<PerfMap>,
+    /// A mapping from vDSO content hash to vDSO ELF data.
+    ///
+    /// We use this member to share vDSO data instead of duplicating
+    /// copies all over the place.
+    vdso_cache: InsertMap<u64, Rc<ElfParser<AlignedBuf>>>,
     /// Cache of VMA data on per-process basis.
     ///
     /// This member is only populated by explicit requests for caching
     /// data by the user.
     process_vma_cache: RefCell<HashMap<Pid, Box<[maps::MapsEntry]>>>,
+    /// A cache of per-process vDSO ELF data.
+    // TODO: Ideally we'd store a `dyn Resolver` here instead of an
+    //       `ElfParser`, but that will require an `ElfResolver` with a
+    //       different "backend", which currently is not supported. This
+    //       would need more plumbing and the direction of making
+    //       `ElfParser` generic over the backend to use is coming more
+    //       and more into question.
+    process_vdso_cache: InsertMap<Pid, Rc<ElfParser<AlignedBuf>>>,
     process_cache: InsertMap<PathName, Option<Box<dyn Resolve>>>,
     find_sym_opts: FindSymOpts,
     demangle: bool,
@@ -877,6 +921,58 @@ impl Symbolizer {
                 Err(err).with_context(|| format!("failed to open perf map `{}`", path.display()))
             }
         }
+    }
+
+    fn create_vdso_parser(
+        &self,
+        pid: Pid,
+        range: &Range<Addr>,
+    ) -> Result<Rc<ElfParser<AlignedBuf>>> {
+        let start = range.start;
+        let size = range.end.saturating_sub(start);
+        // Put in some upper limit on the vDSO data that
+        // we are going to store directly. In most cases
+        // this should be a single 4 KiB page, maybe
+        // two. Assume a worst case of one 4 MiB page,
+        // which should provide plenty of slack.
+        if size > 4 * 1024 * 1024 {
+            return Err(Error::with_invalid_data(format!(
+                "vDSO of process {pid} is unexpectedly large ({size} bytes)"
+            )))
+        }
+
+        let path = format!("/proc/{pid}/mem");
+        let mut file =
+            File::open(&path).with_context(|| format!("failed to open `{path}` for reading"))?;
+        let _prev = file
+            .seek(SeekFrom::Start(start))
+            .with_context(|| format!("failed to seek `{path}`"))?;
+        let mut buf = AlignedBuf::new(size as _, 4096);
+        let () = file
+            .read_exact(buf.as_slice_mut())
+            .with_context(|| format!("failed to read from `{path}`"))?;
+        let mut hasher = DefaultHasher::new();
+        let () = hasher.write(buf.as_slice());
+        let hash = hasher.finish();
+
+        // Check if we already hold a vDSO with the given hash, in which
+        // case we can just reuse the previously instantiated
+        // `ElfParser`.
+        let parser = self.vdso_cache.get_or_insert(hash, || {
+            Rc::new(ElfParser::from_buf(buf, OsString::from("vDSO")))
+        });
+        Ok(Rc::clone(parser))
+    }
+
+    fn vdso_parser<'slf>(
+        &'slf self,
+        pid: Pid,
+        range: &Range<Addr>,
+    ) -> Result<&'slf Rc<ElfParser<AlignedBuf>>> {
+        let parser = self
+            .process_vdso_cache
+            .get_or_try_insert(pid, || self.create_vdso_parser(pid, range))?;
+        Ok(parser)
     }
 
     fn process_dispatch_resolver<'slf>(
