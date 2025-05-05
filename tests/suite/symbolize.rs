@@ -15,6 +15,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process;
 
+use blazesym::symbolize::Vdso;
 use blazesym::helper::ElfResolver;
 use blazesym::inspect;
 use blazesym::normalize;
@@ -1068,7 +1069,7 @@ fn symbolize_process_no_vdso_no_permission() {
 
         let mut process = Process::new(Pid::Slf);
         process.map_files = false;
-        process.vdso = false;
+        process.vdso = Vdso::None;
         let src = Source::Process(process);
         // Just make sure that we do not error out due to permission issues.
         // We can't really make any claims about the resolved symbols,

@@ -157,6 +157,32 @@ impl FindSymOpts {
 }
 
 
+/// Configuration determining how to symbolize vDSO addresses.
+// TODO: Move into the crate root?
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Vdso {
+    /// Don't handle vDSO addresses.
+    None,
+    /// Use the remote process' vDSO image.
+    ///
+    /// Use the vDSO image of the process whose addresses we attempt to
+    /// symbolize. Doing so will result in the correct symbolization
+    /// result, but it requires the capability for reading remote
+    /// process memory via `/proc/<pid>/mem`.
+    #[default]
+    RemoteProcMem,
+    /// Use the vDSO image of the process containing the library.
+    ///
+    /// Use the current process' vDSO image for symbolization. Use at your
+    /// own risk and only for good reason. Conceptually, processes in a
+    /// system are free to use a different libc and vDSO image and if that
+    /// is the case symbolization may be wrong if this option is being
+    /// used. However, by using this option the need for requiring the
+    /// capability for reading `/proc/<pid>/mem` is eliminated.
+    CurrentProcMem,
+}
+
+
 /// A enumeration of the different input types the symbolization APIs
 /// support.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -75,6 +75,7 @@ pub mod symbolize;
 #[cfg(any(test, feature = "test"))]
 mod test_helper;
 mod util;
+mod vdso;
 #[cfg(feature = "apk")]
 mod zip;
 

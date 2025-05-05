@@ -11,6 +11,7 @@ use crate::Pid;
 
 #[cfg(doc)]
 use super::Symbolizer;
+use super::Vdso;
 
 
 cfg_apk! {
@@ -278,20 +279,9 @@ pub struct Process {
     /// However, by using symbolic paths the need for requiring the
     /// `SYS_ADMIN` capability is eliminated.
     pub map_files: bool,
-    /// Whether or not to symbolize addresses in a vDSO (virtual dynamic
-    /// shared object).
-    ///
-    /// The main reason to disable vDSO symbolization is in cases of
-    /// unpriviledged symbolization. Symbolizing vDSO data from a
-    /// different process requires reading memory from another process,
-    /// which is privileged.
-    // TODO: Think about making this a tri-state of sorts and allowing
-    //       for direct usage of the current process' vDSO (which is
-    //       *likely* the same one used in other processes). This would
-    //       allow for unprivileged vDSO symbolization (but should be
-    //       opt-in, because it *could* result in wrong symbolization if
-    //       a process uses a custom vDSO).
-    pub vdso: bool,
+    /// How to handle addresses in a vDSO (virtual dynamic shared
+    /// object).
+    pub vdso: Vdso,
     /// The struct is non-exhaustive and open to extension.
     #[doc(hidden)]
     pub _non_exhaustive: (),
@@ -301,7 +291,8 @@ impl Process {
     /// Create a new [`Process`] object using the provided `pid`.
     ///
     /// `debug_syms`, `perf_map`, `map_files`, and `vdso` default to
-    /// `true` when using this constructor.
+    /// `true` when using this constructor, `vdso` is set to the
+    /// [`Vdso::default`].
     #[inline]
     pub fn new(pid: Pid) -> Self {
         Self {
@@ -309,7 +300,7 @@ impl Process {
             debug_syms: true,
             perf_map: true,
             map_files: true,
-            vdso: true,
+            vdso: Vdso::default(),
             _non_exhaustive: (),
         }
     }

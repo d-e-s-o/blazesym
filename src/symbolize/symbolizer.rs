@@ -92,6 +92,7 @@ use super::SrcLang;
 use super::Sym;
 use super::Symbolize;
 use super::Symbolized;
+use super::Vdso;
 
 
 /// A type for displaying debug information for a [`MapsEntry`].
@@ -442,9 +443,9 @@ struct SymbolizeHandler<'sym> {
     /// Whether to work with `/proc/<pid>/map_files/` entries or with
     /// symbolic paths mentioned in `/proc/<pid>/maps` instead.
     map_files: bool,
-    /// Whether or not to symbolize addresses in a vDSO (virtual dynamic
-    /// shared object).
-    vdso: bool,
+    /// How to handle addresses in a vDSO (virtual dynamic shared
+    /// object).
+    vdso: Vdso,
     /// Symbols representing the symbolized addresses.
     all_symbols: Vec<Symbolized<'sym>>,
 }
@@ -518,7 +519,22 @@ impl SymbolizeHandler<'_> {
         file_off: u64,
         vdso_range: &Range<Addr>,
     ) -> Result<()> {
-        let resolver = self.symbolizer.vdso_resolver(self.pid, vdso_range)?;
+        let resolver = match self.vdso {
+            Vdso::None => {
+                let () = self.handle_unknown_addr(addr, Reason::Unsupported);
+                return Ok(())
+            }
+            Vdso::RemoteProcMem => self.symbolizer.remote_vdso_resolver(self.pid, vdso_range)?,
+            Vdso::CurrentProcMem => {
+                self.symbolizer
+                    .local_vdso_resolver(if self.pid == Pid::Slf {
+                        Some(vdso_range.clone())
+                    } else {
+                        None
+                    })?
+            }
+        };
+
         match resolver.file_offset_to_virt_offset(file_off)? {
             Some(addr) => {
                 let symbol = self
@@ -579,7 +595,7 @@ impl normalize::Handler<Reason> for SymbolizeHandler<'_> {
             }
             Some(PathName::Component(component)) => {
                 match component.as_str() {
-                    "[vdso]" if self.vdso => {
+                    "[vdso]" => {
                         let () = self.handle_vdso_addr(addr, file_off, &entry.range)?;
                     }
                     _ => {
@@ -926,7 +942,7 @@ impl Symbolizer {
     }
 
     #[cfg(linux)]
-    fn create_vdso_resolver(&self, pid: Pid, range: &Range<Addr>) -> Result<ElfResolver> {
+    fn create_remote_vdso_resolver(&self, pid: Pid, range: &Range<Addr>) -> Result<ElfResolver> {
         let start = range.start;
         let size = range.end.saturating_sub(start);
         // Put in some upper limit on the vDSO data that we are going to
@@ -986,16 +1002,47 @@ impl Symbolizer {
     }
 
     #[cfg(not(linux))]
-    fn create_vdso_resolver(&self, _pid: Pid, _range: &Range<Addr>) -> Result<ElfResolver> {
+    fn create_remote_vdso_resolver(&self, _pid: Pid, _range: &Range<Addr>) -> Result<ElfResolver> {
         Err(Error::with_unsupported(
             "vDSO address symbolization is unsupported on operating systems other than Linux",
         ))
     }
 
-    fn vdso_resolver<'slf>(&'slf self, pid: Pid, range: &Range<Addr>) -> Result<&'slf ElfResolver> {
+    fn remote_vdso_resolver<'slf>(
+        &'slf self,
+        pid: Pid,
+        range: &Range<Addr>,
+    ) -> Result<&'slf ElfResolver> {
         let parser = self
             .process_vdso_cache
-            .get_or_try_insert(pid, || self.create_vdso_resolver(pid, range))?;
+            .get_or_try_insert(pid, || self.create_remote_vdso_resolver(pid, range))?;
+        Ok(parser)
+    }
+
+    fn create_local_vdso_resolver(&self, vdso_range: Option<Range<Addr>>) -> Result<ElfResolver> {
+        if vdso_range.is_none() {
+            vdso_range = find_vdso()?;
+        }
+
+        let vdso_range = if let Some(vdso_range) = vdso_range {
+            vdso_range
+        } else {
+            return Err(Error::with_invalid_data("vDSO memory range not found"))
+        };
+
+        todo!()
+    }
+
+    fn local_vdso_resolver<'slf>(
+        &'slf self,
+        vdso_range: Option<Range<Addr>>,
+    ) -> Result<&'slf ElfResolver> {
+        // We piggy back on the same cache as we'd use when creating a
+        // "remote" process vDSO resolver, because ultimately both will
+        // behave the same.
+        let parser = self
+            .process_vdso_cache
+            .get_or_try_insert(Pid::Slf, || self.create_local_vdso_resolver(vdso_range))?;
         Ok(parser)
     }
 
@@ -1030,7 +1077,7 @@ impl Symbolizer {
         debug_syms: bool,
         perf_map: bool,
         map_files: bool,
-        vdso: bool,
+        vdso: Vdso,
     ) -> Result<Vec<Symbolized>> {
         let mut handler = SymbolizeHandler {
             symbolizer: self,
@@ -1811,7 +1858,7 @@ mod tests {
             debug_syms: false,
             perf_map: false,
             map_files: false,
-            vdso: false,
+            vdso: Vdso::None,
             all_symbols: Vec::new(),
         };
         let () = normalize_sorted_user_addrs_with_entries(

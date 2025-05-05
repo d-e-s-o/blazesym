@@ -26,6 +26,7 @@ use blazesym::symbolize::Reason;
 use blazesym::symbolize::Sym;
 use blazesym::symbolize::Symbolized;
 use blazesym::symbolize::Symbolizer;
+use blazesym::symbolize::Vdso;
 use blazesym::Addr;
 use blazesym::MaybeDefault;
 
@@ -356,7 +357,11 @@ impl From<blaze_symbolize_src_process> for Process {
             debug_syms,
             perf_map,
             map_files: !no_map_files,
-            vdso: !no_vdso,
+            vdso: if no_vdso {
+                Vdso::None
+            } else {
+                Vdso::RemoteProcMem
+            },
             _non_exhaustive: (),
         }
     }
