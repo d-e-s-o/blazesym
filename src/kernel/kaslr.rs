@@ -16,6 +16,7 @@ use crate::ErrorKind;
 use crate::IntoError as _;
 use crate::Result;
 
+// TODO: Check https://github.com/bcoles/kasld
 
 /// The absolute path to the `kcore` `proc` node.
 const PROC_KCORE: &str = "/proc/kcore";
