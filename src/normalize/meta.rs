@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::symbolize::Sym;
+
 use super::buildid::BuildId;
 #[cfg(doc)]
 use super::NormalizeOpts;
@@ -116,6 +118,12 @@ pub enum UserMeta<'src> {
     Apk(Apk),
     /// The address belongs to an ELF file.
     Elf(Elf<'src>),
+    /// Direct symbolization information for an address.
+    ///
+    /// Some address basically have to be symbolized on the device, as
+    /// they may belong to potentially ephemeral entities, such as BPF
+    /// programs.
+    Sym(Sym<'src>),
     /// The address' origin is unknown.
     Unknown(Unknown),
 }
@@ -137,6 +145,15 @@ impl<'src> UserMeta<'src> {
     pub fn as_elf(&self) -> Option<&Elf<'src>> {
         match self {
             Self::Elf(elf) => Some(elf),
+            _ => None,
+        }
+    }
+
+    /// Retrieve the [`Sym`] of this enum, if this variant is active.
+    #[inline]
+    pub fn as_sym(&self) -> Option<&Sym<'src>> {
+        match self {
+            Self::Sym(sym) => Some(sym),
             _ => None,
         }
     }

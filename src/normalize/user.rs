@@ -232,8 +232,15 @@ impl Handler<Reason> for NormalizationHandler<'_, '_> {
                     ),
                 }
             }
-            Some(PathName::Component(..)) => {
-                let () = self.handle_unknown_addr(addr, Reason::Unsupported);
+            Some(PathName::Component(component)) => {
+                match component.as_str() {
+                    "[vdso]" if self.vdso => {
+                        let () = self.handle_vdso_addr(addr, file_off, &entry.range)?;
+                    }
+                    _ => {
+                        let () = self.handle_unknown_addr(addr, Reason::Unsupported);
+                    }
+                }
                 Ok(())
             }
             // We could still normalize the address and report it, but without a
