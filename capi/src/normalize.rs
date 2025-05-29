@@ -14,6 +14,7 @@ use std::slice;
 
 use blazesym::normalize::Apk;
 use blazesym::normalize::Elf;
+use blazesym::normalize::Sym;
 use blazesym::normalize::NormalizeOpts;
 use blazesym::normalize::Normalizer;
 use blazesym::normalize::Reason;
@@ -284,6 +285,8 @@ impl blaze_user_meta_kind {
     pub const APK: blaze_user_meta_kind = blaze_user_meta_kind(1);
     /// [`blaze_user_meta_variant::elf`] is valid.
     pub const ELF: blaze_user_meta_kind = blaze_user_meta_kind(2);
+    /// [`blaze_user_meta_variant::sym`] is valid.
+    pub const SYM: blaze_user_meta_kind = blaze_user_meta_kind(3);
 
     // TODO: Remove the following constants with the 0.2 release
     /// Deprecated; use `BLAZE_USER_META_KIND_UNKNOWN`.
@@ -415,6 +418,21 @@ impl blaze_user_meta_elf {
 }
 
 
+/// C compatible version of [`Sym`].
+#[repr(C)]
+#[derive(Debug)]
+pub struct blaze_user_meta_sym {
+}
+
+impl blaze_user_meta_elf {
+    fn from(other: Sym) -> ManuallyDrop<Self> {
+    }
+
+    unsafe fn free(self) {
+    }
+}
+
+
 /// The reason why normalization failed.
 ///
 /// The reason is generally only meant as a hint. Reasons reported may change
@@ -504,6 +522,8 @@ pub union blaze_user_meta_variant {
     pub apk: ManuallyDrop<blaze_user_meta_apk>,
     /// Valid on [`blaze_user_meta_kind::ELF`].
     pub elf: ManuallyDrop<blaze_user_meta_elf>,
+    /// Valid on [`blaze_user_meta_kind::SYM`].
+    pub sym: ManuallyDrop<blaze_user_meta_sym>,
     /// Valid on [`blaze_user_meta_kind::UNKNOWN`].
     pub unknown: ManuallyDrop<blaze_user_meta_unknown>,
 }
