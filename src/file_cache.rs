@@ -1,4 +1,6 @@
+use std::borrow::Cow;
 use std::cell::Cell;
+use std::fs::read_link;
 use std::fs::File;
 use std::marker::PhantomData;
 use std::path::Path;
@@ -6,9 +8,29 @@ use std::path::PathBuf;
 
 use crate::insert_map::InsertMap;
 use crate::once::OnceCell;
-use crate::util::stat;
+use crate::util::lstat;
 use crate::ErrorExt as _;
 use crate::Result;
+
+
+/// Type hackery necessary to cater to b0rked Android `libc` type
+/// definitions.
+fn convert<S, D>(src: S, _dst: &D) -> D
+where
+    D: From<S>,
+{
+    D::from(src)
+}
+
+#[cfg(not(windows))]
+fn is_symlink(stat: &libc::stat) -> bool {
+    (stat.st_mode & convert(libc::S_IFMT, &stat.st_mode)) == convert(libc::S_IFLNK, &stat.st_mode)
+}
+
+#[cfg(windows)]
+fn is_symlink(_stat: &libc::stat) -> bool {
+    false
+}
 
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -147,22 +169,36 @@ impl<T> FileCache<T> {
     }
 
     fn get_or_insert(&self, path: &Path, path_entry: &PathEntry) -> Result<&Entry<T>> {
-        let stat = stat(path).with_context(|| format!("failed to stat `{}`", path.display()))?;
-        let meta = (PinState::Unpinned, FileMeta::from(&stat));
+        let mut path = Cow::Borrowed(path);
 
-        let entry = self.entries.get_or_try_insert(meta.1, || {
-            // We may end up associating this file with a potentially
-            // outdated `stat` (which could have changed), but the only
-            // consequence is that we'd create a new entry again in the
-            // future. On the bright side, we save one `stat` call.
-            let file = File::open(path)
-                .with_context(|| format!("failed to open file `{}`", path.display()))?;
-            let entry = Entry::new(file);
-            Ok(entry)
-        })?;
-        let () = path_entry.current.set(Some(meta));
+        loop {
+            let stat =
+                lstat(&path).with_context(|| format!("failed to stat `{}`", path.display()))?;
+            let meta = (PinState::Unpinned, FileMeta::from(&stat));
 
-        Ok(entry)
+            if is_symlink(&stat) {
+                // We could add a cache entry for the link itself, but
+                // really we only care about the eventual target.
+
+                let target = read_link(&path).with_context(|| {
+                    format!("failed to read link target of `{}`", path.display())
+                })?;
+                path = Cow::Owned(target);
+            } else {
+                let entry = self.entries.get_or_try_insert(meta.1, || {
+                    // We may end up associating this file with a potentially
+                    // outdated `stat` (which could have changed), but the only
+                    // consequence is that we'd create a new entry again in the
+                    // future. On the bright side, we save one `stat` call.
+                    let file = File::open(&path)
+                        .with_context(|| format!("failed to open file `{}`", path.display()))?;
+                    let entry = Entry::new(file);
+                    Ok(entry)
+                })?;
+                let () = path_entry.current.set(Some(meta));
+                break Ok(entry)
+            }
+        }
     }
 
     /// Retrieve the entry for the file at the given `path`.
@@ -217,10 +253,16 @@ impl<T> Default for FileCache<T> {
 mod tests {
     use super::*;
 
+    #[cfg(linux)]
+    use std::fs::remove_file;
+    use std::fs::write;
     #[cfg(feature = "nightly")]
     use std::hint::black_box;
     use std::io::Read as _;
-    use std::io::Write as _;
+    #[cfg(linux)]
+    use std::os::fd::AsRawFd as _;
+    #[cfg(linux)]
+    use std::os::unix::fs::symlink;
     use std::thread::sleep;
     use std::time::Duration;
 
@@ -245,6 +287,19 @@ mod tests {
         assert_ne!(format!("{entry:?}"), "");
     }
 
+    /// Test that we can identify a symbolic link.
+    #[cfg(linux)]
+    #[test]
+    fn symlink_check() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        let tmpdir = tempdir().unwrap();
+        let link = tmpdir.path().join("symlink");
+        let () = symlink(tmpfile.path(), &link).unwrap();
+
+        let stat = lstat(&link).unwrap();
+        assert!(is_symlink(&stat));
+    }
+
     /// Check that we can associate data with a file.
     #[test]
     fn lookup() {
@@ -264,17 +319,11 @@ mod tests {
         }
     }
 
-    /// Check that our `FileCache` does not represent symbolic links
-    /// pointing to the same file as equal entries.
+    /// Check that our `FileCache` deduplicates symbolic link targets
+    /// properly.
     #[cfg(linux)]
     #[test]
-    // TODO: Rework and reenable test once `FileCache` handles symlinks
-    //       as first class entities.
-    #[ignore = "symlink support is undergoing changes"]
-    fn file_symlinks() {
-        use std::os::fd::AsRawFd as _;
-        use std::os::unix::fs::symlink;
-
+    fn symlink_entries() {
         let tmpfile = NamedTempFile::new().unwrap();
         let tmpdir = tempdir().unwrap();
         let link = tmpdir.path().join("symlink");
@@ -284,10 +333,101 @@ mod tests {
         let (file1, cell) = cache.entry(tmpfile.path()).unwrap();
         let () = cell.set(42).unwrap();
 
+        // The entry for the link should reference the targeted file.
         let (file2, cell) = cache.entry(&link).unwrap();
-        assert_eq!(cell.get(), None);
+        assert_eq!(cell.get(), Some(&42));
+        assert_eq!(file2.as_raw_fd(), file1.as_raw_fd());
 
-        assert_ne!(file1.as_raw_fd(), file2.as_raw_fd());
+        // Now replace the link with a proper file. This file should
+        // subsequently get picked up.
+        let () = remove_file(&link).unwrap();
+        let () = write(&link, b"test").unwrap();
+        let (file3, cell) = cache.entry(&link).unwrap();
+        assert_eq!(cell.get(), None);
+        assert_ne!(file3.as_raw_fd(), file1.as_raw_fd());
+
+        // But of course the original entry should still exist.
+        let (file4, cell) = cache.entry(tmpfile.path()).unwrap();
+        assert_eq!(cell.get(), Some(&42));
+        assert_eq!(file4.as_raw_fd(), file1.as_raw_fd());
+    }
+
+    /// Make sure that symbolic link chain updates are picked up.
+    #[cfg(linux)]
+    #[test]
+    fn multi_symlink_reload() {
+        // We create the following symbolic link setup:
+        //   link1 -> link2 -> file
+        let tmpfile = NamedTempFile::new().unwrap();
+        let tmpdir = tempdir().unwrap();
+        let link2 = tmpdir.path().join("symlink2");
+        let () = symlink(tmpfile.path(), &link2).unwrap();
+        let link1 = tmpdir.path().join("symlink1");
+        let () = symlink(&link2, &link1).unwrap();
+
+        let cache = FileCache::<usize>::default();
+        let (file1, cell) = cache.entry(&link1).unwrap();
+        let () = cell.set(41).unwrap();
+
+        // Now replace `link2` with a link to a different file.
+        let tmpfile2 = NamedTempFile::new().unwrap();
+        let () = remove_file(&link2).unwrap();
+        let () = symlink(tmpfile2.path(), &link2).unwrap();
+
+        // Our `FileCache` should pick up the change and create a new
+        // entry.
+        let (file2, cell) = cache.entry(&link1).unwrap();
+        assert_eq!(cell.get(), None);
+        assert_ne!(file2.as_raw_fd(), file1.as_raw_fd());
+    }
+
+    /// Check pinning works correctly in the presence of symbolic links.
+    #[cfg(linux)]
+    #[test]
+    fn symlink_pinning() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        let tmpdir = tempdir().unwrap();
+        let link = tmpdir.path().join("symlink");
+        let () = symlink(tmpfile.path(), &link).unwrap();
+
+        let cache = FileCache::<usize>::default();
+        let (file1, cell) = cache.entry(&link).unwrap();
+        let () = cell.set(42).unwrap();
+
+        let () = cache.pin(&link).unwrap();
+
+        // Update symbolic link to point to new file.
+        let tmpfile2 = NamedTempFile::new().unwrap();
+        let () = remove_file(&link).unwrap();
+        let () = symlink(tmpfile2.path(), &link).unwrap();
+
+        // We should still see the pinned content.
+        let (file2, cell) = cache.entry(&link).unwrap();
+        assert_eq!(cell.get(), Some(&42));
+        assert_eq!(file2.as_raw_fd(), file1.as_raw_fd());
+
+        // Update the target file as well and check again.
+        let () = write(tmpfile.path(), b"new-content").unwrap();
+        let (file3, cell) = cache.entry(&link).unwrap();
+        assert_eq!(cell.get(), Some(&42));
+        assert_eq!(file3.as_raw_fd(), file1.as_raw_fd());
+    }
+
+    /// Check that the `FileCache` reports the expected error when
+    /// encountering a symbolic link that points to a non-existent
+    /// target.
+    #[cfg(linux)]
+    #[test]
+    fn symlink_dead_target() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        let tmpdir = tempdir().unwrap();
+        let link = tmpdir.path().join("symlink");
+        let () = symlink(tmpfile.path(), &link).unwrap();
+        let () = tmpfile.close().unwrap();
+
+        let cache = FileCache::<usize>::default();
+        let err = cache.entry(&link).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
     }
 
     /// Make sure that a changed file updates the cache entry.
@@ -317,8 +457,7 @@ mod tests {
             let () = drop(tmpfile);
 
             {
-                let mut _file = File::create_new(&path).unwrap();
-                let () = _file.write_all(b"foobar").unwrap();
+                let () = write(&path, b"foobar").unwrap();
             }
 
             {
