@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::insert_map::InsertMap;
 use crate::once::OnceCell;
-use crate::util::stat;
+use crate::util::lstat;
 use crate::ErrorExt as _;
 use crate::Result;
 
@@ -147,7 +147,7 @@ impl<T> FileCache<T> {
     }
 
     fn get_or_insert(&self, path: &Path, path_entry: &PathEntry) -> Result<&Entry<T>> {
-        let stat = stat(path).with_context(|| format!("failed to stat `{}`", path.display()))?;
+        let stat = lstat(path).with_context(|| format!("failed to stat `{}`", path.display()))?;
         let meta = (PinState::Unpinned, FileMeta::from(&stat));
 
         let entry = self.entries.get_or_try_insert(meta.1, || {

@@ -14,7 +14,7 @@ use std::process::Stdio;
 
 use blazesym::Addr;
 use blazesym::Pid;
-use blazesym::__private::stat;
+use blazesym::__private::lstat;
 
 #[cfg(not(windows))]
 use libc::uid_t;
@@ -64,7 +64,7 @@ where
 /// Attempt to infer a usable non-root UID on the system.
 pub fn non_root_uid() -> uid_t {
     let exe = current_exe().expect("failed to retrieve executable path");
-    let stat = stat(&exe).unwrap_or_else(|err| panic!("failed to stat `{exe:?}`: {err}"));
+    let stat = lstat(&exe).unwrap_or_else(|err| panic!("failed to lstat `{exe:?}`: {err}"));
     stat.st_uid
 }
 
