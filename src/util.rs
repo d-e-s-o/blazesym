@@ -288,12 +288,17 @@ where
 
 
 #[doc(hidden)]
-pub fn stat(path: &Path) -> io::Result<libc::stat> {
+pub fn lstat(path: &Path) -> io::Result<libc::stat> {
     let mut dst = MaybeUninit::uninit();
     let mut path = path_to_bytes(path)?.to_vec();
     let () = path.push(b'\0');
 
-    let rc = unsafe { libc::stat(path.as_ptr().cast::<libc::c_char>(), dst.as_mut_ptr()) };
+    #[cfg(windows)]
+    let stat_fn = libc::stat;
+    #[cfg(not(windows))]
+    let stat_fn = libc::lstat;
+
+    let rc = unsafe { (stat_fn)(path.as_ptr().cast::<libc::c_char>(), dst.as_mut_ptr()) };
     if rc < 0 {
         return Err(io::Error::last_os_error())
     }
@@ -795,7 +800,7 @@ mod tests {
         assert_eq!(result, vec.into_iter().map(|x| x + 2).collect::<Vec<_>>());
     }
 
-    /// Check that we can retrieve meta-data about a file using `stat`
+    /// Check that we can retrieve meta-data about a file using `lstat`
     /// and `fstat`.
     #[cfg(linux)]
     #[test]
@@ -803,7 +808,7 @@ mod tests {
         use std::os::fd::AsRawFd as _;
 
         let tmpfile = NamedTempFile::new().unwrap();
-        let stat1 = stat(tmpfile.path()).unwrap();
+        let stat1 = lstat(tmpfile.path()).unwrap();
         let stat2 = fstat(tmpfile.as_file().as_raw_fd()).unwrap();
 
         assert_eq!(stat1.st_dev, stat2.st_dev);
