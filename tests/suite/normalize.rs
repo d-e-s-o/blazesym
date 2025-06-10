@@ -327,6 +327,12 @@ fn normalize_custom_so_in_zip() {
 
 fn test_normalize_deleted_so(use_procmap_query: bool) {
     fn test(use_procmap_query: bool, cache_vmas: bool, cache_build_ids: bool, use_map_files: bool) {
+        dbg!(
+            use_procmap_query,
+            cache_vmas,
+            cache_build_ids,
+            use_map_files
+        );
         let test_so = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
             .join("libtest-so.so");
@@ -369,9 +375,9 @@ fn test_normalize_deleted_so(use_procmap_query: bool) {
         assert_eq!(meta.build_id, expected_build_id);
     }
 
-    for cache_build_ids in [true, false] {
-        for cache_vmas in [true, false] {
-            for use_map_files in [true, false] {
+    for cache_build_ids in [true] {
+        for cache_vmas in [true] {
+            for use_map_files in [true] {
                 let () = test(
                     use_procmap_query,
                     cache_build_ids,

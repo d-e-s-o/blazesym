@@ -172,6 +172,8 @@ impl<T> FileCache<T> {
         let mut path = Cow::Borrowed(path);
 
         loop {
+            dbg!(&path);
+            println!("{}", std::backtrace::Backtrace::force_capture());
             let stat =
                 lstat(&path).with_context(|| format!("failed to stat `{}`", path.display()))?;
             let meta = (PinState::Unpinned, FileMeta::from(&stat));

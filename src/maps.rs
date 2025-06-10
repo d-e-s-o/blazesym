@@ -203,8 +203,10 @@ pub(crate) fn parse_path_name(
     let path_name = match path {
         [] => None,
         [b'/', ..] => {
+            dbg!(util::bytes_to_os_str(path).unwrap());
             let symbolic_path =
                 bytes_to_path(path.strip_suffix(b" (deleted)").unwrap_or(path))?.to_path_buf();
+            dbg!(&symbolic_path);
             // Make sure to resolve the potentially symbolic PID so that
             // it has more of a meaning in case of remote symbolization
             // use cases.

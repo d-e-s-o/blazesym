@@ -203,6 +203,7 @@ impl Handler<Reason> for NormalizationHandler<'_, '_> {
     fn handle_entry_addr(&mut self, addr: Addr, entry: &MapsEntry) -> Result<()> {
         let file_off = addr - entry.range.start + entry.offset;
 
+        dbg!(&entry.path_name);
         match &entry.path_name {
             Some(PathName::Path(entry_path)) => {
                 let path = if self.normalize_opts.map_files {
@@ -266,6 +267,7 @@ impl Handler<Reason> for NormalizationHandler<'_, '_> {
                             let build_id = entry.build_id.clone().or_else(|| {
                                 // We don't fail normalization due to
                                 // build ID read failure.
+                                dbg!(path);
                                 self.normalizer.read_build_id(path).ok().flatten()
                             });
                             make_elf_meta(path, build_id)
