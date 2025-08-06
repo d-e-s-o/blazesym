@@ -349,6 +349,12 @@ jobs:
         CARGO_PROFILE_RELEASE_INCREMENTAL: true
         CARGO_PROFILE_RELEASE_LTO: false
       run: cargo test --workspace --release
+    - uses: actions/upload-artifact@v4
+      with:
+        name: coverage-binaries
+        if-no-files-found: error
+        path: |
+          tests-coverage
   test-miri:
     name: Test with Miri
     runs-on: ubuntu-latest

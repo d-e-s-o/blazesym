@@ -1390,7 +1390,6 @@ mod tests {
     use super::super::types::SHN_LORESERVE;
 
     use std::env;
-    use std::env::current_exe;
     #[cfg(feature = "nightly")]
     use std::hint::black_box;
     use std::io::Write as _;
@@ -1686,8 +1685,12 @@ mod tests {
                 .unwrap();
         }
 
-        let exe = current_exe().unwrap();
+        //let exe = current_exe().unwrap();
+        let exe = Path::new(&env!("CARGO_MANIFEST_DIR")).join("tests-coverage");
         test(&exe);
+
+        //let dst = Path::new("tests-coverage");
+        //let _cnt = copy(&exe, dst).unwrap();
 
         let so = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
