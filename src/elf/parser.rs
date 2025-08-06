@@ -217,9 +217,9 @@ fn file_offset(shdrs: &ElfN_Shdrs<'_>, sym: &Elf64_Sym) -> Result<Option<u64>> {
             )
         })?;
 
-    if shdr.type_() == SHT_NOBITS {
-        return Ok(None)
-    }
+    //if shdr.type_() == SHT_NOBITS {
+    //    return Ok(None)
+    //}
 
     let offset = sym
         .st_value
