@@ -435,6 +435,7 @@ pub(crate) const SHN_LORESERVE: u16 = 0xff00;
 pub(crate) const SHN_ABS: u16 = 0xfff1;
 pub(crate) const SHN_XINDEX: u16 = 0xffff;
 
+pub(crate) const SHT_PROGBITS: Elf64_Word = 1;
 pub(crate) const SHT_NOTE: Elf64_Word = 7;
 pub(crate) const SHT_NOBITS: Elf64_Word = 8;
 

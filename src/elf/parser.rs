@@ -16,6 +16,7 @@ use std::path::Path;
 use std::slice;
 use std::str;
 
+use crate::elf::types::SHT_PROGBITS;
 use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
 use crate::inspect::SymInfo;
@@ -217,9 +218,12 @@ fn file_offset(shdrs: &ElfN_Shdrs<'_>, sym: &Elf64_Sym) -> Result<Option<u64>> {
             )
         })?;
 
-    //if shdr.type_() == SHT_NOBITS {
-    //    return Ok(None)
-    //}
+    // If the section doesn't have in-file data, there can't be a proper
+    // file offset (elf(5) refers to a "conceptual placement in the
+    // file", but that concept has no meaning for us).
+    if [SHT_NOBITS, SHT_PROGBITS].contains(&shdr.type_()) {
+        return Ok(None)
+    }
 
     let offset = sym
         .st_value
@@ -1225,7 +1229,7 @@ where
             let phdr = phdr.to_64bit();
 
             if phdr.p_type == PT_LOAD {
-                if (phdr.p_vaddr..phdr.p_vaddr + phdr.p_memsz).contains(&addr) {
+                if (phdr.p_vaddr..phdr.p_vaddr + phdr.p_filesz).contains(&addr) {
                     return Some(addr - phdr.p_vaddr + phdr.p_offset)
                 }
             }
