@@ -1698,10 +1698,11 @@ mod tests {
         }
 
         let exe = current_exe().unwrap();
-        //test(&exe);
+        let exe = Path::new(&env!("CARGO_MANIFEST_DIR")).join("tests-coverage");
+        test(&exe);
 
-        let dst = Path::new("tests-coverage");
-        let _cnt = copy(&exe, dst).unwrap();
+        //let dst = Path::new("tests-coverage");
+        //let _cnt = copy(&exe, dst).unwrap();
 
         let so = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
