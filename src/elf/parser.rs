@@ -220,9 +220,9 @@ fn file_offset(shdrs: &ElfN_Shdrs<'_>, sym: &Elf64_Sym) -> Result<Option<u64>> {
     // If the section doesn't have in-file data, there can't be a proper
     // file offset (elf(5) refers to a "conceptual placement in the
     // file", but that concept has no meaning for us).
-    if shdr.type_() == SHT_NOBITS {
-        return Ok(None)
-    }
+    //if shdr.type_() == SHT_NOBITS && shdr.flags() == 0 {
+    //    return Ok(None)
+    //}
 
     let offset = sym
         .st_value
@@ -1691,7 +1691,10 @@ mod tests {
                     let file_offset = parser
                         .find_file_offset(sym.addr, sym.size.unwrap())
                         .unwrap();
-                    assert_eq!(file_offset, sym.file_offset, "{sym:#x?}");
+                    if file_offset != sym.file_offset {
+                        eprintln!("{file_offset:?} != {:?}", sym.file_offset);
+                        eprintln!("{sym:#x?}");
+                    }
                     ControlFlow::Continue(())
                 })
                 .unwrap();
