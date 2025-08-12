@@ -490,6 +490,9 @@ fn cc_stable_addrs_dwp(dst: impl AsRef<OsStr>, options: &[&str]) {
         let dst = change_ext(&data_dir.join(dst), "o");
         let src = data_dir.join(src);
         let () = cc(&src, &dst, &["-O0", "-g", "-c", "-gsplit-dwarf"]);
+        // We only care about debug info in the .dwo files, so strip the
+        // .o ones.
+        //let () = elf(&dst, &dst);
         let () = dwos.push(change_ext(&dst, "dwo"));
         let () = objs.push(dst);
     }
