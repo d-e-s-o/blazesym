@@ -56,6 +56,8 @@ fn format_offset(offset: gimli::UnitSectionOffset<usize>) -> String {
 pub(crate) struct Units<'dwarf> {
     /// The DWARF data.
     dwarf: gimli::Dwarf<R<'dwarf>>,
+    /// XXX
+    package: Option<gimli::DwarfPackage<R<'dwarf>>>,
     /// The ranges of the units encountered.
     unit_ranges: Box<[UnitRange]>,
     /// All units along with meta-data.
@@ -63,7 +65,10 @@ pub(crate) struct Units<'dwarf> {
 }
 
 impl<'dwarf> Units<'dwarf> {
-    pub(crate) fn parse(sections: gimli::Dwarf<R<'dwarf>>) -> Result<Self> {
+    pub(crate) fn parse(
+        sections: gimli::Dwarf<R<'dwarf>>,
+        package: Option<gimli::DwarfPackage<R<'dwarf>>>,
+    ) -> Result<Self> {
         // Find all the references to compilation units in .debug_aranges.
         // Note that we always also iterate through all of .debug_info to
         // find compilation units, because .debug_aranges may be missing some.
@@ -227,6 +232,7 @@ impl<'dwarf> Units<'dwarf> {
 
         let slf = Self {
             dwarf: sections,
+            package,
             unit_ranges: unit_ranges.into_boxed_slice(),
             units: res_units.into_boxed_slice(),
         };

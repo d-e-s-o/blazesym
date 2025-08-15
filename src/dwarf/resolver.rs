@@ -24,6 +24,7 @@ use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
 use crate::inspect::Inspect;
 use crate::inspect::SymInfo;
+use crate::log;
 use crate::log::debug;
 use crate::log::warn;
 use crate::symbolize::CodeInfo;
@@ -36,6 +37,7 @@ use crate::symbolize::Symbolize;
 use crate::Addr;
 use crate::Error;
 use crate::ErrorExt;
+use crate::ErrorKind;
 use crate::Mmap;
 use crate::Result;
 use crate::SymType;
@@ -147,6 +149,25 @@ fn try_deref_debug_link(
     }
 }
 
+fn try_find_dwp(parser: &ElfParser) -> Result<Option<Rc<ElfParser>>> {
+    if let Some(path) = parser.module() {
+        let mut dwp_path = path.to_os_string();
+        let () = dwp_path.push(".dwp");
+        let dwp_path = PathBuf::from(dwp_path);
+
+        match ElfParser::open(&dwp_path) {
+            Ok(parser) => {
+                log::debug!("using DWARF package `{}`", dwp_path.display());
+                Ok(Some(Rc::new(parser)))
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 
 /// `DwarfResolver` provides abilities to query DWARF information of binaries.
 pub(crate) struct DwarfResolver {
@@ -174,16 +195,17 @@ impl DwarfResolver {
         debug_dirs: &[PathBuf],
     ) -> Result<Self, Error> {
         let linkee_parser = try_deref_debug_link(&parser, debug_dirs)?;
+        let dwp_parser = try_find_dwp(&parser)?;
 
         // SAFETY: We own the `ElfParser` and make sure that it stays
         //         around while the `Units` object uses it. As such, it
         //         is fine to conjure a 'static lifetime here.
-        let static_parser = unsafe {
+        let static_linkee_parser = unsafe {
             mem::transmute::<&ElfParser, &'static ElfParser>(
                 linkee_parser.as_ref().unwrap_or(&parser).deref(),
             )
         };
-        let mut load_section = |section| reader::load_section(static_parser, section);
+        let mut load_section = |section| reader::load_section(static_linkee_parser, section);
         let mut dwarf = Dwarf::load(&mut load_section)?;
         // Cache abbreviations (which will cause them to be
         // automatically reused across compilation units), which can
@@ -192,7 +214,20 @@ impl DwarfResolver {
         // much effort the linker spent on optimizing it.
         let () = dwarf.populate_abbreviations_cache(AbbreviationsCacheStrategy::Duplicates);
 
-        let units = Units::parse(dwarf)?;
+        let dwp = dwp_parser.as_deref().map(|dwp_parser| {
+            let empty = &[];
+            // SAFETY: We own the `ElfParser` and make sure that it stays
+            //         around while the `Units` object uses it. As such, it
+            //         is fine to conjure a 'static lifetime here.
+            let static_dwp_parser =
+                unsafe { mem::transmute::<&ElfParser, &'static ElfParser>(dwp_parser) };
+            let mut load_dwo_section =
+                |section| reader::load_dwo_section(static_dwp_parser, section);
+            let dwp = gimli::DwarfPackage::load(load_dwo_section, empty)?;
+            Ok(dwp)
+        })?;
+
+        let units = Units::parse(dwarf, dwp)?;
         let slf = Self {
             units,
             parser,

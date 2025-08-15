@@ -37,3 +37,7 @@ fn load_section_impl<'elf>(parser: &'elf ElfParser, name: Option<&str>) -> Resul
 pub(super) fn load_section(parser: &ElfParser, id: SectionId) -> Result<R<'_>> {
     load_section_impl(parser, Some(id.name()))
 }
+
+pub(super) fn load_dwo_section(parser: &ElfParser, id: SectionId) -> Result<R<'_>> {
+    load_section_impl(parser, id.dwo_name())
+}
