@@ -57,6 +57,8 @@ fn format_offset(offset: gimli::UnitSectionOffset<usize>) -> String {
 pub(crate) struct Units<'dwarf> {
     /// The DWARF data.
     dwarf: gimli::Dwarf<R<'dwarf>>,
+    /// XXX
+    package: Option<gimli::DwarfPackage<R<'dwarf>>>,
     /// The ranges of the units encountered.
     unit_ranges: Box<[UnitRange]>,
     /// All units along with meta-data.
@@ -64,7 +66,10 @@ pub(crate) struct Units<'dwarf> {
 }
 
 impl<'dwarf> Units<'dwarf> {
-    pub(crate) fn parse(sections: gimli::Dwarf<R<'dwarf>>) -> Result<Self> {
+    pub(crate) fn parse(
+        sections: gimli::Dwarf<R<'dwarf>>,
+        package: Option<gimli::DwarfPackage<R<'dwarf>>>,
+    ) -> Result<Self> {
         // Find all the references to compilation units in .debug_aranges.
         // Note that we always also iterate through all of .debug_info to
         // find compilation units, because .debug_aranges may be missing some.
@@ -228,6 +233,7 @@ impl<'dwarf> Units<'dwarf> {
 
         let slf = Self {
             dwarf: sections,
+            package,
             unit_ranges: unit_ranges.into_boxed_slice(),
             units: res_units.into_boxed_slice(),
         };
@@ -517,7 +523,7 @@ mod tests {
             let parser = ElfParser::open(bin_name.as_path()).unwrap();
             let mut load_section = |section| reader::load_section(&parser, section);
             let dwarf = Dwarf::<R>::load(&mut load_section).unwrap();
-            let units = Units::parse(dwarf).unwrap();
+            let units = Units::parse(dwarf, None).unwrap();
 
             // Double check that we actually did what we set out to do
             // by checking that we can find a function that we know
@@ -558,7 +564,7 @@ mod tests {
             let parser = ElfParser::open(bin_name.as_path()).unwrap();
             let mut load_section = |section| reader::load_section(&parser, section);
             let dwarf = Dwarf::<R>::load(&mut load_section).unwrap();
-            let units = Units::parse(dwarf).unwrap();
+            let units = Units::parse(dwarf, None).unwrap();
 
             // Bogus address typically somewhere in kernel space but
             // unlikely to be in any of our binaries.
@@ -582,7 +588,7 @@ mod tests {
 
         let () = b.iter(|| {
             let dwarf = Dwarf::<R>::load(&mut load_section).unwrap();
-            let units = Units::parse(black_box(dwarf)).unwrap();
+            let units = Units::parse(black_box(dwarf), black_box(None)).unwrap();
             let _funcs = black_box(units.parse_functions().unwrap());
         });
     }
@@ -613,7 +619,7 @@ mod tests {
 
         let () = b.iter(|| {
             let dwarf = Dwarf::<R>::load(&mut load_section).unwrap();
-            let units = Units::parse(black_box(dwarf)).unwrap();
+            let units = Units::parse(black_box(dwarf), black_box(None)).unwrap();
             let _lines = black_box(units.parse_inlined_functions().unwrap());
         });
     }
@@ -644,7 +650,7 @@ mod tests {
 
         let () = b.iter(|| {
             let dwarf = Dwarf::<R>::load(&mut load_section).unwrap();
-            let units = Units::parse(black_box(dwarf)).unwrap();
+            let units = Units::parse(black_box(dwarf), black_box(None)).unwrap();
             let _lines = black_box(units.parse_lines().unwrap());
         });
     }
