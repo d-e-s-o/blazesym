@@ -432,8 +432,8 @@ impl<'dwarf> Units<'dwarf> {
     pub(crate) fn unit_ref<'unit>(
         &'unit self,
         unit: &'unit gimli::Unit<R<'dwarf>>,
-    ) -> gimli::UnitRef<'unit, R<'dwarf>> {
-        gimli::UnitRef::new(&self.dwarf, unit)
+    ) -> gimli::Result<gimli::UnitRef<'unit, R<'dwarf>>> {
+        Ok(gimli::UnitRef::new(&self.dwarf, unit))
     }
 
     /// Initialize all function data structures. This is used for benchmarks.
@@ -462,7 +462,7 @@ impl<'dwarf> Units<'dwarf> {
     #[cfg(feature = "nightly")]
     fn parse_lines(&self) -> gimli::Result<()> {
         for unit in self.units.iter() {
-            let unit_ref = self.unit_ref(unit.dw_unit());
+            let unit_ref = self.unit_ref(unit.dw_unit())?;
             let _lines = unit.parse_lines(unit_ref)?;
         }
         Ok(())

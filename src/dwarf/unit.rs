@@ -75,7 +75,7 @@ impl<'dwarf> Unit<'dwarf> {
         &'unit self,
         units: &Units<'dwarf>,
     ) -> gimli::Result<&'unit Functions<'dwarf>> {
-        let unit = units.unit_ref(&self.dw_unit);
+        let unit = units.unit_ref(&self.dw_unit)?;
         let functions = self.parse_functions_dwarf_and_unit(unit, units)?;
         Ok(functions)
     }
@@ -88,7 +88,7 @@ impl<'dwarf> Unit<'dwarf> {
     ) -> gimli::Result<&'unit Functions<'dwarf>> {
         self.funcs
             .get_or_init(|| {
-                let unit = units.unit_ref(&self.dw_unit);
+                let unit = units.unit_ref(&self.dw_unit)?;
                 let funcs = Functions::parse(unit, units)?;
                 let () = funcs.parse_inlined_functions(unit, units)?;
                 Ok(funcs)
@@ -146,7 +146,7 @@ impl<'dwarf> Unit<'dwarf> {
         probe: u64,
         units: &Units<'dwarf>,
     ) -> gimli::Result<Option<&Function<'dwarf>>> {
-        let unit = units.unit_ref(&self.dw_unit);
+        let unit = units.unit_ref(&self.dw_unit)?;
         let functions = self.parse_functions_dwarf_and_unit(unit, units)?;
         let function = match functions.find_address(probe) {
             Some(address) => {
@@ -164,7 +164,7 @@ impl<'dwarf> Unit<'dwarf> {
         name: &str,
         units: &Units<'dwarf>,
     ) -> gimli::Result<Option<&'slf Function<'dwarf>>> {
-        let unit = units.unit_ref(&self.dw_unit);
+        let unit = units.unit_ref(&self.dw_unit)?;
         let functions = self.parse_functions_dwarf_and_unit(unit, units)?;
         for func in functions.functions.iter() {
             let name = Some(name.as_bytes());

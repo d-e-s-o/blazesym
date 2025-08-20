@@ -64,7 +64,7 @@ impl<'unit, 'dwarf> LocationRangeUnitIter<'unit, 'dwarf> {
         probe_low: u64,
         probe_high: u64,
     ) -> gimli::Result<Option<Self>> {
-        let unit_ref = units.unit_ref(unit.dw_unit());
+        let unit_ref = units.unit_ref(unit.dw_unit())?;
         let lines = unit.parse_lines(unit_ref)?;
 
         if let Some(lines) = lines {
