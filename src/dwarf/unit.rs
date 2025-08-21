@@ -98,6 +98,7 @@ impl<'dwarf> Unit<'dwarf> {
             Some(dwo_header) => dwo_header,
             None => return Ok(None),
         };
+        crate::log::debug!("DWO header `{:?}`", dwo_header);
 
         let mut dwo_unit = dwo_dwarf.unit(dwo_header)?;
         let () = dwo_unit.copy_relocated_attributes(&self.dw_unit);
