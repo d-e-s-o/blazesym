@@ -161,7 +161,7 @@ impl<'dwarf> Units<'dwarf> {
                                 unit_ranges.push(UnitRange {
                                     range: arange.range(),
                                     unit_id,
-                                    max_end: 0,
+                                    min_begin: 0,
                                 });
                                 need_unit_range = false;
                             }
@@ -172,7 +172,7 @@ impl<'dwarf> Units<'dwarf> {
                         unit_ranges.push(UnitRange {
                             range,
                             unit_id,
-                            max_end: 0,
+                            min_begin: 0,
                         });
                     })?;
                 }
@@ -194,7 +194,7 @@ impl<'dwarf> Units<'dwarf> {
                                     end: sequence.end,
                                 },
                                 unit_id,
-                                max_end: 0,
+                                min_begin: 0,
                             })
                         }
                     }
@@ -205,14 +205,14 @@ impl<'dwarf> Units<'dwarf> {
         }
 
         // Sort this for faster lookups.
-        unit_ranges.sort_by_key(|i| i.range.begin);
+        unit_ranges.sort_by_key(|i| i.range.end);
 
-        // Calculate the `max_end` field now that we've determined the order of
+        // Calculate the `min_begin` field now that we've determined the order of
         // CUs.
-        let mut max = 0;
-        for i in unit_ranges.iter_mut() {
-            max = max.max(i.range.end);
-            i.max_end = max;
+        let mut min = !0;
+        for i in unit_ranges.iter_mut().rev() {
+            min = min.min(i.range.begin);
+            i.min_begin = min;
         }
 
         let slf = Self {
@@ -273,30 +273,29 @@ impl<'dwarf> Units<'dwarf> {
         probe_low: u64,
         probe_high: u64,
     ) -> impl Iterator<Item = (&Unit<'dwarf>, &gimli::Range)> {
-        // Find the position of a range which begins at `probe_high` or higher.
+        // Find the position of the next range after a range which
+        // ends at `probe_low` or lower.
         let pos = match self
             .unit_ranges
-            .binary_search_by_key(&probe_high, |i| i.range.begin)
+            .binary_search_by_key(&probe_low, |i| i.range.end)
         {
-            Ok(i) => i,  // Range `i` begins at exactly `probe_high`.
-            Err(i) => i, // Range `i` begins at a higher address.
+            Ok(i) => i + 1, // Range `i` ends at exactly `probe_low`.
+            Err(i) => i,    // Range `i - 1` ends at a lower address.
         };
 
-        // Iterate backwards from that position to find matching CUs.
+        // Iterate from that position to find matching CUs.
         self.unit_ranges[..pos]
             .iter()
-            .rev()
             .take_while(move |i| {
-                // We know that this CU's start is no more than `probe_high` because
+                // We know that this CU's end is at least `probe_low` because
                 // of our sorted array.
-                debug_assert!(i.range.begin <= probe_high);
+                debug_assert!(i.range.end >= probe_low);
 
-                // Each entry keeps track of the maximum end address seen so far,
-                // starting from the beginning of the array of unit ranges. We're
-                // iterating in reverse so if our probe is beyond the maximum range
-                // of this entry, then it's guaranteed to not fit in any prior
-                // entries, so we break out.
-                probe_low < i.max_end
+                // Each entry keeps track of the minimum begin address for the
+                // remainder of the array of unit ranges. If our probe is before
+                // the minimum range begin of this entry, then it's guaranteed
+                // to not fit in any subsequent entries, so we break out.
+                probe_high > i.min_begin
             })
             .filter_map(move |i| {
                 // If this CU doesn't actually contain this address, move to the

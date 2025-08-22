@@ -37,7 +37,7 @@ use super::units::Units;
 
 pub(super) struct UnitRange {
     pub unit_id: usize,
-    pub max_end: u64,
+    pub min_begin: u64,
     pub range: gimli::Range,
 }
 
