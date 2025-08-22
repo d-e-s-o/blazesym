@@ -289,7 +289,7 @@ impl<'dwarf> Units<'dwarf> {
             .take_while(move |i| {
                 // We know that this CU's end is at least `probe_low` because
                 // of our sorted array.
-                debug_assert!(i.range.end >= probe_low);
+                debug_assert!(i.range.end >= probe_low, "{} | {probe_low}", i.range.end);
 
                 // Each entry keeps track of the minimum begin address for the
                 // remainder of the array of unit ranges. If our probe is before
