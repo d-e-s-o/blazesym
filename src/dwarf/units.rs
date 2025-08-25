@@ -238,6 +238,7 @@ impl<'dwarf> Units<'dwarf> {
         //       for now we only support DWOs bundled in a DWP.
         if let Some(dwp) = self.package.as_ref() {
             if let Some(cu) = dwp.find_cu(dwo_id, &self.dwarf)? {
+                crate::log::debug!("Loaded DWO `{dwo_id:?}`");
                 return Ok(Some(cu))
             }
         }
@@ -335,6 +336,10 @@ impl<'dwarf> Units<'dwarf> {
     ) -> gimli::Result<Option<(&Function<'dwarf>, &Unit<'dwarf>)>> {
         for unit in self.find_units(probe) {
             if let Some(function) = unit.find_function(probe, self)? {
+                crate::log::debug!(
+                    "Found function `{function:?}` in unit `{:?}`",
+                    unit.dw_unit().header.offset()
+                );
                 return Ok(Some((function, unit)))
             }
         }
@@ -361,8 +366,9 @@ impl<'dwarf> Units<'dwarf> {
                 .transpose()?
                 .unwrap_or("");
 
+            dbg!(&inlined_fn);
             let code_info = if let Some(call_file) = inlined_fn.call_file {
-                if let Some(lines) = unit.parse_lines(unit_ref)? {
+                if let Some(lines) = unit.parse_lines(unit_ref).unwrap() {
                     if let Some((dir, file)) = lines.files.get(call_file as usize) {
                         let code_info = Location {
                             dir,
@@ -378,9 +384,13 @@ impl<'dwarf> Units<'dwarf> {
                         None
                     }
                 } else {
+                    // XXX: We didn't find any lines in the unit!
+                    //      => need to check different unit??
+                    dbg!();
                     None
                 }
             } else {
+                dbg!();
                 None
             };
             Ok((name, code_info))
@@ -393,6 +403,11 @@ impl<'dwarf> Units<'dwarf> {
     pub(crate) fn find_location(&self, probe: u64) -> gimli::Result<Option<Location<'_>>> {
         for unit in self.find_units(probe) {
             if let Some(location) = unit.find_location(probe, self)? {
+                crate::log::debug!(
+                    "Found location `{location:?}` in unit `{:?}` `{:?}`",
+                    unit.dw_unit().name,
+                    unit.dw_unit().header.offset()
+                );
                 return Ok(Some(location))
             }
         }

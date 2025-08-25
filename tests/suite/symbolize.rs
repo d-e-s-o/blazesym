@@ -893,6 +893,7 @@ fn symbolize_rust_dwp() {
     let addr = results[0].addr;
     let size = results[0].size.unwrap() as u64;
     for inst_addr in addr..addr + size {
+        println!("SYMBOLIZING: {inst_addr:#x}");
         if test(&test_dwarf, inst_addr).is_ok() {
             return
         }

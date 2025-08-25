@@ -191,6 +191,11 @@ impl<'dwarf> InlinedFunction<'dwarf> {
                         // [1]: http://wiki.dwarfstd.org/index.php?title=DWARF5_Line_Table_File_Numbers
                         if let gimli::AttributeValue::FileIndex(fi) = attr.value() {
                             if fi > 0 || state.unit.header.version() >= 5 {
+                                crate::log::debug!(
+                                    "Found inline fn file `{fi:?}` in unit `{:?}`, `{:?}`",
+                                    state.unit.name,
+                                    state.unit.header.offset()
+                                );
                                 call_file = Some(fi);
                             }
                         }

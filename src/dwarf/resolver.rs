@@ -305,6 +305,11 @@ impl Symbolize for DwarfResolver {
     fn find_sym(&self, addr: Addr, opts: &FindSymOpts) -> Result<Result<ResolvedSym<'_>, Reason>> {
         let data = self.units.find_function(addr)?;
         let mut sym = if let Some((function, unit)) = data {
+            crate::log::debug!(
+                "Found symbols `{function:?}` in unit `{:?}` `{:?}`",
+                unit.dw_unit().name,
+                unit.dw_unit().header.offset()
+            );
             let name = function
                 .name
                 .map(|name| name.to_string())
@@ -457,8 +462,10 @@ impl<'dwarf> Units<'dwarf> {
         let inlined = if opts.inlined_fns() {
             if let Some((function, unit)) = data {
                 if let Some(inline_stack) = self.find_inlined_functions(addr, function, unit)? {
+                    dbg!();
                     let mut inlined = Vec::<InlinedFn>::with_capacity(inline_stack.len());
                     for result in inline_stack {
+                        dbg!(&result);
                         let (name, location) = result?;
                         let mut code_info = location.map(|location| {
                             let Location {
@@ -494,8 +501,10 @@ impl<'dwarf> Units<'dwarf> {
                         };
                         let () = inlined.push(inlined_fn);
                     }
+                    dbg!(&inlined);
                     inlined
                 } else {
+                    dbg!();
                     Vec::new()
                 }
             } else {

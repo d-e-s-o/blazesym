@@ -73,6 +73,7 @@ impl<'dwarf> Unit<'dwarf> {
         lang: Option<gimli::DwLang>,
         lines: OnceCell<Lines<'dwarf>>,
     ) -> Self {
+        crate::log::debug!("NEW UNIT `{:?}`", unit.header.offset());
         Self {
             offset,
             dw_unit: unit,
@@ -171,8 +172,21 @@ impl<'dwarf> Unit<'dwarf> {
     ) -> gimli::Result<Option<&Lines<'dwarf>>> {
         let ilnp = match self.dw_unit.line_program {
             Some(ref ilnp) => ilnp,
-            None => return Ok(None),
+            None => {
+                crate::log::debug!(
+                    "NO LINES in unit `{:?}` `{:?}`",
+                    unit.name,
+                    unit.header.offset()
+                );
+                return Ok(None)
+            }
         };
+
+        crate::log::debug!(
+            "GETTING LINES for unit `{:?}` `{:?}`",
+            unit.name,
+            unit.header.offset()
+        );
         let lines = self
             .lines
             .get_or_init(|| Lines::parse(unit, ilnp.clone()))
