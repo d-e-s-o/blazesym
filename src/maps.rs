@@ -360,6 +360,13 @@ where
                     // There shouldn't be any empty lines, but we'd just ignore them. We
                     // need to trim anyway.
                     if !self.line.is_empty() {
+                        unsafe {
+                            core::arch::x86_64::_mm_prefetch(
+                                self.line.as_ptr().cast(),
+                                core::arch::x86_64::_MM_HINT_T0,
+                            )
+                        }
+
                         let result = parse_maps_line(&self.line, self.pid);
                         break Some(result)
                     }
