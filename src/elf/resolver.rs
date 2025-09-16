@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::fmt::Debug;
 use std::fmt::Formatter;
@@ -17,6 +18,7 @@ use crate::inspect::Inspect;
 use crate::inspect::SymInfo;
 use crate::pathlike::PathLike;
 use crate::symbolize::FindSymOpts;
+use crate::symbolize::Module;
 use crate::symbolize::Reason;
 use crate::symbolize::ResolvedSym;
 use crate::symbolize::Symbolize;
@@ -101,7 +103,7 @@ impl FileCache<ElfResolverData> {
             };
             Rc::clone(resolver)
         } else {
-            let module = path.represented_path().as_os_str().to_os_string();
+            let module = Module::Path(Cow::Owned(path.represented_path().to_path_buf()));
             let parser = Rc::new(ElfParser::from_file(file, module)?);
             let resolver = ElfResolver::from_parser(parser, debug_dirs)?;
             Rc::new(resolver)

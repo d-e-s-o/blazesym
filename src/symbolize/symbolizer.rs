@@ -189,7 +189,7 @@ pub(crate) fn symbolize_with_resolver<'slf>(
 
         let sym = Sym {
             name: maybe_demangle(Cow::Borrowed(name), lang, demangle),
-            module: module.map(Cow::Borrowed),
+            module,
             addr: sym_addr,
             offset: (addr - sym_addr) as usize,
             size,

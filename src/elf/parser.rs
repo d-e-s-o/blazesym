@@ -23,6 +23,7 @@ use crate::inspect::SymInfo;
 use crate::mmap::Mmap;
 use crate::pathlike::PathLike;
 use crate::symbolize::FindSymOpts;
+use crate::symbolize::Module;
 use crate::symbolize::Reason;
 use crate::symbolize::ResolvedSym;
 use crate::symbolize::SrcLang;
@@ -134,7 +135,7 @@ fn symbol_name<'elf>(strtab: &'elf [u8], sym: &Elf64_Sym) -> Result<&'elf str> {
 
 fn find_sym<'elf>(
     syms: &ElfN_Syms<'_>,
-    module: Option<&'elf OsStr>,
+    module: &Option<Module<'elf>>,
     by_addr_idx: &[usize],
     strtab: &'elf [u8],
     addr: Addr,
@@ -169,7 +170,7 @@ fn find_sym<'elf>(
                 {
                     let sym = ResolvedSym {
                         name: symbol_name(strtab, &sym)?,
-                        module,
+                        module: module.clone(),
                         addr: sym.st_value,
                         size: if sym.st_size == 0 {
                             None
@@ -977,9 +978,7 @@ where
     //         reference.
     cache: Cache<'static, B::ImplTy<'static>>,
     /// The "module" that this parser represents.
-    ///
-    /// This can be an actual path or a more or less symbolic name.
-    module: Option<OsString>,
+    module: Option<Module<'static>>,
     /// The backend used.
     _backend: B::ObjTy,
 }
@@ -987,7 +986,7 @@ where
 impl ElfParser<File> {
     /// Create an `ElfParser` that uses regular file I/O on the provided
     /// file.
-    fn from_file_io(file: File, module: OsString) -> Self {
+    fn from_file_io(file: File, module: Module<'static>) -> Self {
         let _backend = Box::new(file);
         let file_ref = unsafe { mem::transmute::<&File, &'static File>(_backend.deref()) };
 
@@ -1025,13 +1024,13 @@ impl ElfParser<File> {
 
 impl ElfParser<Mmap> {
     /// Create an `ElfParser` from an open file.
-    pub(crate) fn from_file(file: &File, module: OsString) -> Result<Self> {
+    pub(crate) fn from_file(file: &File, module: Module<'static>) -> Result<Self> {
         let mmap = Mmap::map(file).context("failed to memory map file")?;
         Ok(Self::from_mmap(mmap, Some(module)))
     }
 
     /// Create an `ElfParser` from mmap'ed data.
-    pub(crate) fn from_mmap(mmap: Mmap, module: Option<OsString>) -> Self {
+    pub(crate) fn from_mmap(mmap: Mmap, module: Option<Module<'static>>) -> Self {
         // We transmute the mmap's lifetime to static here as that is a
         // necessity for self-referentiality.
         // SAFETY: We never hand out any 'static references to cache
@@ -1052,13 +1051,13 @@ impl ElfParser<Mmap> {
     where
         P: ?Sized + PathLike,
     {
-        fn open_impl(path: &Path, module: OsString) -> Result<ElfParser> {
+        fn open_impl(path: &Path, module: Module<'static>) -> Result<ElfParser> {
             let file =
                 File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
             ElfParser::from_file(&file, module)
         }
 
-        let module = path.represented_path().as_os_str().to_os_string();
+        let module = Module::Path(Cow::Owned(path.represented_path().to_path_buf()));
         let path = path.actual_path();
         open_impl(path, module)
     }

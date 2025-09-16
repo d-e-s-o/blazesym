@@ -12,6 +12,7 @@ use crate::elf::StaticMem;
 use crate::file_cache::FileCache;
 use crate::insert_map::InsertMap;
 use crate::maps;
+use crate::symbolize::Module;
 use crate::util;
 #[cfg(feature = "tracing")]
 use crate::util::Hexify;
@@ -354,7 +355,8 @@ impl Normalizer {
             if self.cache_build_ids {
                 let (file, cell) = self.build_id_cache.entry(path)?;
                 cell.get_or_try_init_(|| {
-                    let parser = ElfParser::from_file(file, path.to_path_buf().into_os_string())?;
+                    let module = Module::Path(Cow::Owned(path.to_path_buf()));
+                    let parser = ElfParser::from_file(file, module)?;
                     let build_id =
                         read_build_id(&parser)?.map(|build_id| Cow::Owned(build_id.to_vec()));
                     Result::<_, Error>::Ok(build_id)

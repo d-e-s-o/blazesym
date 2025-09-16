@@ -101,6 +101,7 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
+use std::ops::Deref;
 use std::path::Path;
 use std::str;
 
@@ -232,6 +233,49 @@ where
 }
 
 
+/// An enum representing the "module" that a symbol originates from.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Module<'src> {
+    /// The module's name.
+    ///
+    /// This variant may be present if the full path is not available
+    /// for one reason or another. This could be a string such as
+    /// `cfg80211` to represent a loaded kernel module, for example.
+    Name(Cow<'src, OsStr>),
+    /// The path to the module containing the symbol.
+    ///
+    /// Typically this would be the path to a executable or shared
+    /// object. In case of an ELF file contained inside an APK, this
+    /// will be an Android style path of the form `<apk>!<elf-in-apk>`.
+    /// E.g., `/root/test.apk!/lib/libc.so`.
+    Path(Cow<'src, Path>),
+}
+
+impl Module<'_> {
+    /// Convert this object into one with all references converted into
+    /// guaranteed owned (i.e., heap allocated) members.
+    #[inline]
+    pub fn into_owned(self) -> Module<'static> {
+        match self {
+            Self::Name(name) => Module::Name(Cow::Owned(name.into_owned())),
+            Self::Path(path) => Module::Path(Cow::Owned(path.into_owned())),
+        }
+    }
+}
+
+impl Deref for Module<'_> {
+    type Target = OsStr;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Name(name) => &name,
+            Self::Path(path) => path.as_os_str(),
+        }
+    }
+}
+
+
 /// Source code location information for a symbol or inlined function.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CodeInfo<'src> {
@@ -341,7 +385,7 @@ pub struct ResolvedSym<'src> {
     /// The name of the symbol.
     pub name: &'src str,
     /// The path to or name of the module containing the symbol.
-    pub module: Option<&'src OsStr>,
+    pub module: Option<Module<'src>>,
     /// The symbol's normalized address.
     pub addr: Addr,
     /// The symbol's size, if available.
@@ -364,14 +408,7 @@ pub struct Sym<'src> {
     /// The symbol name that an address belongs to.
     pub name: Cow<'src, str>,
     /// The path to or name of the module containing the symbol.
-    ///
-    /// Typically this would be the path to a executable or shared
-    /// object. Depending on the symbol source this member may not be
-    /// present or it could also just be a file name without path. In
-    /// case of an ELF file contained inside an APK, this will be an
-    /// Android style path of the form `<apk>!<elf-in-apk>`. E.g.,
-    /// `/root/test.apk!/lib/libc.so`.
-    pub module: Option<Cow<'src, OsStr>>,
+    pub module: Option<Module<'src>>,
     /// The address at which the symbol is located (i.e., its "start").
     ///
     /// This is the "normalized" address of the symbol, as present in
@@ -426,7 +463,7 @@ impl Sym<'_> {
 
         Sym {
             name: Cow::Owned(name.into_owned()),
-            module: module.map(|module| Cow::Owned(module.into_owned())),
+            module: module.map(Module::into_owned),
             addr,
             offset,
             size,

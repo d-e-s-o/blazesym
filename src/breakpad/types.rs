@@ -24,8 +24,8 @@
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::ffi::OsString;
 
+use crate::symbolize::Module;
 use crate::util::find_lowest_match_by_key;
 use crate::util::find_match_or_lower_bound_by_key;
 use crate::util::Either;
@@ -185,7 +185,7 @@ impl Function {
 #[derive(Debug)]
 pub(crate) struct SymbolFile {
     /// The module represented by this symbol file.
-    pub module: Option<OsString>,
+    pub module: Option<Module<'static>>,
     /// The set of source files involved in compilation.
     pub files: HashMap<u32, String>,
     /// Functions, sorted by start address.
