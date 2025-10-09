@@ -350,6 +350,8 @@ impl From<blaze_symbolize_src_process> for Process {
         } = process;
         Self {
             pid: pid.into(),
+            // TODO: Hook up `permissive` attribute.
+            permissive: false,
             debug_syms,
             perf_map,
             map_files: !no_map_files,

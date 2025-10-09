@@ -519,6 +519,8 @@ struct SymbolizeHandler<'sym> {
     symbolizer: &'sym Symbolizer,
     /// The PID of the process in which we symbolize.
     pid: Pid,
+    /// Whether or not to operate in permissive mode.
+    permissive: bool,
     /// Whether or not to consult debug symbols to satisfy the request
     /// (if present).
     debug_syms: bool,
@@ -616,16 +618,8 @@ impl SymbolizeHandler<'_> {
         }
         Ok(())
     }
-}
 
-impl normalize::Handler<Reason> for SymbolizeHandler<'_> {
-    #[cfg_attr(feature = "tracing", crate::log::instrument(skip_all, fields(addr = format_args!("{_addr:#x}"), ?reason)))]
-    fn handle_unknown_addr(&mut self, _addr: Addr, reason: Reason) {
-        let () = self.all_symbols.push(Symbolized::Unknown(reason));
-    }
-
-    #[cfg_attr(feature = "tracing", crate::log::instrument(skip_all, fields(addr = format_args!("{addr:#x}"), entry = ?DebugMapsEntry(entry))))]
-    fn handle_entry_addr(&mut self, addr: Addr, entry: &MapsEntry) -> Result<()> {
+    fn handle_entry_addr_impl(&mut self, addr: Addr, entry: &MapsEntry) -> Result<()> {
         let file_off = addr - entry.range.start + entry.offset;
 
         if let Some(path_name) = &entry.path_name {
@@ -685,6 +679,26 @@ impl normalize::Handler<Reason> for SymbolizeHandler<'_> {
                 let () = self.handle_unknown_addr(addr, Reason::UnknownAddr);
                 Ok(())
             }
+        }
+    }
+}
+
+impl normalize::Handler<Reason> for SymbolizeHandler<'_> {
+    #[cfg_attr(feature = "tracing", crate::log::instrument(skip_all, fields(addr = format_args!("{_addr:#x}"), ?reason)))]
+    fn handle_unknown_addr(&mut self, _addr: Addr, reason: Reason) {
+        let () = self.all_symbols.push(Symbolized::Unknown(reason));
+    }
+
+    #[cfg_attr(feature = "tracing", crate::log::instrument(skip_all, fields(addr = format_args!("{addr:#x}"), entry = ?DebugMapsEntry(entry))))]
+    fn handle_entry_addr(&mut self, addr: Addr, entry: &MapsEntry) -> Result<()> {
+        let result = self.handle_entry_addr_impl(addr, entry);
+        if self.permissive && result.is_err() {
+            let () = self
+                .all_symbols
+                .push(Symbolized::Unknown(Reason::PermittedError));
+            Ok(())
+        } else {
+            result
         }
     }
 }
@@ -1003,6 +1017,7 @@ impl Symbolizer {
         &self,
         addrs: &[Addr],
         pid: Pid,
+        permissive: bool,
         debug_syms: bool,
         perf_map: bool,
         map_files: bool,
@@ -1010,6 +1025,7 @@ impl Symbolizer {
     ) -> Result<Vec<Symbolized<'_>>> {
         let mut handler = SymbolizeHandler {
             symbolizer: self,
+            permissive,
             pid,
             debug_syms,
             perf_map,
@@ -1362,6 +1378,7 @@ impl Symbolizer {
             }
             Source::Process(Process {
                 pid,
+                permissive,
                 debug_syms,
                 perf_map,
                 map_files,
@@ -1385,6 +1402,7 @@ impl Symbolizer {
                 let symbols = self.symbolize_user_addrs(
                     addrs.as_ref(),
                     *pid,
+                    *permissive,
                     *debug_syms,
                     *perf_map,
                     *map_files,
@@ -1727,6 +1745,7 @@ mod tests {
         let mut handler = SymbolizeHandler {
             symbolizer: &symbolizer,
             pid: Pid::Slf,
+            permissive: false,
             debug_syms: false,
             perf_map: false,
             map_files: false,

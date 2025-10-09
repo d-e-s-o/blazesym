@@ -10,6 +10,8 @@ use crate::MaybeDefault;
 use crate::Pid;
 
 #[cfg(doc)]
+use super::Symbolized;
+#[cfg(doc)]
 use super::Symbolizer;
 
 
@@ -262,6 +264,18 @@ impl From<Kernel> for Source<'static> {
 pub struct Process {
     /// The referenced process' ID.
     pub pid: Pid,
+    /// Whether or not to operate in permissive mode.
+    ///
+    /// In permissive mode batch address symbolization does not
+    /// short-circuit on error but keeps going. Failure to symbolize an
+    /// individual addresses will be communicated via the
+    /// [`Unknown`][Symbolized::Unknown] variant of the corresponding
+    /// [`Symbolized`] object.
+    ///
+    /// Note that this does not make symbolization infallible: failure
+    /// of an operation affecting all addresses (such as opening
+    /// `/proc/<pid>/maps`) will still be reported as regular error.
+    pub permissive: bool,
     /// Whether or not to consult debug symbols to satisfy the request
     /// (if present).
     ///
@@ -304,6 +318,7 @@ impl Process {
     pub fn new(pid: Pid) -> Self {
         Self {
             pid,
+            permissive: false,
             debug_syms: true,
             perf_map: true,
             map_files: true,
@@ -317,6 +332,7 @@ impl Debug for Process {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         let Self {
             pid,
+            permissive: _,
             debug_syms: _,
             perf_map: _,
             map_files: _,
