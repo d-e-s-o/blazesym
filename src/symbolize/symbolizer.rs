@@ -1248,9 +1248,18 @@ impl Symbolizer {
             }
             Source::Elf(Elf {
                 path,
+                permissive,
                 debug_syms,
                 _non_exhaustive: (),
             }) => {
+                let maybe_permit_error = |err| {
+                    if *permissive {
+                        Ok(Symbolized::Unknown(Reason::PermittedError))
+                    } else {
+                        Err(err)
+                    }
+                };
+
                 let resolver = self
                     .elf_cache
                     .elf_resolver(path, self.maybe_debug_dirs(*debug_syms))?;
@@ -1266,6 +1275,7 @@ impl Symbolizer {
                                     &Resolver::Cached(resolver.deref()),
                                 )
                             })
+                            .map(|result| result.or_else(maybe_permit_error))
                             .collect();
                         Ok(symbols)
                     }
@@ -1286,6 +1296,7 @@ impl Symbolizer {
                                     None => Ok(Symbolized::Unknown(Reason::InvalidFileOffset)),
                                 },
                             )
+                            .map(|result| result.or_else(maybe_permit_error))
                             .collect();
                         Ok(symbols)
                     }

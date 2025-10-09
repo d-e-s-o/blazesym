@@ -119,6 +119,18 @@ impl Debug for Breakpad {
 pub struct Elf {
     /// The path to an ELF file.
     pub path: PathBuf,
+    /// Whether or not to operate in permissive mode.
+    ///
+    /// In permissive mode batch address symbolization does not
+    /// short-circuit on error but keeps going. Failure to symbolize an
+    /// individual addresses will be communicated via the
+    /// [`Unknown`][Symbolized::Unknown] variant of the corresponding
+    /// [`Symbolized`] object.
+    ///
+    /// Note that this does not make symbolization infallible: failure
+    /// of an operation affecting all addresses (such as opening the ELF
+    /// file) will still be reported as regular error.
+    pub permissive: bool,
     /// Whether or not to consult debug symbols to satisfy the request
     /// (if present).
     ///
@@ -143,11 +155,13 @@ pub struct Elf {
 impl Elf {
     /// Create a new [`Elf`] object, referencing the provided path.
     ///
-    /// `debug_syms` defaults to `true` when using this constructor.
+    /// `permissive` defaults to `false` and `debug_syms` defaults to `true`
+    /// when using this constructor.
     #[inline]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
+            permissive: false,
             debug_syms: true,
             _non_exhaustive: (),
         }
@@ -165,6 +179,7 @@ impl Debug for Elf {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         let Self {
             path,
+            permissive: _,
             debug_syms: _,
             _non_exhaustive: (),
         } = self;

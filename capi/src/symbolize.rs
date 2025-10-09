@@ -189,6 +189,8 @@ impl From<blaze_symbolize_src_elf> for Elf {
         } = elf;
         Self {
             path: unsafe { from_cstr(path) },
+            // TODO: Hook up `permissive` attribute.
+            permissive: false,
             debug_syms,
             _non_exhaustive: (),
         }
