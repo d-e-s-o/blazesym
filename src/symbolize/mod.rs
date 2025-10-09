@@ -470,6 +470,12 @@ pub enum Reason {
     Unsupported,
     /// The address could not be found in the symbolization source.
     UnknownAddr,
+    /// An error prevented the symbolization of the address from
+    /// succeeding.
+    ///
+    /// This variant may only used when symbolizing in
+    /// [permissive-mode](crate::symbolize::source::Process::permissive).
+    PermittedError,
 }
 
 impl Reason {
@@ -483,6 +489,7 @@ impl Reason {
             Self::MissingSyms => b"symbolization source has no or no relevant symbols\0",
             Self::Unsupported => b"address belongs to unsupported entity\0",
             Self::UnknownAddr => b"address not found in symbolization source\0",
+            Self::PermittedError => b"an error occurred but was ignored in permissive-mode\0",
         }
     }
 }
