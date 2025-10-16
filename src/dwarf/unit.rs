@@ -135,7 +135,7 @@ impl<'dwarf> Unit<'dwarf> {
 
         let result = self
             .dwo
-            .get_or_init(|| self.process_dwo(units.load_dwo(dwo_id)?));
+            .get_or_init(|| self.process_dwo(units.load_dwo(dbg!(dwo_id))?));
         map_dwo_result(result)
     }
 

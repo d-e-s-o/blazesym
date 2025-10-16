@@ -248,6 +248,7 @@ impl<'dwarf> Units<'dwarf> {
         //       for now we only support DWOs bundled in a DWP.
         if let Some(dwp) = self.package.as_ref() {
             if let Some(cu) = dwp.find_cu(dwo_id, &self.dwarf)? {
+                dbg!(&cu);
                 return Ok(Some(cu))
             }
         }

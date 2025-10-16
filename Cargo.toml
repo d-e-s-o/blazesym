@@ -205,3 +205,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [lints]
 workspace = true
+
+[patch.crates-io]
+gimli = { path = "local/gimli" }
