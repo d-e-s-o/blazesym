@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::cell::OnceCell;
+use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
@@ -48,7 +49,7 @@ enum Ksym {
 }
 
 impl Ksym {
-    fn new(name: &str, addr: Addr) -> Self {
+    fn new(name: &str, addr: Addr, mod_: Option<&str>) -> Self {
         #[cfg(feature = "bpf")]
         if let Some(bpf_prog) = BpfProg::parse(name, addr) {
             return Self::BpfProg(Box::new(bpf_prog))
@@ -57,6 +58,7 @@ impl Ksym {
         Self::Kfunc(Kfunc {
             addr,
             name: Box::from(name),
+            mod_: mod_.map(Box::from),
         })
     }
 
@@ -125,16 +127,16 @@ impl<'ksym> TryFrom<&'ksym Ksym> for SymInfo<'ksym> {
 struct Kfunc {
     addr: Addr,
     name: Box<str>,
+    mod_: Option<Box<str>>,
 }
 
 impl Kfunc {
     fn resolve(&self, _addr: Addr, _opts: &FindSymOpts) -> Result<ResolvedSym<'_>> {
-        let Kfunc { name, addr } = self;
+        let Kfunc { name, addr, mod_ } = self;
         let sym = ResolvedSym {
             name,
-            // TODO: Report kernel path somehow? Also, should include
-            //       kernel module information here.
-            module: None,
+            // TODO: Report kernel path somehow?
+            module: mod_.as_deref().map(OsStr::new),
             addr: *addr,
             // There is no size information in kallsyms.
             size: None,
@@ -154,14 +156,14 @@ impl<'kfunc> TryFrom<&'kfunc Kfunc> for SymInfo<'kfunc> {
     type Error = Error;
 
     fn try_from(other: &'kfunc Kfunc) -> Result<Self, Self::Error> {
-        let Kfunc { name, addr } = other;
+        let Kfunc { name, addr, mod_ } = other;
         let sym = SymInfo {
             name: Cow::Borrowed(name),
             addr: *addr,
             size: None,
             sym_type: SymType::Function,
             file_offset: None,
-            module: None,
+            module: mod_.as_deref().map(OsStr::new).map(Cow::Borrowed),
             _non_exhaustive: (),
         };
         Ok(sym)
@@ -212,13 +214,16 @@ impl KsymResolver {
                 let name = if let Some(token) = tokens.next() { token } else { continue };
                 (addr, name)
             };
+            let mod_ = tokens
+                .next()
+                .map(|s| s.trim_start_matches('[').trim_end_matches(']'));
 
             if let Ok(addr) = Addr::from_str_radix(addr, 16) {
                 if addr == 0 {
                     continue
                 }
 
-                let ksym = Ksym::new(name, addr);
+                let ksym = Ksym::new(name, addr, mod_);
                 let () = syms.push(ksym);
             }
         }
@@ -373,6 +378,7 @@ mod tests {
         let kfunc = Kfunc {
             addr: 0x1337,
             name: Box::from("3l33t"),
+            mod_: None,
         };
         assert_ne!(format!("{kfunc:?}"), "");
     }
@@ -387,16 +393,23 @@ ffffffffc003e9c8 t bpf_prog_30304e82b4033ea3_kprobe__cap_capable        [bpf]
 ffffffffc0279010 T fuse_dev_init        [fuse]
 ffffffffc02791d0 T fuse_ctl_init        [fuse]
 ffffffffc212d000 t ftrace_trampoline    [__builtin__ftrace]
+ffffffffc2a6a490 t acpi_init
 "#;
 
         let resolver =
             KsymResolver::load_from_reader(&mut kallsyms.as_slice(), Path::new("<dummy>")).unwrap();
-        assert_eq!(resolver.syms.len(), 5);
+        assert_eq!(resolver.syms.len(), 6);
 
         // Spot-check some of the parsed symbols for sanity.
         let ksym = resolver.syms[2].as_kfunc().unwrap();
         assert_eq!(&*ksym.name, "fuse_dev_init");
         assert_eq!(ksym.addr, 0xffffffffc0279010);
+        assert_eq!(ksym.mod_.as_deref(), Some("fuse"));
+
+        let ksym = resolver.syms[5].as_kfunc().unwrap();
+        assert_eq!(&*ksym.name, "acpi_init");
+        assert_eq!(ksym.addr, 0xffffffffc2a6a490);
+        assert_eq!(ksym.mod_.as_deref(), None);
 
         #[cfg(feature = "bpf")]
         {
@@ -483,18 +496,22 @@ ffffffffc212d000 t ftrace_trampoline    [__builtin__ftrace]
             Kfunc {
                 addr: 0x123,
                 name: Box::from("1"),
+                mod_: None,
             },
             Kfunc {
                 addr: 0x123,
                 name: Box::from("1.5"),
+                mod_: None,
             },
             Kfunc {
                 addr: 0x1234,
                 name: Box::from("2"),
+                mod_: None,
             },
             Kfunc {
                 addr: 0x12345,
                 name: Box::from("3"),
+                mod_: None,
             },
         ]);
 
@@ -540,18 +557,22 @@ ffffffffc212d000 t ftrace_trampoline    [__builtin__ftrace]
             Kfunc {
                 addr: 0x123,
                 name: Box::from("j"),
+                mod_: None,
             },
             Kfunc {
                 addr: 0x123,
                 name: Box::from("b"),
+                mod_: None,
             },
             Kfunc {
                 addr: 0x1234,
                 name: Box::from("a"),
+                mod_: None,
             },
             Kfunc {
                 addr: 0x12345,
                 name: Box::from("z"),
+                mod_: None,
             },
         ]);
 
@@ -577,18 +598,22 @@ ffffffffc212d000 t ftrace_trampoline    [__builtin__ftrace]
             Kfunc {
                 addr: 0x123,
                 name: Box::from("j"),
+                mod_: None,
             },
             Kfunc {
                 addr: 0x123,
                 name: Box::from("b"),
+                mod_: None,
             },
             Kfunc {
                 addr: 0x1234,
                 name: Box::from("a"),
+                mod_: None,
             },
             Kfunc {
                 addr: 0x12345,
                 name: Box::from("z"),
+                mod_: None,
             },
         ]);
 
