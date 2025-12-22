@@ -4,6 +4,7 @@ mod lines;
 mod location;
 mod range;
 mod reader;
+mod relocation;
 mod resolver;
 mod unit;
 mod units;
