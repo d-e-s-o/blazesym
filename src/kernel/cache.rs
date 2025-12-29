@@ -4,8 +4,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::elf::ElfCacheData;
 use crate::elf::ElfResolver;
-use crate::elf::ElfResolverData;
 use crate::file_cache::FileCache;
 use crate::pathlike::PathLike;
 use crate::util::OnceCellExt as _;
@@ -20,7 +20,7 @@ use super::ksym::KsymResolver;
 #[derive(Debug)]
 pub(crate) struct KernelCache {
     /// Cache of ELF files.
-    elf_cache: FileCache<ElfResolverData>,
+    elf_cache: FileCache<ElfCacheData>,
     /// `/proc/kallsyms` cache.
     ksym_cache: FileCache<Rc<KsymResolver>>,
     /// The system's KASLR offset.

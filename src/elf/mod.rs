@@ -17,6 +17,6 @@ pub(crate) static BUILD_ID_DEBUG_EXTENSION: &str = "debug";
 pub(crate) use parser::BackendImpl;
 pub(crate) use parser::ElfParser;
 pub(crate) use parser::StaticMem;
-pub(crate) use resolver::ElfResolverData;
+pub(crate) use resolver::ElfCacheData;
 
 pub use resolver::ElfResolver;

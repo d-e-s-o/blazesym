@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 #[cfg(feature = "breakpad")]
 use crate::breakpad::BreakpadResolver;
-use crate::elf::ElfResolverData;
+use crate::elf::ElfCacheData;
 use crate::elf::DEFAULT_DEBUG_DIRS;
 use crate::file_cache::FileCache;
 use crate::inspect::ForEachFn;
@@ -42,7 +42,7 @@ use super::SymType;
 pub struct Inspector {
     #[cfg(feature = "breakpad")]
     breakpad_cache: FileCache<Box<BreakpadResolver>>,
-    elf_cache: FileCache<ElfResolverData>,
+    elf_cache: FileCache<ElfCacheData>,
 }
 
 impl Inspector {
@@ -284,7 +284,8 @@ mod tests {
                 .1
                 .get()
                 .unwrap()
-                .clone()
+                .resolver()
+                .unwrap()
         };
 
         let _results = inspector.lookup(&Source::Elf(elf.clone()), &["factorial"]);

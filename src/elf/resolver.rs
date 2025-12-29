@@ -36,6 +36,25 @@ enum ElfBackend {
     Elf(Rc<ElfParser>), // ELF w/o DWARF
 }
 
+#[derive(Debug)]
+pub(crate) enum ElfCacheData {
+    Resolver(ElfResolverData),
+}
+
+impl ElfCacheData {
+    pub fn resolver(&self) -> Option<&ElfResolverData> {
+        match self {
+            Self::Resolver(data) => Some(data),
+        }
+    }
+}
+
+impl From<Rc<ElfResolver>> for ElfCacheData {
+    fn from(other: Rc<ElfResolver>) -> Self {
+        Self::Resolver(ElfResolverData::from(other))
+    }
+}
+
 
 /// Resolver data associated with a specific source.
 #[derive(Clone, Debug)]
@@ -62,7 +81,7 @@ impl From<Rc<ElfResolver>> for ElfResolverData {
     }
 }
 
-impl FileCache<ElfResolverData> {
+impl FileCache<ElfCacheData> {
     /// Create an `ElfResolver`.
     ///
     /// If `debug_dirs` is `Some` then debug information will be used
@@ -75,7 +94,7 @@ impl FileCache<ElfResolverData> {
         debug_dirs: Option<&[PathBuf]>,
     ) -> Result<&'slf Rc<ElfResolver>> {
         let (file, cell) = self.entry(path.actual_path())?;
-        let resolver = if let Some(data) = cell.get() {
+        let resolver = if let Some(data) = cell.get().and_then(|cache| cache.resolver()) {
             let resolver = if debug_dirs.is_some() {
                 data.dwarf.get_or_try_init_(|| {
                     // SANITY: We *know* a `ElfResolverData` object is
@@ -108,7 +127,7 @@ impl FileCache<ElfResolverData> {
         };
 
         let data = cell.get_or_init(|| {
-            if debug_dirs.is_some() {
+            let data = if debug_dirs.is_some() {
                 ElfResolverData {
                     dwarf: OnceCell::from(resolver),
                     elf: OnceCell::new(),
@@ -118,8 +137,11 @@ impl FileCache<ElfResolverData> {
                     dwarf: OnceCell::new(),
                     elf: OnceCell::from(resolver),
                 }
-            }
+            };
+            ElfCacheData::Resolver(data)
         });
+        // SANITY: We have set the `Resolver` variant above.
+        let data = data.resolver().unwrap();
 
         let resolver = if debug_dirs.is_some() {
             data.dwarf.get()
@@ -140,7 +162,7 @@ impl FileCache<ElfResolverData> {
         // set at all, to prevent any potential confusion with different
         // `ElfParser`s being shared between the DWARF and ELF
         // attributes of the type.
-        let () = cell.set(ElfResolverData::from(elf_resolver)).map_err(|_| {
+        let () = cell.set(ElfCacheData::from(elf_resolver)).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 format!(
@@ -181,7 +203,7 @@ impl ElfResolver {
     pub(crate) fn from_parser(
         parser: Rc<ElfParser>,
         debug_dirs: Option<&[PathBuf]>,
-        _elf_cache: Option<&FileCache<ElfResolverData>>,
+        _elf_cache: Option<&FileCache<ElfCacheData>>,
     ) -> Result<Self> {
         #[cfg(feature = "dwarf")]
         let backend = if let Some(debug_dirs) = debug_dirs {
