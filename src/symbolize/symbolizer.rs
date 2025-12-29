@@ -18,9 +18,9 @@ use std::rc::Rc;
 use crate::apk::create_apk_elf_path;
 #[cfg(feature = "breakpad")]
 use crate::breakpad::BreakpadResolver;
+use crate::elf::ElfCacheData;
 use crate::elf::ElfParser;
 use crate::elf::ElfResolver;
-use crate::elf::ElfResolverData;
 use crate::elf::StaticMem;
 #[cfg(feature = "dwarf")]
 use crate::elf::DEFAULT_DEBUG_DIRS;
@@ -745,7 +745,7 @@ pub struct Symbolizer {
     apk_cache: FileCache<(zip::Archive, InsertMap<Range<u64>, Box<dyn Resolve>>)>,
     #[cfg(feature = "breakpad")]
     breakpad_cache: FileCache<BreakpadResolver>,
-    elf_cache: FileCache<ElfResolverData>,
+    elf_cache: FileCache<ElfCacheData>,
     #[cfg(feature = "gsym")]
     gsym_cache: FileCache<GsymResolver<'static>>,
     perf_map_cache: FileCache<PerfMap>,

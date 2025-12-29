@@ -19,8 +19,8 @@ use gimli::Dwarf;
 
 use crate::dwarf::reader::Endianess;
 use crate::dwarf::reader::R;
+use crate::elf::ElfCacheData;
 use crate::elf::ElfParser;
-use crate::elf::ElfResolverData;
 #[cfg(test)]
 use crate::elf::DEFAULT_DEBUG_DIRS;
 use crate::error::IntoCowStr;
@@ -139,7 +139,7 @@ fn find_debug_file(file: &OsStr, linker: Option<&Path>, debug_dirs: &[PathBuf]) 
 fn try_deref_debug_link(
     parser: &ElfParser,
     debug_dirs: &[PathBuf],
-    elf_cache: Option<&FileCache<ElfResolverData>>,
+    elf_cache: Option<&FileCache<ElfCacheData>>,
 ) -> Result<Option<Rc<ElfParser>>> {
     if let Some((file, checksum)) = read_debug_link(parser)? {
         // TODO: Usage of the module here is fishy, as it may not
@@ -189,7 +189,7 @@ fn try_deref_debug_link(
 /// referenced by the given [`ElfParser`].
 fn try_find_dwp(
     parser: &ElfParser,
-    elf_cache: Option<&FileCache<ElfResolverData>>,
+    elf_cache: Option<&FileCache<ElfCacheData>>,
 ) -> Result<Option<Rc<ElfParser>>> {
     if let Some(path) = parser.module() {
         let mut dwp_path = path.to_os_string();
@@ -245,7 +245,7 @@ impl DwarfResolver {
     pub(crate) fn from_parser(
         parser: Rc<ElfParser>,
         debug_dirs: &[PathBuf],
-        elf_cache: Option<&FileCache<ElfResolverData>>,
+        elf_cache: Option<&FileCache<ElfCacheData>>,
     ) -> Result<Self> {
         let linkee_parser = try_deref_debug_link(&parser, debug_dirs, elf_cache)?;
         let dwp_parser = try_find_dwp(&parser, elf_cache)?;
