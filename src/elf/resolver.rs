@@ -29,7 +29,7 @@ use crate::Result;
 use super::ElfParser;
 
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum ElfBackend {
     #[cfg(feature = "dwarf")]
     Dwarf(Rc<DwarfResolver>), // ELF w/ DWARF
@@ -38,6 +38,9 @@ enum ElfBackend {
 
 #[derive(Debug)]
 pub(crate) enum ElfCacheData {
+    ///// A debug link target.
+    DebugLink(OnceCell<Rc<ElfParser>>),
+    /// The ELF resolver corresponding to a path.
     Resolver(ElfResolverData),
 }
 
@@ -45,6 +48,7 @@ impl ElfCacheData {
     pub fn resolver(&self) -> Option<&ElfResolverData> {
         match self {
             Self::Resolver(data) => Some(data),
+            _ => None,
         }
     }
 }
@@ -57,7 +61,7 @@ impl From<Rc<ElfResolver>> for ElfCacheData {
 
 
 /// Resolver data associated with a specific source.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct ElfResolverData {
     /// A bare-bones ELF resolver.
     pub elf: OnceCell<Rc<ElfResolver>>,
