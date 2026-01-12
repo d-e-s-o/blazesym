@@ -192,12 +192,13 @@ impl ElfResolver {
     {
         let path = path.as_ref();
         let parser = Rc::new(ElfParser::open(path)?);
+        // TODO: Need to look up potential debug link here!
         let debug_dirs = DEFAULT_DEBUG_DIRS
             .iter()
             .map(PathBuf::from)
             .collect::<Vec<_>>();
         let elf_cache = None;
-        Self::from_parser(parser, Some(&debug_dirs), elf_cache)
+        Self::from_parser(parser, None, elf_cache)
     }
 
     /// Create a new [`ElfResolver`] using `parser`.
@@ -206,12 +207,12 @@ impl ElfResolver {
     /// `None`, just look at ELF symbols.
     pub(crate) fn from_parser(
         parser: Rc<ElfParser>,
-        debug_dirs: Option<&[PathBuf]>,
+        linkee_parser: Option<Option<Rc<ElfParser>>>,
         _elf_cache: Option<&FileCache<ElfCacheData>>,
     ) -> Result<Self> {
         #[cfg(feature = "dwarf")]
-        let backend = if let Some(debug_dirs) = debug_dirs {
-            let dwarf = DwarfResolver::from_parser(parser, debug_dirs, _elf_cache)?;
+        let backend = if let Some(linkee_parser) = linkee_parser {
+            let dwarf = DwarfResolver::from_parser(parser, linkee_parser, _elf_cache)?;
             let backend = ElfBackend::Dwarf(Rc::new(dwarf));
             backend
         } else {

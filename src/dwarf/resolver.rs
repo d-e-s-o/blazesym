@@ -244,10 +244,10 @@ impl DwarfResolver {
 
     pub(crate) fn from_parser(
         parser: Rc<ElfParser>,
-        debug_dirs: &[PathBuf],
+        linkee_parser: Option<Rc<ElfParser>>,
         elf_cache: Option<&FileCache<ElfCacheData>>,
     ) -> Result<Self> {
-        let linkee_parser = try_deref_debug_link(&parser, debug_dirs, elf_cache)?;
+        //let linkee_parser = try_deref_debug_link(&parser, debug_dirs, elf_cache)?;
         let dwp_parser = try_find_dwp(&parser, elf_cache)?;
 
         // SAFETY: We own the `ElfParser` and make sure that it stays
