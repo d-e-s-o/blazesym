@@ -18,6 +18,7 @@ use std::rc::Rc;
 use crate::apk::create_apk_elf_path;
 #[cfg(feature = "breakpad")]
 use crate::breakpad::BreakpadResolver;
+use crate::dwarf::try_deref_debug_link;
 use crate::elf::ElfCacheData;
 use crate::elf::ElfParser;
 use crate::elf::ElfResolver;
@@ -275,7 +276,10 @@ fn default_apk_dispatcher(
     // TODO: Would be good to provide the `Symbolizer`'s ELF cache for
     //       use here.
     let elf_cache = None;
-    let resolver = ElfResolver::from_parser(parser, debug_dirs, elf_cache)?;
+    let linkee_parser = debug_dirs
+        .map(|debug_dirs| try_deref_debug_link(&parser, debug_dirs, elf_cache))
+        .transpose()?;
+    let resolver = ElfResolver::from_parser(parser, linkee_parser, elf_cache)?;
     let resolver = Box::new(resolver);
     Ok(resolver)
 }

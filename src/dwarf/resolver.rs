@@ -136,7 +136,7 @@ fn find_debug_file(file: &OsStr, linker: Option<&Path>, debug_dirs: &[PathBuf]) 
 }
 
 
-fn try_deref_debug_link(
+pub(crate) fn try_deref_debug_link(
     parser: &ElfParser,
     debug_dirs: &[PathBuf],
     elf_cache: Option<&FileCache<ElfCacheData>>,
@@ -187,7 +187,7 @@ fn try_deref_debug_link(
 
 /// Try to find a DWARF package (`.dwp`) "belonging" to the file
 /// referenced by the given [`ElfParser`].
-fn try_find_dwp(
+pub(crate) fn try_find_dwp(
     parser: &ElfParser,
     elf_cache: Option<&FileCache<ElfCacheData>>,
 ) -> Result<Option<Rc<ElfParser>>> {
@@ -244,10 +244,10 @@ impl DwarfResolver {
 
     pub(crate) fn from_parser(
         parser: Rc<ElfParser>,
-        debug_dirs: &[PathBuf],
+        linkee_parser: Option<Rc<ElfParser>>,
         elf_cache: Option<&FileCache<ElfCacheData>>,
     ) -> Result<Self> {
-        let linkee_parser = try_deref_debug_link(&parser, debug_dirs, elf_cache)?;
+        //let linkee_parser = try_deref_debug_link(&parser, debug_dirs, elf_cache)?;
         let dwp_parser = try_find_dwp(&parser, elf_cache)?;
 
         // SAFETY: We own the `ElfParser` and make sure that it stays
@@ -297,12 +297,14 @@ impl DwarfResolver {
     /// Open a file to load DWARF debug information.
     #[cfg(test)]
     fn open(path: &Path) -> Result<Self> {
+        let elf_cache = None;
         let parser = ElfParser::open(path)?;
         let debug_dirs = DEFAULT_DEBUG_DIRS
             .iter()
             .map(PathBuf::from)
             .collect::<Vec<_>>();
-        Self::from_parser(Rc::new(parser), debug_dirs.as_slice(), None)
+        let linkee_parser = try_deref_debug_link(&parser, debug_dirs.as_slice(), elf_cache)?;
+        Self::from_parser(Rc::new(parser), linkee_parser, elf_cache)
     }
 
     /// Try converting a `Function` into a `SymInfo`.
