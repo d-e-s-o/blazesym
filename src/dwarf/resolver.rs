@@ -136,7 +136,7 @@ fn find_debug_file(file: &OsStr, linker: Option<&Path>, debug_dirs: &[PathBuf]) 
 }
 
 
-fn try_deref_debug_link(
+pub(crate) fn try_deref_debug_link(
     parser: &ElfParser,
     debug_dirs: &[PathBuf],
     elf_cache: Option<&FileCache<ElfCacheData>>,
@@ -187,7 +187,7 @@ fn try_deref_debug_link(
 
 /// Try to find a DWARF package (`.dwp`) "belonging" to the file
 /// referenced by the given [`ElfParser`].
-fn try_find_dwp(
+pub(crate) fn try_find_dwp(
     parser: &ElfParser,
     elf_cache: Option<&FileCache<ElfCacheData>>,
 ) -> Result<Option<Rc<ElfParser>>> {
