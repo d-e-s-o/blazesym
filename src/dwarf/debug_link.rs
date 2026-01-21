@@ -210,8 +210,10 @@ fn parse_debug_link_section_data(mut data: &[u8]) -> Result<Option<(&OsStr, u32)
         .ok_or_invalid_data(|| "failed to read debug link file name")?;
     let file = bytes_to_os_str(file.to_bytes())?;
 
-    // TODO: Use `std::ptr::byte_offset_from` once our MSRV is 1.75.
-    let cur_offset = data.as_ptr() as usize - data_start.as_ptr() as usize;
+    let cur_offset = unsafe { data.as_ptr().byte_offset_from(data_start.as_ptr()) };
+    // SANITY: `data_start` is guaranteed to be before `data` and as a
+    //         result `cur_offset` will always be positive.
+    let cur_offset = usize::try_from(cur_offset).unwrap();
     // The offset is aligned to the next four byte boundary relative to
     // the start of the section.
     let align = 4;
