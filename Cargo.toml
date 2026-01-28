@@ -176,6 +176,7 @@ gimli = {version = "0.32", optional = true}
 libc = "0.2"
 memmap2 = {version = "0.9", default-features = false}
 miniz_oxide = {version = "0.9", default-features = false, features = ["simd", "with-alloc"], optional = true}
+hashbrown = "0.15"
 nom = {version = "7", optional = true}
 rustc-demangle = {version = "0.1", optional = true}
 tracing = {version = "0.1", default-features = false, features = ["attributes"], optional = true}
