@@ -1026,6 +1026,56 @@ fn symbolize_process_in_mount_namespace() {
         });
 }
 
+/// Check that symbolization fails when a debug link references a file
+/// that only exists in the target process's mount namespace.
+///
+/// This test is expected to fail because debug link lookup currently
+/// doesn't take mount namespaces into account - it looks for the debug
+/// file in the symbolizer's mount namespace rather than the target
+/// process's mount namespace.
+#[cfg(linux)]
+#[test]
+fn symbolize_process_debug_link_in_mount_namespace() {
+    let stripped_so = Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("libtest-so-stripped-with-link.so");
+    let debug_file = Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("libtest-so-dwarf-only.dbg");
+    let mnt_ns_child = Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("test-mnt-ns-child-dbg-link.bin");
+    let mnt_ns = Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("test-mnt-ns.bin");
+
+    let () = RemoteProcess::default()
+        .arg(&mnt_ns_child)
+        .arg(&stripped_so)
+        .arg(&debug_file)
+        .exec(&mnt_ns, |pid, addr| {
+            let src = Source::Process(Process::new(pid));
+            let symbolizer = Symbolizer::new();
+            let result = symbolizer
+                .symbolize_single(&src, Input::AbsAddr(addr))
+                .unwrap()
+                .into_sym();
+            // The address is of a static function (private_function) which
+            // is stripped from .dynsym. It can only be symbolized via DWARF
+            // debug info. The debug file only exists in the target process's
+            // mount namespace, but the symbolizer looks for it in its own
+            // mount namespace, so symbolization should fail.
+            //
+            // Once mount namespace support is added for debug link lookup,
+            // this assertion should be changed to expect successful
+            // symbolization with result.name == "private_function".
+            assert_eq!(
+                result, None,
+                "expected symbolization to fail because debug file is in different mount namespace"
+            );
+        });
+}
+
 /// Check that we can symbolize addresses from a process that has
 /// already exited, based on VMA data cached earlier.
 #[cfg(linux)]
