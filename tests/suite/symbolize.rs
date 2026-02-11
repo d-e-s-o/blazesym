@@ -1717,11 +1717,11 @@ fn symbolize_kernel_vmlinux() {
 #[test]
 #[ignore = "test requires discoverable vmlinux file present"]
 fn symbolize_kernel_system_vmlinux() {
-    fn find_kernel_syms() -> Vec<(Addr, String)> {
+    fn find_kernel_syms() -> Vec<(Addr, String, Option<String>)> {
         let mut file = File::open("/proc/kallsyms").unwrap();
         let mut content = String::new();
         let _cnt = file.read_to_string(&mut content).unwrap();
-        let mut pairs = content
+        let mut triples = content
             .lines()
             .filter_map(|line| {
                 let fields = line.split_ascii_whitespace().collect::<Vec<_>>();
@@ -1733,45 +1733,42 @@ fn symbolize_kernel_system_vmlinux() {
                 if !["D", "T", "t", "W"].contains(&ty) {
                     return None
                 }
-                // TODO: Eventually we need to support modules.
-                if module.is_some() {
-                    return None
-                }
                 let addr = Addr::from_str_radix(addr, 16).unwrap();
-                Some((addr, name))
+                Some((addr, name, module))
             })
             .collect::<Vec<_>>();
-        let () = pairs.sort_by_key(|(addr, _name)| *addr);
+        let () = triples.sort_by_key(|(addr, _name, _module)| *addr);
 
         let mut rng = rand::rng();
-        let pairs = (0..20)
+        let triples = (0..20)
             .filter_map(|_| {
-                let idx = rng.random_range(0..pairs.len());
-                let addr = pairs[idx].0;
+                let idx = rng.random_range(0..triples.len());
+                let addr = triples[idx].0;
                 // Make sure that this address is unique by checking that the
                 // previous and following ones are different. We ignore
                 // duplicate addresses (aliases symbols), because
                 // symbolization results won't be unambiguous.
                 if let Some(idx) = idx.checked_sub(1) {
-                    if let Some((addr_, _name)) = pairs.get(idx) {
+                    if let Some((addr_, _name, _module)) = triples.get(idx) {
                         if *addr_ == addr {
                             return None
                         }
                     }
                 }
                 if let Some(idx) = idx.checked_add(1) {
-                    if let Some((addr_, _name)) = pairs.get(idx) {
+                    if let Some((addr_, _name, _module)) = triples.get(idx) {
                         if *addr_ == addr {
                             return None
                         }
                     }
                 }
-                let name = pairs[idx].1;
-                Some((addr, name.to_string()))
+                let name = triples[idx].1;
+                let module = triples[idx].2;
+                Some((addr, name.to_string(), module.map(str::to_string)))
             })
             .collect::<Vec<_>>();
 
-        pairs
+        triples
     }
 
     let syms = find_kernel_syms();
@@ -1786,7 +1783,7 @@ fn symbolize_kernel_system_vmlinux() {
             &src,
             Input::AbsAddr(
                 syms.iter()
-                    .map(|(addr, _name)| *addr)
+                    .map(|(addr, _name, _module)| *addr)
                     .collect::<Vec<_>>()
                     .as_slice(),
             ),
@@ -1809,6 +1806,7 @@ fn symbolize_kernel_system_vmlinux() {
             "{sym:?} | {:?}",
             syms[i]
         );
+        assert_eq!(sym.module.as_deref(), syms[i].2.as_deref().map(OsStr::new));
     }
 }
 
