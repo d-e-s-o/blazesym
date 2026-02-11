@@ -20,7 +20,7 @@ env:
 
 jobs:
   build-linux-kernel:
-    uses: libbpf/github-actions/.github/workflows/build-linux.yml@bd7fc70260c9ab81801001fcd86ba94070b34e5d
+    uses: libbpf/github-actions/.github/workflows/build-linux.yml@621ebabb015460cfc6712bd137c3543cde9b9a6d
     secrets: inherit
     with:
       # Please keep in sync with vmlinux release version specification
@@ -28,6 +28,7 @@ jobs:
       rev: v6.11
       config: 'data/config'
       vmlinux: true
+      modules: true
   build:
     name: Build [${{ matrix.runs-on }}, ${{ matrix.rust }}, ${{ matrix.profile }}, ${{ matrix.args }}]
     runs-on: ${{ matrix.runs-on }}
@@ -238,15 +239,19 @@ jobs:
           --header "X-GitHub-Api-Version: 2022-11-28" \
           --output artifact.zip \
           "${ARTIFACT_URL}"
-        # This unzip will produce the kernel bzImage and vmlinux.
+        # This unzip will produce the kernel bzImage, boot/ with vmlinux
+        # and aux files, and lib/modules/ with modules and aux files.
         unzip artifact.zip
-        # Put vmlinux file into a location amenable to auto-discovery.
-        sudo mv vmlinux /boot/vmlinux-6.11.0
 
         cat <<EOF > main.sh
         #!/bin/sh
-        set -e
+        set -e -u
+        mount -t tmpfs tmpfs /boot
+        cp -a boot/* /boot/
+        mount -t tmpfs tmpfs /lib/modules
+        cp -a lib/modules/* /lib/modules/
         . ./env.sh
+        insmod lib/modules/6.11.0/kernel/lib/test_hexdump.ko
         $tests
         cargo llvm-cov report --ignore-filename-regex=cli/src/ --lcov --output-path lcov.info
         EOF
