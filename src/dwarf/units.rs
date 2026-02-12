@@ -36,6 +36,7 @@ use super::function::Function;
 use super::lines::Lines;
 use super::location::Location;
 use super::range::RangeAttributes;
+use super::reader;
 use super::reader::R;
 use super::unit::Unit;
 use super::unit::UnitRange;
@@ -367,7 +368,8 @@ impl<'dwarf> Units<'dwarf> {
         let iter = inlined_fns.find_inlined_functions(probe).map(move |inlined_fn| {
             let name = inlined_fn
                 .name
-                .map(|name| name.to_string())
+                .as_ref()
+                .map(reader::to_str)
                 .transpose()?
                 .unwrap_or("");
 
@@ -526,7 +528,10 @@ mod tests {
             // should exist.
             let mut funcs = units.find_name("fibonacci");
             let func = funcs.next().unwrap().unwrap();
-            assert_eq!(func.name.unwrap().to_string().unwrap(), "fibonacci");
+            assert_eq!(
+                reader::to_str(func.name.as_ref().unwrap()).unwrap(),
+                "fibonacci"
+            );
 
             let addr = func.range.as_ref().unwrap().begin;
             let loc = units.find_location(addr).unwrap().unwrap();

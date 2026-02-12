@@ -35,6 +35,7 @@ use std::vec;
 use gimli::Error;
 
 use super::range::RangeAttributes;
+use super::reader;
 use super::reader::R;
 use super::units::Units;
 
@@ -423,7 +424,7 @@ impl Debug for Function<'_> {
             .field("dw_die_offset", dw_die_offset)
             .field(
                 "name",
-                match name.as_ref().and_then(|r| r.to_string().ok()) {
+                match name.as_ref().and_then(|r| reader::to_str(r).ok()) {
                     Some(ref s) => s,
                     None => &name,
                 },

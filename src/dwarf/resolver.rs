@@ -17,8 +17,6 @@ use std::rc::Rc;
 use gimli::AbbreviationsCacheStrategy;
 use gimli::Dwarf;
 
-use crate::dwarf::reader::Endianess;
-use crate::dwarf::reader::R;
 use crate::elf::ElfParser;
 use crate::elf::ElfResolverData;
 #[cfg(test)]
@@ -270,7 +268,7 @@ impl DwarfResolver {
         let dwp = dwp_parser
             .as_deref()
             .map(|dwp_parser| {
-                let empty = R::new(&[], Endianess::default());
+                let empty = reader::empty_reader();
                 // SAFETY: We own the `ElfParser` and make sure that it
                 //         stays around while the `Units` object uses
                 //         it. As such, it is fine to conjure a 'static
@@ -315,8 +313,8 @@ impl DwarfResolver {
         function: &'slf Function,
         offset_in_file: bool,
     ) -> Result<Option<SymInfo<'slf>>> {
-        let name = if let Some(name) = function.name {
-            name.to_string().unwrap()
+        let name = if let Some(name) = function.name.as_ref() {
+            reader::to_str(name).map_err(Error::from)?
         } else {
             return Ok(None)
         };
@@ -353,7 +351,8 @@ impl Symbolize for DwarfResolver {
         let mut sym = if let Some((function, unit)) = data {
             let name = function
                 .name
-                .map(|name| name.to_string())
+                .as_ref()
+                .map(reader::to_str)
                 .transpose()?
                 .unwrap_or("");
             let fn_addr = function.range.map(|range| range.begin).unwrap_or(0);
