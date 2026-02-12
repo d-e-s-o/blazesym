@@ -22,6 +22,8 @@ use std::str;
 use crate::inspect::FindAddrOpts;
 use crate::inspect::ForEachFn;
 use crate::inspect::SymInfo;
+#[cfg(feature = "dwarf")]
+use crate::log::warn;
 use crate::mmap::Mmap;
 use crate::pathlike::PathLike;
 use crate::symbolize::FindSymOpts;
@@ -43,11 +45,15 @@ use crate::SymType;
 use super::types::Elf32_Chdr;
 use super::types::Elf32_Ehdr;
 use super::types::Elf32_Phdr;
+use super::types::Elf32_Rel;
+use super::types::Elf32_Rela;
 use super::types::Elf32_Shdr;
 use super::types::Elf32_Sym;
 use super::types::Elf64_Chdr;
 use super::types::Elf64_Ehdr;
 use super::types::Elf64_Phdr;
+use super::types::Elf64_Rel;
+use super::types::Elf64_Rela;
 use super::types::Elf64_Shdr;
 use super::types::Elf64_Sym;
 use super::types::ElfN_Ehdr;
@@ -56,22 +62,101 @@ use super::types::ElfN_Shdr;
 use super::types::ElfN_Shdrs;
 use super::types::ElfN_Sym;
 use super::types::ElfN_Syms;
+#[cfg(feature = "dwarf")]
+use super::types::RelocationEntry;
 use super::types::EI_NIDENT;
 use super::types::ELFCLASS32;
 use super::types::ELFCLASS64;
 use super::types::ELFCOMPRESS_ZLIB;
 use super::types::ELFCOMPRESS_ZSTD;
+use super::types::ET_REL;
 use super::types::PN_XNUM;
 use super::types::PT_LOAD;
+use super::types::SHF_ALLOC;
 use super::types::SHF_COMPRESSED;
 use super::types::SHN_ABS;
 use super::types::SHN_LORESERVE;
 use super::types::SHN_UNDEF;
 use super::types::SHN_XINDEX;
 use super::types::SHT_NOBITS;
+use super::types::SHT_REL;
+use super::types::SHT_RELA;
 
 
 pub(crate) type StaticMem = &'static [u8];
+
+
+/// Check whether `r_type` is a known absolute relocation type for
+/// the given ELF machine. These are the types where the resolved
+/// value is simply `S + A`.
+#[cfg(feature = "dwarf")]
+fn is_known_abs_reloc(e_machine: u16, r_type: u32) -> bool {
+    match e_machine {
+        // EM_386: R_386_32
+        3 => r_type == 1,
+        // EM_ARM: R_ARM_ABS32
+        40 => r_type == 2,
+        // EM_X86_64: R_X86_64_64, R_X86_64_32
+        62 => matches!(r_type, 1 | 10),
+        // EM_AARCH64: R_AARCH64_ABS64, R_AARCH64_ABS32
+        183 => matches!(r_type, 257 | 258),
+        // Unknown architecture; don't warn.
+        _ => true,
+    }
+}
+
+
+/// Read relocation entries from `shdr` and resolve them against the
+/// given symbol table and section base addresses, appending
+/// `(offset, value)` pairs to `relocs`.
+#[cfg(feature = "dwarf")]
+fn resolve_relocs<'elf, B, E>(
+    backend: &B,
+    e_machine: u16,
+    shdr: &ElfN_Shdr<'_>,
+    syms: &ElfN_Syms<'_>,
+    section_bases: &[u64],
+    target: &mut &[u8],
+    relocs: &mut Vec<(usize, u64)>,
+) -> Result<()>
+where
+    B: BackendImpl<'elf>,
+    E: RelocationEntry + 'elf,
+{
+    let entry_count = shdr.size() as usize / mem::size_of::<E>();
+    let entries = backend
+        .read_pod_slice::<E>(shdr.offset(), entry_count)
+        .context("failed to read ELF relocation entries")?;
+
+    for entry in &*entries {
+        let (r_type, sym_idx) = entry.decompose_info();
+        if r_type == 0 {
+            continue;
+        }
+        if !is_known_abs_reloc(e_machine, r_type) {
+            warn!(
+                "relocation type {r_type} for e_machine {e_machine} is not a known \
+                 absolute type; treating as S + A",
+            );
+        }
+        let sym_value = if sym_idx > 0 {
+            let sym = syms
+                .get(sym_idx)
+                .ok_or_invalid_data(|| "relocation symbol index out of bounds")?;
+            let base = section_bases
+                .get(sym.shndx() as usize)
+                .copied()
+                .unwrap_or(0);
+            base + sym.value()
+        } else {
+            0
+        };
+        let addend = entry.addend(target);
+        let value = (sym_value as i64 + addend) as u64;
+        relocs.push((entry.offset(), value));
+    }
+    Ok(())
+}
 
 
 fn read_pod<T, R>(reader: &mut R) -> Result<T, io::Error>
@@ -459,6 +544,8 @@ struct Cache<'elf, B> {
     dynsym: OnceCell<SymbolTableCache<'elf>>,
     /// The section data.
     section_data: OnceCell<Box<[OnceCell<Cow<'elf, [u8]>>]>>,
+    /// Cached synthetic base addresses for `ET_REL` objects.
+    section_bases: OnceCell<Box<[u64]>>,
 }
 
 impl<'elf, B> Cache<'elf, B>
@@ -476,6 +563,7 @@ where
             symtab: OnceCell::new(),
             dynsym: OnceCell::new(),
             section_data: OnceCell::new(),
+            section_bases: OnceCell::new(),
         }
     }
 
@@ -861,6 +949,34 @@ where
                         .map(|strs| Cow::Owned(strs.to_vec()))?;
                 }
             }
+
+            // For ET_REL files, symbol st_value fields are
+            // section-relative.  Adjust them to use the same synthetic
+            // base addresses that the DWARF relocation resolver uses,
+            // so that symbol lookup and DWARF symbolization agree.
+            if let Some(bases) = self.section_bases()? {
+                match &mut syms {
+                    ElfN_Syms::B32(cow) => {
+                        for sym in cow.to_mut().iter_mut() {
+                            if sym.st_shndx != SHN_UNDEF && sym.st_shndx < SHN_LORESERVE {
+                                if let Some(&base) = bases.get(sym.st_shndx as usize) {
+                                    sym.st_value += base as u32;
+                                }
+                            }
+                        }
+                    }
+                    ElfN_Syms::B64(cow) => {
+                        for sym in cow.to_mut().iter_mut() {
+                            if sym.st_shndx != SHN_UNDEF && sym.st_shndx < SHN_LORESERVE {
+                                if let Some(&base) = bases.get(sym.st_shndx as usize) {
+                                    sym.st_value += base;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             let cache = SymbolTableCache::new(syms, strtab);
             Ok(cache)
         })
@@ -924,6 +1040,141 @@ where
             !matches!(result, Ok(Some(_)))
         })?;
         Ok(str2sym)
+    }
+
+    /// For relocatable objects (`ET_REL`, e.g. kernel modules), compute
+    /// synthetic base addresses for each `SHF_ALLOC` section so that
+    /// addresses don't overlap.  Returns `None` for non-`ET_REL` files.
+    fn section_bases(&self) -> Result<&[u64]> {
+        let bases = self.section_bases.get_or_try_init_(|| {
+            let ehdr = self.ensure_ehdr()?;
+            if ehdr.ehdr.type_() != ET_REL {
+                return Result::<_, Error>::Ok(Box::new([]))
+            }
+            let shdrs = self.ensure_shdrs()?;
+            let mut next_addr = 0u64;
+            let bases = shdrs
+                .iter(0)
+                .map(|shdr| {
+                    if shdr.flags() & SHF_ALLOC != 0 {
+                        let align = shdr.addr_align().max(1);
+                        let base = (next_addr + align - 1) & !(align - 1);
+                        next_addr = base + shdr.size();
+                        base
+                    } else {
+                        0
+                    }
+                })
+                .collect::<Box<[_]>>();
+            Ok(bases)
+        })?;
+
+        Result::Ok(bases.deref())
+    }
+
+    /// Find all relocations (RELA and REL) targeting the section at
+    /// `target_idx` and resolve them against the referenced symbol
+    /// table.
+    ///
+    /// Returns a list of `(offset, resolved_value)` pairs.
+    #[cfg(feature = "dwarf")]
+    fn section_relocations(&self, target_idx: usize) -> Result<Vec<(usize, u64)>> {
+        let ehdr = self.ensure_ehdr()?;
+
+        // Only `ET_REL` files have unresolved relocations; linked
+        // binaries (`ET_EXEC`, `ET_DYN`) have them resolved by the
+        // linker.
+        if ehdr.ehdr.type_() != ET_REL {
+            return Ok(Vec::new())
+        }
+
+        let shdrs = self.ensure_shdrs()?;
+        let section_bases = self.section_bases()?;
+        let e_machine = ehdr.ehdr.machine();
+
+        // Read the target section data lazily; only needed for
+        // `SHT_REL` entries where the addend is implicit (stored in the
+        // section bytes at the relocation offset).
+        let mut target_data = None;
+        let mut relocs = Vec::new();
+
+        for shdr in shdrs.iter(0) {
+            let sh_type = shdr.type_();
+            if (sh_type != SHT_RELA && sh_type != SHT_REL) || shdr.info() as usize != target_idx {
+                continue;
+            }
+
+            let symtab_idx = shdr.link() as usize;
+            let symtab_shdr = self.section_hdr(symtab_idx)?;
+
+            let syms = if ehdr.is_32bit() {
+                let sym_count = symtab_shdr.size() as usize / mem::size_of::<Elf32_Sym>();
+                ElfN_Syms::B32(
+                    self.backend
+                        .read_pod_slice::<Elf32_Sym>(symtab_shdr.offset(), sym_count)
+                        .context("failed to read ELF symbol table for relocations")?,
+                )
+            } else {
+                let sym_count = symtab_shdr.size() as usize / mem::size_of::<Elf64_Sym>();
+                ElfN_Syms::B64(
+                    self.backend
+                        .read_pod_slice::<Elf64_Sym>(symtab_shdr.offset(), sym_count)
+                        .context("failed to read ELF symbol table for relocations")?,
+                )
+            };
+
+            if sh_type == SHT_RELA {
+                if ehdr.is_32bit() {
+                    resolve_relocs::<_, Elf32_Rela>(
+                        &self.backend,
+                        e_machine,
+                        &shdr,
+                        &syms,
+                        section_bases,
+                        &mut &[][..],
+                        &mut relocs,
+                    )?;
+                } else {
+                    resolve_relocs::<_, Elf64_Rela>(
+                        &self.backend,
+                        e_machine,
+                        &shdr,
+                        &syms,
+                        section_bases,
+                        &mut &[][..],
+                        &mut relocs,
+                    )?;
+                }
+            } else {
+                let mut target = target_data
+                    .get_or_insert_with(|| self.section_data_raw(target_idx))
+                    .as_deref()
+                    .map_err(|err| Error::with_invalid_data(format!("{err}")))?;
+                if ehdr.is_32bit() {
+                    resolve_relocs::<_, Elf32_Rel>(
+                        &self.backend,
+                        e_machine,
+                        &shdr,
+                        &syms,
+                        section_bases,
+                        &mut target,
+                        &mut relocs,
+                    )?;
+                } else {
+                    resolve_relocs::<_, Elf64_Rel>(
+                        &self.backend,
+                        e_machine,
+                        &shdr,
+                        &syms,
+                        section_bases,
+                        &mut target,
+                        &mut relocs,
+                    )?;
+                }
+            }
+        }
+
+        Ok(relocs)
     }
 }
 
@@ -1148,6 +1399,16 @@ where
     pub(crate) fn find_section(&self, name: &str) -> Result<Option<usize>> {
         let index = self.cache.find_section(name)?;
         Ok(index)
+    }
+
+    /// Find all relocations (RELA and REL) targeting the section at
+    /// `target_idx` and resolve them against the referenced symbol
+    /// table.
+    ///
+    /// Returns a list of `(offset, resolved_value)` pairs.
+    #[cfg(feature = "dwarf")]
+    pub(crate) fn section_relocations(&self, target_idx: usize) -> Result<Vec<(usize, u64)>> {
+        self.cache.section_relocations(target_idx)
     }
 
     fn find_addr_impl<'slf>(
@@ -2101,6 +2362,7 @@ mod tests {
             symtab: OnceCell::new(),
             dynsym: OnceCell::new(),
             section_data: OnceCell::new(),
+            section_bases: OnceCell::new(),
         };
 
         assert_eq!(cache.find_section(".symtab").unwrap(), Some(2));
@@ -2207,6 +2469,7 @@ mod tests {
             symtab: OnceCell::new(),
             dynsym: OnceCell::new(),
             section_data: OnceCell::from(vec![OnceCell::new(), OnceCell::new()].into_boxed_slice()),
+            section_bases: OnceCell::new(),
         };
 
         let new_data = cache.section_data(1).unwrap();

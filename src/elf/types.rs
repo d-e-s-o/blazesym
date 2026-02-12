@@ -3,6 +3,8 @@ use std::mem::size_of;
 
 use crate::util::Either;
 use crate::util::Pod;
+#[cfg(feature = "dwarf")]
+use crate::util::ReadRaw as _;
 use crate::SymType;
 
 pub(crate) const EI_NIDENT: usize = 16;
@@ -783,6 +785,89 @@ unsafe impl Pod for Elf64_Rela {}
 
 impl Has32BitTy for Elf64_Rela {
     type Ty32Bit = Elf32_Rela;
+}
+
+
+/// A unified interface for ELF relocation entries, abstracting over
+/// the four concrete types (32/64-bit, REL/RELA).
+#[cfg(feature = "dwarf")]
+pub(crate) trait RelocationEntry: Pod {
+    /// Decompose `r_info` into `(r_type, sym_idx)`.
+    fn decompose_info(&self) -> (u32, usize);
+
+    /// The relocation offset into the target section.
+    fn offset(&self) -> usize;
+
+    /// Return the addend for this entry.
+    fn addend(&self, target: &mut &[u8]) -> i64;
+}
+
+#[cfg(feature = "dwarf")]
+impl RelocationEntry for Elf32_Rela {
+    fn decompose_info(&self) -> (u32, usize) {
+        let r_type = self.r_info & 0xff;
+        let sym_idx = (self.r_info >> 8) as usize;
+        (r_type, sym_idx)
+    }
+
+    fn offset(&self) -> usize {
+        self.r_offset as usize
+    }
+
+    fn addend(&self, _target: &mut &[u8]) -> i64 {
+        i64::from(self.r_addend)
+    }
+}
+
+#[cfg(feature = "dwarf")]
+impl RelocationEntry for Elf64_Rela {
+    fn decompose_info(&self) -> (u32, usize) {
+        let r_type = (self.r_info & 0xffffffff) as u32;
+        let sym_idx = (self.r_info >> 32) as usize;
+        (r_type, sym_idx)
+    }
+
+    fn offset(&self) -> usize {
+        self.r_offset as usize
+    }
+
+    fn addend(&self, _target: &mut &[u8]) -> i64 {
+        self.r_addend
+    }
+}
+
+#[cfg(feature = "dwarf")]
+impl RelocationEntry for Elf32_Rel {
+    fn decompose_info(&self) -> (u32, usize) {
+        let r_type = self.r_info & 0xff;
+        let sym_idx = (self.r_info >> 8) as usize;
+        (r_type, sym_idx)
+    }
+
+    fn offset(&self) -> usize {
+        self.r_offset as usize
+    }
+
+    fn addend(&self, target: &mut &[u8]) -> i64 {
+        i64::from(target.read_pod::<i32>().unwrap_or(0))
+    }
+}
+
+#[cfg(feature = "dwarf")]
+impl RelocationEntry for Elf64_Rel {
+    fn decompose_info(&self) -> (u32, usize) {
+        let r_type = (self.r_info & 0xffffffff) as u32;
+        let sym_idx = (self.r_info >> 32) as usize;
+        (r_type, sym_idx)
+    }
+
+    fn offset(&self) -> usize {
+        self.r_offset as usize
+    }
+
+    fn addend(&self, target: &mut &[u8]) -> i64 {
+        target.read_pod::<i64>().unwrap_or(0)
+    }
 }
 
 
