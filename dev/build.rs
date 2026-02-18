@@ -713,6 +713,11 @@ fn prepare_test_files() {
     ];
     cc(&src, "test-block.bin", args);
 
+    // Compile test-stable-addrs.c as a relocatable object (ET_REL),
+    // similar to a kernel module (.ko).
+    let src = data_dir.join("test-stable-addrs.c");
+    cc(&src, "test-stable-addrs.o", &["-c", "-g", "-O0"]);
+
     cc_stable_addrs(
         "test-stable-addrs.bin",
         &["-gdwarf-4", "-Wl,--build-id=none", "-O0"],
