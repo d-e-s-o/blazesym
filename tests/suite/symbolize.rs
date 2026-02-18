@@ -1928,3 +1928,44 @@ fn create_elf_resolver_from_non_existing_path() {
 
     assert_eq!(err.kind(), ErrorKind::NotFound);
 }
+
+
+/// Check that we can symbolize addresses in an `ET_REL` (.o) relocatable
+/// object file, where DWARF debug info requires relocation processing.
+#[tag(other_os)]
+#[test]
+fn symbolize_elf_relocatable_object() {
+    let path = Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("test-stable-addrs.o");
+
+    // Discover factorial's address from the (adjusted) symbol table.
+    let src = inspect::source::Source::Elf(inspect::source::Elf::new(&path));
+    let inspector = inspect::Inspector::new();
+    let results = inspector
+        .lookup(&src, &["factorial"])
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 1);
+    let factorial_addr = results[0].addr;
+
+    // Symbolize using DWARF (which uses relocated addresses).
+    let elf = Elf::new(&path);
+    let src = Source::Elf(elf);
+    let symbolizer = Symbolizer::new();
+    let result = symbolizer
+        .symbolize_single(&src, Input::VirtOffset(factorial_addr))
+        .unwrap()
+        .into_sym()
+        .unwrap();
+
+    assert_eq!(result.name, "factorial");
+    assert_eq!(result.addr, factorial_addr);
+    assert_eq!(result.offset, 0);
+
+    let code_info = result.code_info.as_ref().unwrap();
+    assert_eq!(code_info.file, OsStr::new("test-stable-addrs.c"));
+    assert_eq!(code_info.line, Some(10));
+}
