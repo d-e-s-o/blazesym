@@ -773,6 +773,27 @@ impl Has32BitTy for Elf64_Rel {
     type Ty32Bit = Elf32_Rel;
 }
 
+pub(crate) type ElfN_Rel<'elf> = ElfN<'elf, Elf64_Rel>;
+pub(crate) type ElfN_Rels<'elf> = ElfNSlice<'elf, Elf64_Rel>;
+
+impl ElfN_Rel<'_> {
+    #[inline]
+    pub fn offset(&self) -> u64 {
+        match self {
+            ElfN::B32(rel) => rel.r_offset.into(),
+            ElfN::B64(rel) => rel.r_offset,
+        }
+    }
+
+    #[inline]
+    pub fn dissect_info(&self) -> (u32, usize) {
+        match self {
+            ElfN::B32(rel) => rel.dissect_info(),
+            ElfN::B64(rel) => rel.dissect_info(),
+        }
+    }
+}
+
 
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
@@ -815,6 +836,35 @@ unsafe impl Pod for Elf64_Rela {}
 
 impl Has32BitTy for Elf64_Rela {
     type Ty32Bit = Elf32_Rela;
+}
+
+pub(crate) type ElfN_Rela<'elf> = ElfN<'elf, Elf64_Rela>;
+pub(crate) type ElfN_Relas<'elf> = ElfNSlice<'elf, Elf64_Rela>;
+
+impl ElfN_Rela<'_> {
+    #[inline]
+    pub fn offset(&self) -> u64 {
+        match self {
+            ElfN::B32(rela) => rela.r_offset.into(),
+            ElfN::B64(rela) => rela.r_offset,
+        }
+    }
+
+    #[inline]
+    pub fn dissect_info(&self) -> (u32, usize) {
+        match self {
+            ElfN::B32(rela) => rela.dissect_info(),
+            ElfN::B64(rela) => rela.dissect_info(),
+        }
+    }
+
+    #[inline]
+    pub fn addend(&self) -> i64 {
+        match self {
+            ElfN::B32(rela) => rela.r_addend.into(),
+            ElfN::B64(rela) => rela.r_addend,
+        }
+    }
 }
 
 
