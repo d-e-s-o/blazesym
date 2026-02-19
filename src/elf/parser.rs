@@ -1094,9 +1094,8 @@ where
                         let () = relocs.push((rela.r_offset as usize, value));
                     }
                 } else {
-                    let target =
-                        target_data.get_or_insert_with(|| self.section_data_raw(target_idx));
-                    let target = target
+                    let mut target = target_data
+                        .get_or_insert_with(|| self.section_data_raw(target_idx))
                         .as_deref()
                         .map_err(|err| Error::with_invalid_data(format!("{err}")))?;
 
@@ -1135,10 +1134,7 @@ where
                         // the existing value at the relocation offset
                         // in the target section.
                         let offset = rel.r_offset as usize;
-                        let addend = target
-                            .get(offset..offset + size_of::<i32>())
-                            .map(|b| i32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
-                            .unwrap_or(0);
+                        let addend = target.read_pod::<i32>().unwrap_or(0);
                         let value = (sym_value as i64 + i64::from(addend)) as u64;
                         let () = relocs.push((offset, value));
                     }
@@ -1186,9 +1182,8 @@ where
                         let () = relocs.push((rela.r_offset as usize, value));
                     }
                 } else {
-                    let target =
-                        target_data.get_or_insert_with(|| self.section_data_raw(target_idx));
-                    let target = target
+                    let mut target = target_data
+                        .get_or_insert_with(|| self.section_data_raw(target_idx))
                         .as_deref()
                         .map_err(|err| Error::with_invalid_data(format!("{err}")))?;
 
@@ -1227,12 +1222,7 @@ where
                         // the existing value at the relocation offset
                         // in the target section.
                         let offset = rel.r_offset as usize;
-                        let addend = target
-                            .get(offset..offset + size_of::<i64>())
-                            .map(|b| {
-                                i64::from_ne_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
-                            })
-                            .unwrap_or(0);
+                        let addend = target.read_pod::<i64>().unwrap_or(0);
                         let value = (sym_value as i64 + addend) as u64;
                         let () = relocs.push((offset, value));
                     }
