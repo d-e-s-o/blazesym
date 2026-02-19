@@ -1024,6 +1024,13 @@ where
     #[cfg(feature = "dwarf")]
     fn section_relocations(&self, target_idx: usize) -> Result<Vec<(usize, u64)>> {
         let ehdr = self.ensure_ehdr()?;
+
+        // Only ET_REL files have unresolved relocations; linked
+        // binaries (ET_EXEC, ET_DYN) have them resolved by the linker.
+        if ehdr.ehdr.e_type() != ET_REL {
+            return Ok(Vec::new())
+        }
+
         let shdrs = self.ensure_shdrs()?;
 
         let section_bases = self.section_bases()?;
