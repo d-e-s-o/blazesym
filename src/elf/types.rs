@@ -739,6 +739,14 @@ pub(crate) struct Elf32_Rel {
     pub r_info: Elf32_Word,
 }
 
+impl Elf32_Rel {
+    pub fn dissect_info(&self) -> (u32, usize) {
+        let r_type = self.r_info & 0xff;
+        let sym_idx = (self.r_info >> 8) as usize;
+        (r_type, sym_idx)
+    }
+}
+
 // SAFETY: `Elf32_Rel` is valid for any bit pattern.
 unsafe impl Pod for Elf32_Rel {}
 
@@ -748,6 +756,14 @@ unsafe impl Pod for Elf32_Rel {}
 pub(crate) struct Elf64_Rel {
     pub r_offset: Elf64_Addr,
     pub r_info: Elf64_Xword,
+}
+
+impl Elf64_Rel {
+    pub fn dissect_info(&self) -> (u32, usize) {
+        let r_type = (self.r_info & 0xffffffff) as u32;
+        let sym_idx = (self.r_info >> 32) as usize;
+        (r_type, sym_idx)
+    }
 }
 
 // SAFETY: `Elf64_Rel` is valid for any bit pattern.
@@ -766,6 +782,14 @@ pub(crate) struct Elf32_Rela {
     pub r_addend: i32,
 }
 
+impl Elf32_Rela {
+    pub fn dissect_info(&self) -> (u32, usize) {
+        let r_type = self.r_info & 0xff;
+        let sym_idx = (self.r_info >> 8) as usize;
+        (r_type, sym_idx)
+    }
+}
+
 // SAFETY: `Elf32_Rela` is valid for any bit pattern.
 unsafe impl Pod for Elf32_Rela {}
 
@@ -776,6 +800,14 @@ pub(crate) struct Elf64_Rela {
     pub r_offset: Elf64_Addr,
     pub r_info: Elf64_Xword,
     pub r_addend: i64,
+}
+
+impl Elf64_Rela {
+    pub fn dissect_info(&self) -> (u32, usize) {
+        let r_type = (self.r_info & 0xffffffff) as u32;
+        let sym_idx = (self.r_info >> 32) as usize;
+        (r_type, sym_idx)
+    }
 }
 
 // SAFETY: `Elf64_Rela` is valid for any bit pattern.

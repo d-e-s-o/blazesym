@@ -1066,7 +1066,7 @@ where
                         .context("failed to read ELF RELA entries")?;
 
                     for rela in entries.iter() {
-                        let r_type = rela.r_info & 0xff;
+                        let (r_type, sym_idx) = rela.dissect_info();
                         if r_type == 0 {
                             continue;
                         }
@@ -1077,7 +1077,6 @@ where
                                 ehdr.ehdr.machine()
                             );
                         }
-                        let sym_idx = (rela.r_info >> 8) as usize;
                         let sym_value = if sym_idx > 0 {
                             let sym = syms
                                 .get(sym_idx)
@@ -1106,7 +1105,7 @@ where
                         .context("failed to read ELF REL entries")?;
 
                     for rel in entries.iter() {
-                        let r_type = rel.r_info & 0xff;
+                        let (r_type, sym_idx) = rel.dissect_info();
                         if r_type == 0 {
                             continue;
                         }
@@ -1117,7 +1116,6 @@ where
                                 ehdr.ehdr.machine()
                             );
                         }
-                        let sym_idx = (rel.r_info >> 8) as usize;
                         let sym_value = if sym_idx > 0 {
                             let sym = syms
                                 .get(sym_idx)
@@ -1154,7 +1152,7 @@ where
                         .context("failed to read ELF RELA entries")?;
 
                     for rela in entries.iter() {
-                        let r_type = (rela.r_info & 0xffffffff) as u32;
+                        let (r_type, sym_idx) = rela.dissect_info();
                         if r_type == 0 {
                             continue;
                         }
@@ -1165,7 +1163,6 @@ where
                                 ehdr.ehdr.machine()
                             );
                         }
-                        let sym_idx = (rela.r_info >> 32) as usize;
                         let sym_value = if sym_idx > 0 {
                             let sym = syms
                                 .get(sym_idx)
@@ -1194,7 +1191,7 @@ where
                         .context("failed to read ELF REL entries")?;
 
                     for rel in entries.iter() {
-                        let r_type = (rel.r_info & 0xffffffff) as u32;
+                        let (r_type, sym_idx) = rel.dissect_info();
                         if r_type == 0 {
                             continue;
                         }
@@ -1205,7 +1202,6 @@ where
                                 ehdr.ehdr.machine()
                             );
                         }
-                        let sym_idx = (rel.r_info >> 32) as usize;
                         let sym_value = if sym_idx > 0 {
                             let sym = syms
                                 .get(sym_idx)
