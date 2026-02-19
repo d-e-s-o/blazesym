@@ -1071,75 +1071,58 @@ where
             }
             .context("failed to read ELF symbol table for relocations")?;
 
+            // Common per-relocation processing: filter, warn, resolve
+            // symbol value, compute S + A, and collect the result.
+            let mut process_reloc =
+                |r_type: u32, sym_idx: usize, offset: usize, addend: i64| -> Result<()> {
+                    if r_type == 0 {
+                        return Ok(())
+                    }
+                    if !is_known_abs_reloc(ehdr.ehdr.machine(), r_type) {
+                        warn!(
+                            "relocation type {r_type} for e_machine {} is not a known \
+                             absolute type; treating as S + A",
+                            ehdr.ehdr.machine()
+                        );
+                    }
+                    let sym_value = if sym_idx > 0 {
+                        let sym = syms
+                            .get(sym_idx)
+                            .ok_or_invalid_data(|| "relocation symbol index out of bounds")?;
+                        let base = section_bases
+                            .get(sym.shndx() as usize)
+                            .copied()
+                            .unwrap_or(0);
+                        base + sym.value()
+                    } else {
+                        0
+                    };
+                    let value = (sym_value as i64 + addend) as u64;
+                    let () = relocs.push((offset, value));
+                    Ok(())
+                };
+
             if sh_type == SHT_RELA {
-                if ehdr.is_32bit() {
-                    let entry_count = shdr.size() as usize / mem::size_of::<Elf32_Rela>();
-                    let entries = self
-                        .backend
-                        .read_pod_slice::<Elf32_Rela>(shdr.offset(), entry_count)
-                        .context("failed to read ELF RELA entries")?;
-
-                    for rela in entries.iter() {
-                        let (r_type, sym_idx) = rela.dissect_info();
-                        if r_type == 0 {
-                            continue;
-                        }
-                        if !is_known_abs_reloc(ehdr.ehdr.machine(), r_type) {
-                            warn!(
-                                "relocation type {r_type} for e_machine {} is not a known \
-                                 absolute type; treating as S + A",
-                                ehdr.ehdr.machine()
-                            );
-                        }
-                        let sym_value = if sym_idx > 0 {
-                            let sym = syms
-                                .get(sym_idx)
-                                .ok_or_invalid_data(|| "relocation symbol index out of bounds")?;
-                            let base = section_bases
-                                .get(sym.shndx() as usize)
-                                .copied()
-                                .unwrap_or(0);
-                            base + sym.value()
-                        } else {
-                            0
-                        };
-                        let value = (sym_value as i64 + i64::from(rela.r_addend)) as u64;
-                        let () = relocs.push((rela.r_offset as usize, value));
-                    }
+                let entry_size = if ehdr.is_32bit() {
+                    mem::size_of::<Elf32_Rela>()
                 } else {
-                    let entry_count = shdr.size() as usize / mem::size_of::<Elf64_Rela>();
-                    let entries = self
-                        .backend
+                    mem::size_of::<Elf64_Rela>()
+                };
+                let entry_count = shdr.size() as usize / entry_size;
+                let entries = if ehdr.is_32bit() {
+                    self.backend
+                        .read_pod_slice::<Elf32_Rela>(shdr.offset(), entry_count)
+                        .map(ElfN_Relas::B32)
+                } else {
+                    self.backend
                         .read_pod_slice::<Elf64_Rela>(shdr.offset(), entry_count)
-                        .context("failed to read ELF RELA entries")?;
+                        .map(ElfN_Relas::B64)
+                }
+                .context("failed to read ELF RELA entries")?;
 
-                    for rela in entries.iter() {
-                        let (r_type, sym_idx) = rela.dissect_info();
-                        if r_type == 0 {
-                            continue;
-                        }
-                        if !is_known_abs_reloc(ehdr.ehdr.machine(), r_type) {
-                            warn!(
-                                "relocation type {r_type} for e_machine {} is not a known \
-                                 absolute type; treating as S + A",
-                                ehdr.ehdr.machine()
-                            );
-                        }
-                        let sym_value = if sym_idx > 0 {
-                            let sym = syms
-                                .get(sym_idx)
-                                .ok_or_invalid_data(|| "relocation symbol index out of bounds")?;
-                            let base = section_bases
-                                .get(sym.shndx() as usize)
-                                .copied()
-                                .unwrap_or(0);
-                            base + sym.value()
-                        } else {
-                            0
-                        };
-                        let value = (sym_value as i64 + rela.r_addend) as u64;
-                        let () = relocs.push((rela.r_offset as usize, value));
-                    }
+                for rela in entries.iter(0) {
+                    let (r_type, sym_idx) = rela.dissect_info();
+                    let () = process_reloc(r_type, sym_idx, rela.offset() as usize, rela.addend())?;
                 }
             } else {
                 let mut target = target_data
@@ -1147,84 +1130,35 @@ where
                     .as_deref()
                     .map_err(|err| Error::with_invalid_data(format!("{err}")))?;
 
-                if ehdr.is_32bit() {
-                    let entry_count = shdr.size() as usize / mem::size_of::<Elf32_Rel>();
-                    let entries = self
-                        .backend
-                        .read_pod_slice::<Elf32_Rel>(shdr.offset(), entry_count)
-                        .context("failed to read ELF REL entries")?;
-
-                    for rel in entries.iter() {
-                        let (r_type, sym_idx) = rel.dissect_info();
-                        if r_type == 0 {
-                            continue;
-                        }
-                        if !is_known_abs_reloc(ehdr.ehdr.machine(), r_type) {
-                            warn!(
-                                "relocation type {r_type} for e_machine {} is not a known \
-                                 absolute type; treating as S + A",
-                                ehdr.ehdr.machine()
-                            );
-                        }
-                        let sym_value = if sym_idx > 0 {
-                            let sym = syms
-                                .get(sym_idx)
-                                .ok_or_invalid_data(|| "relocation symbol index out of bounds")?;
-                            let base = section_bases
-                                .get(sym.shndx() as usize)
-                                .copied()
-                                .unwrap_or(0);
-                            base + sym.value()
-                        } else {
-                            0
-                        };
-                        // For `SHT_REL` the addend is implicit: it is
-                        // the existing value at the relocation offset
-                        // in the target section.
-                        let offset = rel.r_offset as usize;
-                        let addend = target.read_pod::<i32>().unwrap_or(0);
-                        let value = (sym_value as i64 + i64::from(addend)) as u64;
-                        let () = relocs.push((offset, value));
-                    }
+                let entry_size = if ehdr.is_32bit() {
+                    mem::size_of::<Elf32_Rel>()
                 } else {
-                    let entry_count = shdr.size() as usize / mem::size_of::<Elf64_Rel>();
-                    let entries = self
-                        .backend
+                    mem::size_of::<Elf64_Rel>()
+                };
+                let entry_count = shdr.size() as usize / entry_size;
+                let entries = if ehdr.is_32bit() {
+                    self.backend
+                        .read_pod_slice::<Elf32_Rel>(shdr.offset(), entry_count)
+                        .map(ElfN_Rels::B32)
+                } else {
+                    self.backend
                         .read_pod_slice::<Elf64_Rel>(shdr.offset(), entry_count)
-                        .context("failed to read ELF REL entries")?;
+                        .map(ElfN_Rels::B64)
+                }
+                .context("failed to read ELF REL entries")?;
 
-                    for rel in entries.iter() {
-                        let (r_type, sym_idx) = rel.dissect_info();
-                        if r_type == 0 {
-                            continue;
-                        }
-                        if !is_known_abs_reloc(ehdr.ehdr.machine(), r_type) {
-                            warn!(
-                                "relocation type {r_type} for e_machine {} is not a known \
-                                 absolute type; treating as S + A",
-                                ehdr.ehdr.machine()
-                            );
-                        }
-                        let sym_value = if sym_idx > 0 {
-                            let sym = syms
-                                .get(sym_idx)
-                                .ok_or_invalid_data(|| "relocation symbol index out of bounds")?;
-                            let base = section_bases
-                                .get(sym.shndx() as usize)
-                                .copied()
-                                .unwrap_or(0);
-                            base + sym.value()
-                        } else {
-                            0
-                        };
-                        // For `SHT_REL` the addend is implicit: it is
-                        // the existing value at the relocation offset
-                        // in the target section.
-                        let offset = rel.r_offset as usize;
-                        let addend = target.read_pod::<i64>().unwrap_or(0);
-                        let value = (sym_value as i64 + addend) as u64;
-                        let () = relocs.push((offset, value));
-                    }
+                for rel in entries.iter(0) {
+                    let (r_type, sym_idx) = rel.dissect_info();
+                    let offset = rel.offset() as usize;
+                    // For `SHT_REL` the addend is implicit: it is the
+                    // existing value at the relocation offset in the
+                    // target section.
+                    let addend = if ehdr.is_32bit() {
+                        i64::from(target.read_pod::<i32>().unwrap_or(0))
+                    } else {
+                        target.read_pod::<i64>().unwrap_or(0)
+                    };
+                    let () = process_reloc(r_type, sym_idx, offset, addend)?;
                 }
             }
         }
