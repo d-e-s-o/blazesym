@@ -954,28 +954,28 @@ where
             // section-relative.  Adjust them to use the same synthetic
             // base addresses that the DWARF relocation resolver uses,
             // so that symbol lookup and DWARF symbolization agree.
-            if let Some(bases) = self.section_bases()? {
-                match &mut syms {
-                    ElfN_Syms::B32(cow) => {
-                        for sym in cow.to_mut().iter_mut() {
-                            if sym.st_shndx != SHN_UNDEF && sym.st_shndx < SHN_LORESERVE {
-                                if let Some(&base) = bases.get(sym.st_shndx as usize) {
-                                    sym.st_value += base as u32;
-                                }
-                            }
-                        }
-                    }
-                    ElfN_Syms::B64(cow) => {
-                        for sym in cow.to_mut().iter_mut() {
-                            if sym.st_shndx != SHN_UNDEF && sym.st_shndx < SHN_LORESERVE {
-                                if let Some(&base) = bases.get(sym.st_shndx as usize) {
-                                    sym.st_value += base;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            //if let Some(bases) = self.section_bases()? {
+            //    match &mut syms {
+            //        ElfN_Syms::B32(cow) => {
+            //            for sym in cow.to_mut().iter_mut() {
+            //                if sym.st_shndx != SHN_UNDEF && sym.st_shndx < SHN_LORESERVE {
+            //                    if let Some(&base) = bases.get(sym.st_shndx as usize) {
+            //                        sym.st_value += base as u32;
+            //                    }
+            //                }
+            //            }
+            //        }
+            //        ElfN_Syms::B64(cow) => {
+            //            for sym in cow.to_mut().iter_mut() {
+            //                if sym.st_shndx != SHN_UNDEF && sym.st_shndx < SHN_LORESERVE {
+            //                    if let Some(&base) = bases.get(sym.st_shndx as usize) {
+            //                        sym.st_value += base;
+            //                    }
+            //                }
+            //            }
+            //        }
+            //    }
+            //}
 
             let cache = SymbolTableCache::new(syms, strtab);
             Ok(cache)
