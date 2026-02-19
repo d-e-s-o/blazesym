@@ -490,7 +490,7 @@ struct Cache<'elf, B> {
     /// The section data.
     section_data: OnceCell<Box<[OnceCell<Cow<'elf, [u8]>>]>>,
     /// Cached synthetic base addresses for `ET_REL` objects.
-    section_bases: OnceCell<Option<Vec<u64>>>,
+    section_bases: OnceCell<Box<[u64]>>,
 }
 
 impl<'elf, B> Cache<'elf, B>
@@ -899,28 +899,28 @@ where
             // section-relative.  Adjust them to use the same synthetic
             // base addresses that the DWARF relocation resolver uses,
             // so that symbol lookup and DWARF symbolization agree.
-            if let Some(bases) = self.section_bases()? {
-                match &mut syms {
-                    ElfN_Syms::B32(cow) => {
-                        for sym in cow.to_mut().iter_mut() {
-                            if sym.st_shndx != SHN_UNDEF && sym.st_shndx < SHN_LORESERVE {
-                                if let Some(&base) = bases.get(sym.st_shndx as usize) {
-                                    sym.st_value += base as u32;
-                                }
-                            }
-                        }
-                    }
-                    ElfN_Syms::B64(cow) => {
-                        for sym in cow.to_mut().iter_mut() {
-                            if sym.st_shndx != SHN_UNDEF && sym.st_shndx < SHN_LORESERVE {
-                                if let Some(&base) = bases.get(sym.st_shndx as usize) {
-                                    sym.st_value += base;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            //if let Some(bases) = self.section_bases()? {
+            //    match &mut syms {
+            //        ElfN_Syms::B32(cow) => {
+            //            for sym in cow.to_mut().iter_mut() {
+            //                if sym.st_shndx != SHN_UNDEF && sym.st_shndx < SHN_LORESERVE {
+            //                    if let Some(&base) = bases.get(sym.st_shndx as usize) {
+            //                        sym.st_value += base as u32;
+            //                    }
+            //                }
+            //            }
+            //        }
+            //        ElfN_Syms::B64(cow) => {
+            //            for sym in cow.to_mut().iter_mut() {
+            //                if sym.st_shndx != SHN_UNDEF && sym.st_shndx < SHN_LORESERVE {
+            //                    if let Some(&base) = bases.get(sym.st_shndx as usize) {
+            //                        sym.st_value += base;
+            //                    }
+            //                }
+            //            }
+            //        }
+            //    }
+            //}
 
             let cache = SymbolTableCache::new(syms, strtab);
             Ok(cache)
@@ -990,18 +990,17 @@ where
     /// For relocatable objects (`ET_REL`, e.g. kernel modules), compute
     /// synthetic base addresses for each `SHF_ALLOC` section so that
     /// addresses don't overlap.  Returns `None` for non-`ET_REL` files.
-    fn section_bases(&self) -> Result<&Option<Vec<u64>>> {
-        self.section_bases.get_or_try_init_(|| {
+    fn section_bases(&self) -> Result<&[u64]> {
+        let bases = self.section_bases.get_or_try_init_(|| {
             let ehdr = self.ensure_ehdr()?;
             if ehdr.ehdr.type_() != ET_REL {
-                return Ok(None)
+                return Result::<_, Error>::Ok(Box::new([]))
             }
             let shdrs = self.ensure_shdrs()?;
-            let mut next_addr: u64 = 0;
-            let bases = (0..shdrs.len())
-                .map(|i| {
-                    // SANITY: Index is within bounds by construction.
-                    let shdr = shdrs.get(i).unwrap();
+            let mut next_addr = 0u64;
+            let bases = shdrs
+                .iter(0)
+                .map(|shdr| {
                     if shdr.flags() & SHF_ALLOC != 0 {
                         let align = shdr.addr_align().max(1);
                         let base = (next_addr + align - 1) & !(align - 1);
@@ -1011,9 +1010,11 @@ where
                         0
                     }
                 })
-                .collect::<Vec<_>>();
-            Ok(Some(bases))
-        })
+                .collect::<Box<[_]>>();
+            Ok(bases)
+        })?;
+
+        Result::Ok(bases.deref())
     }
 
     /// Find all relocations (RELA and REL) targeting the section at
@@ -1025,26 +1026,23 @@ where
     fn section_relocations(&self, target_idx: usize) -> Result<Vec<(usize, u64)>> {
         let ehdr = self.ensure_ehdr()?;
 
-        // Only ET_REL files have unresolved relocations; linked
-        // binaries (ET_EXEC, ET_DYN) have them resolved by the linker.
-        if ehdr.ehdr.e_type() != ET_REL {
+        // Only `ET_REL` files have unresolved relocations; linked
+        // binaries (`ET_EXEC`, `ET_DYN`) have them resolved by the
+        // linker.
+        if ehdr.ehdr.type_() != ET_REL {
             return Ok(Vec::new())
         }
 
         let shdrs = self.ensure_shdrs()?;
-
         let section_bases = self.section_bases()?;
 
         // Read the target section data lazily; only needed for
         // `SHT_REL` entries where the addend is implicit (stored in the
         // section bytes at the relocation offset).
         let mut target_data = None;
-
         let mut relocs = Vec::new();
 
-        for i in 0..shdrs.len() {
-            // SANITY: Index is within bounds by construction.
-            let shdr = shdrs.get(i).unwrap();
+        for shdr in shdrs.iter(0) {
             let sh_type = shdr.type_();
             if (sh_type != SHT_RELA && sh_type != SHT_REL) || shdr.info() as usize != target_idx {
                 continue;
@@ -1085,15 +1083,15 @@ where
                                 .get(sym_idx)
                                 .ok_or_invalid_data(|| "relocation symbol index out of bounds")?;
                             let base = section_bases
-                                .as_ref()
-                                .and_then(|bases| bases.get(sym.st_shndx as usize).copied())
+                                .get(sym.st_shndx as usize)
+                                .copied()
                                 .unwrap_or(0);
                             base + u64::from(sym.st_value)
                         } else {
                             0
                         };
                         let value = (sym_value as i64 + i64::from(rela.r_addend)) as u64;
-                        relocs.push((rela.r_offset as usize, value));
+                        let () = relocs.push((rela.r_offset as usize, value));
                     }
                 } else {
                     let target =
@@ -1126,8 +1124,8 @@ where
                                 .get(sym_idx)
                                 .ok_or_invalid_data(|| "relocation symbol index out of bounds")?;
                             let base = section_bases
-                                .as_ref()
-                                .and_then(|bases| bases.get(sym.st_shndx as usize).copied())
+                                .get(sym.st_shndx as usize)
+                                .copied()
                                 .unwrap_or(0);
                             base + u64::from(sym.st_value)
                         } else {
@@ -1138,11 +1136,11 @@ where
                         // in the target section.
                         let offset = rel.r_offset as usize;
                         let addend = target
-                            .get(offset..offset + 4)
+                            .get(offset..offset + size_of::<i32>())
                             .map(|b| i32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
                             .unwrap_or(0);
                         let value = (sym_value as i64 + i64::from(addend)) as u64;
-                        relocs.push((offset, value));
+                        let () = relocs.push((offset, value));
                     }
                 }
             } else {
@@ -1177,15 +1175,15 @@ where
                                 .get(sym_idx)
                                 .ok_or_invalid_data(|| "relocation symbol index out of bounds")?;
                             let base = section_bases
-                                .as_ref()
-                                .and_then(|bases| bases.get(sym.st_shndx as usize).copied())
+                                .get(sym.st_shndx as usize)
+                                .copied()
                                 .unwrap_or(0);
                             base + sym.st_value
                         } else {
                             0
                         };
                         let value = (sym_value as i64 + rela.r_addend) as u64;
-                        relocs.push((rela.r_offset as usize, value));
+                        let () = relocs.push((rela.r_offset as usize, value));
                     }
                 } else {
                     let target =
@@ -1218,8 +1216,8 @@ where
                                 .get(sym_idx)
                                 .ok_or_invalid_data(|| "relocation symbol index out of bounds")?;
                             let base = section_bases
-                                .as_ref()
-                                .and_then(|bases| bases.get(sym.st_shndx as usize).copied())
+                                .get(sym.st_shndx as usize)
+                                .copied()
                                 .unwrap_or(0);
                             base + sym.st_value
                         } else {
@@ -1230,13 +1228,13 @@ where
                         // in the target section.
                         let offset = rel.r_offset as usize;
                         let addend = target
-                            .get(offset..offset + 8)
+                            .get(offset..offset + size_of::<i64>())
                             .map(|b| {
                                 i64::from_ne_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
                             })
                             .unwrap_or(0);
                         let value = (sym_value as i64 + addend) as u64;
-                        relocs.push((offset, value));
+                        let () = relocs.push((offset, value));
                     }
                 }
             }
