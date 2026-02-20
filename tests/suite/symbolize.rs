@@ -1862,6 +1862,71 @@ fn symbolize_kernel_bpf_program() {
     })
 }
 
+/// Test symbolization of a kernel module address using DWARF debug
+/// information from a `.ko` file.
+///
+/// This exercises the full kernel module symbolization path: loading a
+/// module, finding its symbols via `/proc/kallsyms`, and resolving an
+/// address through the DWARF data embedded in the `.ko` file on disk.
+///
+/// The kernel module is assumed to already be installed and loaded
+/// before this test runs.
+#[test]
+#[ignore = "test requires VM environment (vmtest)"]
+fn symbolize_kernel_module_dwarf() {
+    // Find a function belonging to the `test_hexdump` module in
+    // `/proc/kallsyms`.
+    let kallsyms = read_file("/proc/kallsyms").unwrap();
+    let kallsyms = str::from_utf8(&kallsyms).unwrap();
+    let (addr, name) = kallsyms
+        .lines()
+        .find_map(|line| {
+            let mut parts = line.split_ascii_whitespace();
+            let addr = parts.next()?;
+            let _ty = parts.next()?;
+            let name = parts.next()?;
+            let module = parts.next()?;
+
+            if name != "data_a" || module != "[test_hexdump]" {
+                return None;
+            }
+            let addr = Addr::from_str_radix(addr, 16).ok()?;
+            (addr != 0).then(|| (addr, name.to_string()))
+        })
+        .expect("no `data_a` symbol found for [test_hexdump] in /proc/kallsyms");
+
+    // Symbolize the address using the default Kernel source, which
+    // consults /proc/modules, depmod, and the .ko file's DWARF data.
+    let src = Source::Kernel(Kernel::default());
+    let symbolizer = Symbolizer::new();
+    let symbolized = symbolizer
+        .symbolize_single(&src, Input::AbsAddr(addr))
+        .unwrap();
+    let sym = symbolized
+        .into_sym()
+        .unwrap_or_else(|| panic!("failed to symbolize `{name}` at {addr:#x}"));
+
+    // The DWARF resolver should report source code information that is
+    // only present in the .ko's debug sections.
+    let code_info = sym.code_info.as_ref().unwrap_or_else(|| {
+        panic!(
+            "no source code info for `{name}` at {addr:#x} (resolved as `{}`); \
+             DWARF data was not used",
+            sym.name,
+        )
+    });
+    assert_eq!(
+        code_info.file,
+        OsStr::new("test_hexdump.c"),
+        "unexpected source file: {:?}",
+        code_info.file,
+    );
+    assert!(
+        code_info.line.is_some(),
+        "expected a line number in source info",
+    );
+}
+
 /// Symbolize a normalized address from a binary with an artificially
 /// inflated ELF segment.
 ///
