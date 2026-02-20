@@ -1887,7 +1887,7 @@ fn symbolize_kernel_module_dwarf() {
             let name = parts.next()?;
             let module = parts.next()?;
 
-            if name != "data_a" || module != "[test_hexdump]" {
+            if name != "cleanup_module" || module != "[test_hexdump]" {
                 return None;
             }
             let addr = Addr::from_str_radix(addr, 16).ok()?;
@@ -1896,7 +1896,7 @@ fn symbolize_kernel_module_dwarf() {
         .expect("no `data_a` symbol found for [test_hexdump] in /proc/kallsyms");
 
     // Symbolize the address using the default Kernel source, which
-    // consults /proc/modules, depmod, and the .ko file's DWARF data.
+    // consults `/proc/modules`, depmod, and the .ko file's DWARF data.
     let src = Source::Kernel(Kernel::default());
     let symbolizer = Symbolizer::new();
     let symbolized = symbolizer

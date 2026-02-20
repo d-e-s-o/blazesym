@@ -191,6 +191,8 @@ impl Symbolize for KernelResolver<'_> {
                         if result.is_ok() {
                             return Ok(result)
                         }
+                    } else {
+                        log::info!("module `{mod_name}` not found in depmod");
                     }
                 }
 
