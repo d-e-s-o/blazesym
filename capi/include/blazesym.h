@@ -768,10 +768,42 @@ typedef struct blaze_symbolizer_opts {
    */
   bool demangle;
   /**
+   * Explicit pad to avoid implicit gaps.
+   */
+  uint8_t _pad_a[4];
+  /**
+   * Callback for custom process member path dispatch.
+   *
+   * When set, this callback is invoked for each process member that
+   * has a file path during process symbolization. It allows the
+   * caller to provide an alternative ELF file path for
+   * symbolization (e.g., fetched via debuginfod).
+   *
+   * The callback receives the `/proc/<pid>/map_files/...` path and
+   * the symbolic path from `/proc/<pid>/maps`, along with the
+   * user-provided context pointer
+   * ([`process_dispatch_ctx`][Self::process_dispatch_ctx]).
+   *
+   * The callback should return one of:
+   * - A `malloc`'d path string to an alternative ELF file to use for
+   *   symbolization. The library will `free` this string after use.
+   * - `NULL` to use the default symbolization behavior for this member.
+   *
+   * Set to `NULL` to disable custom dispatch.
+   */
+  char *(*process_dispatch_cb)(const char *maps_file,
+                               const char *symbolic_path,
+                               void *ctx);
+  /**
+   * Opaque context pointer passed to
+   * [`process_dispatch_cb`][Self::process_dispatch_cb].
+   */
+  void *process_dispatch_ctx;
+  /**
    * Unused member available for future expansion. Must be initialized
    * to zero.
    */
-  uint8_t reserved[20];
+  uint8_t reserved[24];
 } blaze_symbolizer_opts;
 
 /**
