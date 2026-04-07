@@ -2,16 +2,20 @@ use std::alloc::alloc;
 use std::alloc::dealloc;
 use std::alloc::Layout;
 use std::ffi::CStr;
+use std::ffi::CString;
 use std::ffi::OsStr;
 use std::fmt::Debug;
+use std::io;
 use std::mem;
 use std::ops::Deref as _;
 use std::os::raw::c_char;
+use std::os::raw::c_void;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
 use std::path::PathBuf;
 use std::ptr;
 
+use blazesym::helper::ElfResolver;
 use blazesym::symbolize::cache;
 use blazesym::symbolize::source::Elf;
 use blazesym::symbolize::source::GsymData;
@@ -21,6 +25,7 @@ use blazesym::symbolize::source::Process;
 use blazesym::symbolize::source::Source;
 use blazesym::symbolize::CodeInfo;
 use blazesym::symbolize::Input;
+use blazesym::symbolize::ProcessMemberType;
 use blazesym::symbolize::Reason;
 use blazesym::symbolize::Sym;
 use blazesym::symbolize::Symbolized;
@@ -689,9 +694,39 @@ pub struct blaze_symbolizer_opts {
     /// languages are Rust and C++ and the flag will have no effect if
     /// the underlying language does not mangle symbols (such as C).
     pub demangle: bool,
+    /// Explicit pad to avoid implicit gaps.
+    pub _pad_a: [u8; 4],
+    /// Callback for custom process member path dispatch.
+    ///
+    /// When set, this callback is invoked for each process member that
+    /// has a file path during process symbolization. It allows the
+    /// caller to provide an alternative ELF file path for
+    /// symbolization (e.g., fetched via debuginfod).
+    ///
+    /// The callback receives the `/proc/<pid>/map_files/...` path and
+    /// the symbolic path from `/proc/<pid>/maps`, along with the
+    /// user-provided context pointer
+    /// ([`process_dispatch_ctx`][Self::process_dispatch_ctx]).
+    ///
+    /// The callback should return one of:
+    /// - A `malloc`'d path string to an alternative ELF file to use for
+    ///   symbolization. The library will `free` this string after use.
+    /// - `NULL` to use the default symbolization behavior for this member.
+    ///
+    /// Set to `NULL` to disable custom dispatch.
+    pub process_dispatch_cb: Option<
+        unsafe extern "C" fn(
+            maps_file: *const c_char,
+            symbolic_path: *const c_char,
+            ctx: *mut c_void,
+        ) -> *mut c_char,
+    >,
+    /// Opaque context pointer passed to
+    /// [`process_dispatch_cb`][Self::process_dispatch_cb].
+    pub process_dispatch_ctx: *mut c_void,
     /// Unused member available for future expansion. Must be initialized
     /// to zero.
-    pub reserved: [u8; 20],
+    pub reserved: [u8; 24],
 }
 
 impl Default for blaze_symbolizer_opts {
@@ -704,7 +739,10 @@ impl Default for blaze_symbolizer_opts {
             code_info: false,
             inlined_fns: false,
             demangle: false,
-            reserved: [0; 20],
+            _pad_a: [0; 4],
+            process_dispatch_cb: None,
+            process_dispatch_ctx: ptr::null_mut(),
+            reserved: [0; 24],
         }
     }
 }
@@ -760,6 +798,9 @@ pub unsafe extern "C" fn blaze_symbolizer_new_opts(
         code_info,
         inlined_fns,
         demangle,
+        _pad_a: _,
+        process_dispatch_cb,
+        process_dispatch_ctx,
         reserved: _,
     } = opts;
 
@@ -792,6 +833,41 @@ pub unsafe extern "C" fn blaze_symbolizer_new_opts(
         {
             builder
         }
+    };
+
+    let builder = if let Some(cb) = process_dispatch_cb {
+        // Cast the context pointer to usize so the closure is Send.
+        // The caller is responsible for thread safety of the context.
+        let ctx = process_dispatch_ctx as usize;
+        builder.set_process_dispatcher(move |info| {
+            let ctx = ctx as *mut c_void;
+            match info.member_entry {
+                ProcessMemberType::Path(entry) => {
+                    let maps_file = CString::new(entry.maps_file.as_os_str().as_bytes())
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    let sym_path = CString::new(entry.symbolic_path.as_os_str().as_bytes())
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    // SAFETY: The caller guarantees that the callback is safe
+                    //         to call with valid C string pointers and the
+                    //         provided context.
+                    let result = unsafe { cb(maps_file.as_ptr(), sym_path.as_ptr(), ctx) };
+                    if result.is_null() {
+                        return Ok(None)
+                    }
+                    // SAFETY: The callback is required to return a valid,
+                    //         NUL-terminated, `malloc`'d C string.
+                    let path_cstr = unsafe { CStr::from_ptr(result) };
+                    let path = Path::new(OsStr::from_bytes(path_cstr.to_bytes()));
+                    let resolver = ElfResolver::open(path);
+                    // SAFETY: The string was `malloc`'d by the callback.
+                    unsafe { libc::free(result.cast()) };
+                    Ok(Some(Box::new(resolver?)))
+                }
+                _ => Ok(None),
+            }
+        })
+    } else {
+        builder
     };
 
     let symbolizer = builder.build();
@@ -1355,7 +1431,7 @@ mod tests {
         assert_eq!(mem::size_of::<blaze_symbolize_src_process>(), 32);
         assert_eq!(mem::size_of::<blaze_symbolize_src_gsym_data>(), 40);
         assert_eq!(mem::size_of::<blaze_symbolize_src_gsym_file>(), 32);
-        assert_eq!(mem::size_of::<blaze_symbolizer_opts>(), 48);
+        assert_eq!(mem::size_of::<blaze_symbolizer_opts>(), 72);
         assert_eq!(mem::size_of::<blaze_symbolize_code_info>(), 32);
         assert_eq!(mem::size_of::<blaze_symbolize_inlined_fn>(), 48);
         assert_eq!(mem::size_of::<blaze_sym>(), 104);
@@ -1465,7 +1541,7 @@ mod tests {
         };
         assert_eq!(
             format!("{opts:?}"),
-            "blaze_symbolizer_opts { type_size: 16, debug_dirs: 0x0, debug_dirs_len: 0, auto_reload: false, code_info: false, inlined_fns: false, demangle: true, reserved: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }"
+            "blaze_symbolizer_opts { type_size: 16, debug_dirs: 0x0, debug_dirs_len: 0, auto_reload: false, code_info: false, inlined_fns: false, demangle: true, _pad_a: [0, 0, 0, 0], process_dispatch_cb: None, process_dispatch_ctx: 0x0, reserved: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }"
         );
     }
 
@@ -2301,5 +2377,115 @@ mod tests {
 
         let () = unsafe { blaze_syms_free(result) };
         let () = unsafe { blaze_symbolizer_free(symbolizer) };
+    }
+
+    /// Helper to test process dispatch callbacks. Creates a symbolizer
+    /// with the given callback (ctx set to `0xc0ffee`), symbolizes
+    /// the given address, and checks that the symbol name contains
+    /// `expected_sym`. If `expected_sym` is `None`, asserts that
+    /// symbolization failed.
+    unsafe fn symbolize_with_dispatch(
+        cb: unsafe extern "C" fn(*const c_char, *const c_char, *mut c_void) -> *mut c_char,
+        addr: Addr,
+        expected_sym: Option<&str>,
+    ) {
+        let opts = blaze_symbolizer_opts {
+            process_dispatch_cb: Some(cb),
+            process_dispatch_ctx: 0xc0ffee as *mut c_void,
+            ..Default::default()
+        };
+        let symbolizer = unsafe { blaze_symbolizer_new_opts(&opts) };
+        assert!(!symbolizer.is_null());
+
+        let process_src = blaze_symbolize_src_process {
+            pid: 0,
+            debug_syms: true,
+            ..Default::default()
+        };
+
+        let addrs = [addr];
+        let result = unsafe {
+            blaze_symbolize_process_abs_addrs(symbolizer, &process_src, addrs.as_ptr(), addrs.len())
+        };
+        let () = unsafe { blaze_symbolizer_free(symbolizer) };
+
+        if let Some(expected) = expected_sym {
+            assert!(!result.is_null());
+            let result = unsafe { &*result };
+            assert_eq!(result.cnt, 1);
+            let syms = unsafe { slice::from_raw_parts(result.syms.as_ptr(), result.cnt) };
+            let name = unsafe { CStr::from_ptr(syms[0].name) }.to_str().unwrap();
+            assert!(name.contains(expected), "{name}");
+            let () = unsafe { blaze_syms_free(result) };
+        } else {
+            assert!(result.is_null());
+        }
+    }
+
+    /// Make sure that we can symbolize an address in the current process
+    /// using a custom process dispatch callback that returns the
+    /// `maps_file` path as-is.
+    #[test]
+    fn symbolize_in_process_with_dispatch() {
+        unsafe extern "C" fn cb(
+            maps_file: *const c_char,
+            _symbolic_path: *const c_char,
+            ctx: *mut c_void,
+        ) -> *mut c_char {
+            assert_eq!(ctx as usize, 0xc0ffee);
+            unsafe { libc::strdup(maps_file) }
+        }
+
+        unsafe {
+            symbolize_with_dispatch(
+                cb,
+                symbolize_in_process_with_dispatch as *const () as Addr,
+                Some("symbolize_in_process_with_dispatch"),
+            )
+        };
+    }
+
+    /// Make sure that a dispatch callback returning NULL falls back to
+    /// the default symbolization behavior.
+    #[test]
+    fn symbolize_in_process_with_null_dispatch() {
+        unsafe extern "C" fn cb(
+            _maps_file: *const c_char,
+            _symbolic_path: *const c_char,
+            ctx: *mut c_void,
+        ) -> *mut c_char {
+            assert_eq!(ctx as usize, 0xc0ffee);
+            ptr::null_mut()
+        }
+
+        unsafe {
+            symbolize_with_dispatch(
+                cb,
+                symbolize_in_process_with_null_dispatch as *const () as Addr,
+                Some("symbolize_in_process_with_null_dispatch"),
+            )
+        };
+    }
+
+    /// Make sure that a dispatch callback returning a non-existent path
+    /// causes symbolization to fail for that address.
+    #[test]
+    fn symbolize_in_process_with_bad_dispatch() {
+        unsafe extern "C" fn cb(
+            _maps_file: *const c_char,
+            _symbolic_path: *const c_char,
+            ctx: *mut c_void,
+        ) -> *mut c_char {
+            assert_eq!(ctx as usize, 0xc0ffee);
+            unsafe { libc::strdup(c"/no/such/file".as_ptr()) }
+        }
+
+        unsafe {
+            symbolize_with_dispatch(
+                cb,
+                symbolize_in_process_with_bad_dispatch as *const () as Addr,
+                None,
+            )
+        };
     }
 }
