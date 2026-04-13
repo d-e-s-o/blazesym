@@ -21,7 +21,6 @@ use crate::util;
 use crate::util::bytes_to_path;
 use crate::util::from_radix_16;
 use crate::util::split_bytes;
-use crate::util::trim_ascii;
 use crate::util::ReadRaw as _;
 use crate::Addr;
 use crate::BuildId;
@@ -323,7 +322,7 @@ fn parse_maps_line<'line>(line: &'line [u8], pid: Pid) -> Result<MapsEntry> {
     // Note that by design, a path may not be present and so we may not be able
     // to successfully split.
     let path_str = split_once_opt(line)
-        .map(|(_inode, line)| trim_ascii(line))
+        .map(|(_inode, line)| line.trim_ascii())
         .unwrap_or(b"");
     let path_name = parse_path_name(path_str, pid, loaded_addr, end_addr)?;
 

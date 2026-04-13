@@ -119,42 +119,6 @@ where
     Some((left, &right[1..]))
 }
 
-// TODO: This is a copy of unstable `trim_ascii_start` from std. Once
-//       stabilized, we should remove this functionality in favor of the std
-//       version.
-#[inline]
-pub(crate) fn trim_ascii_start(mut bytes: &[u8]) -> &[u8] {
-    while let [first, rest @ ..] = bytes {
-        if first.is_ascii_whitespace() {
-            bytes = rest;
-        } else {
-            break;
-        }
-    }
-    bytes
-}
-
-// TODO: This is a copy of unstable `trim_ascii_end` from std. Once stabilized,
-//       we should remove this functionality in favor of the std version.
-#[inline]
-pub(crate) fn trim_ascii_end(mut bytes: &[u8]) -> &[u8] {
-    while let [rest @ .., last] = bytes {
-        if last.is_ascii_whitespace() {
-            bytes = rest;
-        } else {
-            break;
-        }
-    }
-    bytes
-}
-
-// TODO: This is a copy of unstable `trim_ascii` from std. Once stabilized,
-//       we should remove this functionality in favor of the std version.
-#[inline]
-pub(crate) fn trim_ascii(bytes: &[u8]) -> &[u8] {
-    trim_ascii_end(trim_ascii_start(bytes))
-}
-
 /// Splits the slice on the first element that matches the specified predicate.
 // TODO: This is a copy of unstable `<[u8]>::split_once` from std. Once
 //       stabilized, we should remove this functionality in favor of the std
