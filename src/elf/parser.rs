@@ -425,9 +425,7 @@ impl<'elf> SymbolTableCache<'elf> {
                     .ok_or_invalid_input(|| "no valid string found in ELF string table")?;
                 let name = SymName {
                     idx: name_idx,
-                    // TODO: May want to use `CStr::count_bytes` once
-                    //       our MSRV is >=1.79.
-                    len: cname.to_bytes().len(),
+                    len: cname.count_bytes(),
                 };
                 Ok((name, idx))
             })
