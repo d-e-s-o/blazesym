@@ -25,7 +25,7 @@
 // > IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // > DEALINGS IN THE SOFTWARE.
 
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 
 use super::function::Function;
 use super::function::Functions;
@@ -61,9 +61,9 @@ pub(super) struct Unit<'dwarf> {
     offset: gimli::DebugInfoOffset<<R<'dwarf> as gimli::Reader>::Offset>,
     dw_unit: gimli::Unit<R<'dwarf>>,
     lang: Option<gimli::DwLang>,
-    lines: OnceCell<gimli::Result<Lines<'dwarf>>>,
-    funcs: OnceCell<gimli::Result<Functions<'dwarf>>>,
-    dwo: OnceCell<gimli::Result<Option<DwoUnit<'dwarf>>>>,
+    lines: OnceLock<gimli::Result<Lines<'dwarf>>>,
+    funcs: OnceLock<gimli::Result<Functions<'dwarf>>>,
+    dwo: OnceLock<gimli::Result<Option<DwoUnit<'dwarf>>>>,
 }
 
 impl<'dwarf> Unit<'dwarf> {
@@ -71,7 +71,7 @@ impl<'dwarf> Unit<'dwarf> {
         offset: gimli::DebugInfoOffset<<R<'dwarf> as gimli::Reader>::Offset>,
         unit: gimli::Unit<R<'dwarf>>,
         lang: Option<gimli::DwLang>,
-        lines: OnceCell<Lines<'dwarf>>,
+        lines: OnceLock<Lines<'dwarf>>,
     ) -> Self {
         Self {
             offset,
@@ -80,10 +80,10 @@ impl<'dwarf> Unit<'dwarf> {
             lines: lines
                 .into_inner()
                 .map(Result::Ok)
-                .map(OnceCell::from)
+                .map(OnceLock::from)
                 .unwrap_or_default(),
-            funcs: OnceCell::new(),
-            dwo: OnceCell::new(),
+            funcs: OnceLock::new(),
+            dwo: OnceLock::new(),
         }
     }
 

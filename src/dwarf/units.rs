@@ -25,11 +25,10 @@
 // > IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // > DEALINGS IN THE SOFTWARE.
 
-use std::cell::OnceCell;
 use std::ops::ControlFlow;
+use std::sync::OnceLock;
 
 use crate::log::warn;
-use crate::util::OnceCellExt as _;
 use crate::Result;
 
 use super::function::Function;
@@ -193,24 +192,26 @@ impl<'dwarf> Units<'dwarf> {
                 }
             }
 
-            let lines = OnceCell::new();
+            let lines = OnceLock::new();
             if need_unit_range {
                 // The unit did not declare any ranges.
                 // Try to get some ranges from the line program sequences.
                 if let Some(ref ilnp) = dw_unit.line_program {
-                    if let Ok(lines) =
-                        lines.get_or_try_init_(|| Lines::parse(dw_unit_ref, ilnp.clone()))
-                    {
-                        for sequence in lines.sequences.iter() {
-                            unit_ranges.push(UnitRange {
-                                range: gimli::Range {
-                                    begin: sequence.start,
-                                    end: sequence.end,
-                                },
-                                unit_id,
-                                max_end: 0,
-                            })
+                    match Lines::parse(dw_unit_ref, ilnp.clone()) {
+                        Ok(parsed_lines) => {
+                            for sequence in parsed_lines.sequences.iter() {
+                                unit_ranges.push(UnitRange {
+                                    range: gimli::Range {
+                                        begin: sequence.start,
+                                        end: sequence.end,
+                                    },
+                                    unit_id,
+                                    max_end: 0,
+                                })
+                            }
+                            drop(lines.set(parsed_lines));
                         }
+                        Err(_) => {}
                     }
                 }
             }
@@ -444,6 +445,62 @@ impl<'dwarf> Units<'dwarf> {
         gimli::UnitRef::new(&self.dwarf, unit)
     }
 
+    /// Initialize all function data structures in parallel.
+    #[cfg(test)]
+    #[cfg(feature = "nightly")]
+    fn parse_functions_parallel(&self) -> gimli::Result<()> {
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        crate::runtime::with_scope(|scope| {
+            let promises = self
+                .units
+                .chunks(self.units.len().div_ceil(num_threads).max(1))
+                .map(|chunk| {
+                    crate::runtime::Promise::new(scope, move || -> gimli::Result<()> {
+                        for unit in chunk {
+                            unit.parse_functions(self)?;
+                        }
+                        Ok(())
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            for mut promise in promises {
+                (*promise.get())?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Initialize all line data structures in parallel.
+    #[cfg(test)]
+    #[cfg(feature = "nightly")]
+    fn parse_lines_parallel(&self) -> gimli::Result<()> {
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        crate::runtime::with_scope(|scope| {
+            let promises = self
+                .units
+                .chunks(self.units.len().div_ceil(num_threads).max(1))
+                .map(|chunk| {
+                    crate::runtime::Promise::new(scope, move || -> gimli::Result<()> {
+                        for unit in chunk {
+                            unit.parse_lines(self)?;
+                        }
+                        Ok(())
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            for mut promise in promises {
+                (*promise.get())?;
+            }
+            Ok(())
+        })
+    }
+
     /// Initialize all function data structures. This is used for benchmarks.
     #[cfg(test)]
     #[cfg(feature = "nightly")]
@@ -474,6 +531,13 @@ impl<'dwarf> Units<'dwarf> {
         }
         Ok(())
     }
+}
+
+// Ensure `Units` is `Send + Sync` so it can be shared across threads.
+#[cfg(test)]
+fn _assert_units_send_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Units<'static>>();
 }
 
 
@@ -715,6 +779,39 @@ mod tests {
             let dwarf = Dwarf::<R>::load(&mut load_section).unwrap();
             let ctx = addr2line::Context::from_dwarf(dwarf).unwrap();
             let _lines = black_box(ctx.parse_lines().unwrap());
+        });
+    }
+
+    /// Benchmark the parallel parsing of all functions, end-to-end.
+    #[cfg(feature = "nightly")]
+    #[bench]
+    fn bench_function_parsing_blazesym_parallel(b: &mut Bencher) {
+        let bin_name = env::current_exe().unwrap();
+        let parser = ElfParser::open(bin_name.as_path()).unwrap();
+        let relocs = parser.section_relocations().unwrap();
+        let mut load_section = |section| reader::load_section(&parser, section, relocs);
+
+        let () = b.iter(|| {
+            let dwarf = Dwarf::<R>::load(&mut load_section).unwrap();
+            let units = Units::parse(black_box(dwarf), black_box(None)).unwrap();
+            let _funcs = black_box(units.parse_functions_parallel().unwrap());
+        });
+    }
+
+    /// Benchmark the parallel parsing of source location information,
+    /// end-to-end.
+    #[cfg(feature = "nightly")]
+    #[bench]
+    fn bench_line_parsing_blazesym_parallel(b: &mut Bencher) {
+        let bin_name = env::current_exe().unwrap();
+        let parser = ElfParser::open(bin_name.as_path()).unwrap();
+        let relocs = parser.section_relocations().unwrap();
+        let mut load_section = |section| reader::load_section(&parser, section, relocs);
+
+        let () = b.iter(|| {
+            let dwarf = Dwarf::<R>::load(&mut load_section).unwrap();
+            let units = Units::parse(black_box(dwarf), black_box(None)).unwrap();
+            let _lines = black_box(units.parse_lines_parallel().unwrap());
         });
     }
 }

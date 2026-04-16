@@ -25,7 +25,7 @@
 // > IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // > DEALINGS IN THE SOFTWARE.
 
-use std::cell::OnceCell;
+use std::sync::OnceLock;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::fmt::Formatter;
@@ -353,7 +353,7 @@ pub(crate) struct Function<'dwarf> {
     /// The function's range (begin and end address).
     pub(crate) range: Option<gimli::Range>,
     /// List of inlined function calls.
-    pub(super) inlined_functions: OnceCell<gimli::Result<InlinedFunctions<'dwarf>>>,
+    pub(super) inlined_functions: OnceLock<gimli::Result<InlinedFunctions<'dwarf>>>,
 }
 
 impl<'dwarf> Function<'dwarf> {
@@ -521,7 +521,7 @@ impl<'dwarf> Functions<'dwarf> {
                             dw_die_offset,
                             name,
                             range: ranges.bounds(),
-                            inlined_functions: OnceCell::new(),
+                            inlined_functions: OnceLock::new(),
                         };
                         functions.push(function);
                     }
@@ -599,7 +599,7 @@ mod tests {
             dw_die_offset: gimli::UnitOffset(24),
             name: None,
             range: None,
-            inlined_functions: OnceCell::new(),
+            inlined_functions: OnceLock::new(),
         };
         assert_ne!(format!("{func:?}"), "");
 

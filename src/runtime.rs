@@ -7,12 +7,16 @@ type GlobalScheduler = SerialRunner;
 #[cfg(not(feature = "multi-threaded"))]
 const GLOBAL_SCHEDULER: GlobalScheduler = SerialRunner;
 
+/// The scope type used for scheduling work.
+#[cfg(not(feature = "multi-threaded"))]
+pub(crate) type Scope<'scope, 'env> = ();
+
 // TODO: Should be part of `Scheduler` trait, except it can't for <reasons>
 //       pertaining various restrictions on the Rust side.
 #[cfg(not(feature = "multi-threaded"))]
-fn with_scope<'env, F>(f: F)
+pub(crate) fn with_scope<'env, F, R>(f: F) -> R
 where
-    F: for<'scope> FnOnce(&'scope ())
+    F: for<'scope> FnOnce(&'scope ()) -> R
 {
    f(&())
 }
@@ -22,20 +26,24 @@ type GlobalScheduler = DumbThreadedScheduler;
 #[cfg(feature = "multi-threaded")]
 const GLOBAL_SCHEDULER: GlobalScheduler = DumbThreadedScheduler;
 
+/// The scope type used for scheduling work.
 #[cfg(feature = "multi-threaded")]
-fn with_scope<'env, F>(f: F)
+pub(crate) type Scope<'scope, 'env> = thread::Scope<'scope, 'env>;
+
+#[cfg(feature = "multi-threaded")]
+pub(crate) fn with_scope<'env, F, R>(f: F) -> R
 where
-    F: for<'scope> FnOnce(&'scope thread::Scope<'scope, 'env>),
+    F: for<'scope> FnOnce(&'scope thread::Scope<'scope, 'env>) -> R,
 {
     thread::scope(f)
 }
 
 
-trait Handle<T> {
+pub(crate) trait Handle<T> {
     fn get(self) -> T;
 }
 
-trait Scheduler {
+pub(crate) trait Scheduler {
     type Scope<'scope, 'env: 'scope>;
     type Handle<'scope, T>: Handle<T>
     where
@@ -51,7 +59,7 @@ trait Scheduler {
         T: Send + 'scope;
 }
 
-struct ImmediateHandle<T>(T);
+pub(crate) struct ImmediateHandle<T>(T);
 
 impl<T> Handle<T> for ImmediateHandle<T> {
     #[inline]
@@ -60,7 +68,7 @@ impl<T> Handle<T> for ImmediateHandle<T> {
     }
 }
 
-struct SerialRunner;
+pub(crate) struct SerialRunner;
 
 impl Scheduler for SerialRunner {
     type Scope<'scope, 'env: 'scope> = ();
@@ -90,7 +98,7 @@ impl<T> Handle<T> for thread::ScopedJoinHandle<'_, T> {
 }
 
 
-struct DumbThreadedScheduler;
+pub(crate) struct DumbThreadedScheduler;
 
 impl Scheduler for DumbThreadedScheduler {
     type Scope<'scope, 'env: 'scope> = thread::Scope<'scope, 'env>;
@@ -116,7 +124,7 @@ enum HandleOrResolved<H, R> {
     Resolved(R),
 }
 
-struct Promise<'scope, 'env, T>
+pub(crate) struct Promise<'scope, 'env, T>
 where
     T: 'scope,
 {
