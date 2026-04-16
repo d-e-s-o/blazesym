@@ -449,18 +449,13 @@ impl<'dwarf> Units<'dwarf> {
     #[cfg(test)]
     #[cfg(feature = "nightly")]
     fn parse_functions_parallel(&self) -> gimli::Result<()> {
-        let num_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
         crate::runtime::with_scope(|scope| {
             let promises = self
                 .units
-                .chunks(self.units.len().div_ceil(num_threads).max(1))
-                .map(|chunk| {
+                .iter()
+                .map(|unit| {
                     crate::runtime::Promise::new(scope, move || -> gimli::Result<()> {
-                        for unit in chunk {
-                            unit.parse_functions(self)?;
-                        }
+                        unit.parse_functions(self)?;
                         Ok(())
                     })
                 })
@@ -477,18 +472,13 @@ impl<'dwarf> Units<'dwarf> {
     #[cfg(test)]
     #[cfg(feature = "nightly")]
     fn parse_lines_parallel(&self) -> gimli::Result<()> {
-        let num_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
         crate::runtime::with_scope(|scope| {
             let promises = self
                 .units
-                .chunks(self.units.len().div_ceil(num_threads).max(1))
-                .map(|chunk| {
+                .iter()
+                .map(|unit| {
                     crate::runtime::Promise::new(scope, move || -> gimli::Result<()> {
-                        for unit in chunk {
-                            unit.parse_lines(self)?;
-                        }
+                        unit.parse_lines(self)?;
                         Ok(())
                     })
                 })

@@ -1,5 +1,8 @@
 use std::hint::unreachable_unchecked;
 use std::marker::PhantomData;
+use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
 use std::thread;
 
 #[cfg(not(feature = "multi-threaded"))]
@@ -22,20 +25,25 @@ where
 }
 
 #[cfg(feature = "multi-threaded")]
-type GlobalScheduler = DumbThreadedScheduler;
+type GlobalScheduler = ThreadPoolScheduler;
 #[cfg(feature = "multi-threaded")]
-const GLOBAL_SCHEDULER: GlobalScheduler = DumbThreadedScheduler;
+const GLOBAL_SCHEDULER: GlobalScheduler = ThreadPoolScheduler;
 
 /// The scope type used for scheduling work.
 #[cfg(feature = "multi-threaded")]
-pub(crate) type Scope<'scope, 'env> = thread::Scope<'scope, 'env>;
+pub(crate) type Scope<'scope, 'env> = ScopedPool<'scope, 'env>;
 
 #[cfg(feature = "multi-threaded")]
 pub(crate) fn with_scope<'env, F, R>(f: F) -> R
 where
-    F: for<'scope> FnOnce(&'scope thread::Scope<'scope, 'env>) -> R,
+    F: for<'scope> FnOnce(&'scope ScopedPool<'scope, 'env>) -> R,
 {
-    thread::scope(f)
+    thread::scope(|scope| {
+        let pool = ScopedPool::new(scope);
+        f(&pool)
+        // pool is dropped here: workers are shut down
+        // scope exit: all scoped threads are joined
+    })
 }
 
 
@@ -90,19 +98,192 @@ impl Scheduler for SerialRunner {
     }
 }
 
-impl<T> Handle<T> for thread::ScopedJoinHandle<'_, T> {
-    #[inline]
-    fn get(self) -> T {
-        self.join().expect("thread panicked")
+
+// -- Thread Pool Scheduler (feature = "multi-threaded") --
+
+/// A type-erased job for the thread pool.
+#[cfg(feature = "multi-threaded")]
+struct Job {
+    func: Box<dyn FnOnce() + Send>,
+}
+
+/// The shared state between the pool and its workers.
+#[cfg(feature = "multi-threaded")]
+struct SharedQueue {
+    /// The job queue. `None` signals shutdown.
+    queue: Mutex<Option<Vec<Job>>>,
+    /// Notifies workers when new jobs are available or shutdown occurs.
+    condvar: Condvar,
+}
+
+/// A scoped thread pool that pre-spawns worker threads.
+///
+/// Workers persist for the lifetime of the pool and pull jobs from a
+/// shared queue. This avoids the overhead of creating a new OS thread
+/// per task.
+///
+/// # Safety
+///
+/// This pool uses `unsafe` to erase the `'scope` lifetime from task
+/// closures before sending them to worker threads. The safety
+/// invariant is that all jobs complete before the pool is dropped,
+/// which is guaranteed by:
+/// 1. `Drop` sets the queue to `None` (shutdown signal)
+/// 2. `Drop` waits (via condvar) until all workers have exited
+/// 3. The pool lives inside a `thread::scope`, which joins all
+///    spawned threads before returning
+///
+/// Therefore, all borrowed data referenced by `'scope` remains valid
+/// for the entire duration of job execution.
+#[cfg(feature = "multi-threaded")]
+pub(crate) struct ScopedPool<'scope, 'env: 'scope> {
+    shared: Arc<SharedQueue>,
+    /// The number of workers still alive. Workers decrement this
+    /// atomically on exit. Drop waits until this reaches 0.
+    alive: Arc<std::sync::atomic::AtomicUsize>,
+    _phantom: PhantomData<(&'scope (), &'env ())>,
+}
+
+#[cfg(feature = "multi-threaded")]
+impl<'scope, 'env: 'scope> ScopedPool<'scope, 'env> {
+    fn new(scope: &'scope thread::Scope<'scope, 'env>) -> Self {
+        let num_threads = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+
+        let shared = Arc::new(SharedQueue {
+            queue: Mutex::new(Some(Vec::new())),
+            condvar: Condvar::new(),
+        });
+        let alive = Arc::new(std::sync::atomic::AtomicUsize::new(num_threads));
+
+        for _ in 0..num_threads {
+            let shared = Arc::clone(&shared);
+            let alive = Arc::clone(&alive);
+            scope.spawn(move || {
+                Self::worker_loop(&shared);
+                alive.fetch_sub(1, std::sync::atomic::Ordering::Release);
+                shared.condvar.notify_all();
+            });
+        }
+
+        Self {
+            shared,
+            alive,
+            _phantom: PhantomData,
+        }
+    }
+
+    fn worker_loop(shared: &SharedQueue) {
+        loop {
+            let job = {
+                let mut guard = shared.queue.lock().unwrap();
+                loop {
+                    match guard.as_mut() {
+                        None => return, // Shutdown signal.
+                        Some(queue) => {
+                            if let Some(job) = queue.pop() {
+                                break job;
+                            }
+                        }
+                    }
+                    guard = shared.condvar.wait(guard).unwrap();
+                }
+            };
+            (job.func)();
+        }
+    }
+
+    fn push_job(&self, job: Job) {
+        let mut guard = self.shared.queue.lock().unwrap();
+        if let Some(queue) = guard.as_mut() {
+            queue.push(job);
+        }
+        // Wake one worker to pick up the job.
+        self.shared.condvar.notify_one();
+    }
+}
+
+#[cfg(feature = "multi-threaded")]
+impl Drop for ScopedPool<'_, '_> {
+    fn drop(&mut self) {
+        // Signal shutdown.
+        {
+            let mut guard = self.shared.queue.lock().unwrap();
+            *guard = None;
+        }
+        self.shared.condvar.notify_all();
+
+        // Wait until all workers have exited. This is necessary so
+        // that we don't return from `with_scope` while workers are
+        // still running (and potentially accessing borrowed data).
+        // Note: the actual thread joining is handled by
+        // `thread::scope`, but we need to ensure workers have
+        // finished their current job before we proceed.
+        let mut guard = self.shared.queue.lock().unwrap();
+        while self.alive.load(std::sync::atomic::Ordering::Acquire) > 0 {
+            guard = self.shared.condvar.wait(guard).unwrap();
+        }
     }
 }
 
 
-pub(crate) struct DumbThreadedScheduler;
+/// A result slot for communicating a value from a worker back to the
+/// caller.
+#[cfg(feature = "multi-threaded")]
+struct ResultSlot<T> {
+    value: Mutex<Option<T>>,
+    ready: Condvar,
+}
 
-impl Scheduler for DumbThreadedScheduler {
-    type Scope<'scope, 'env: 'scope> = thread::Scope<'scope, 'env>;
-    type Handle<'scope, T> = thread::ScopedJoinHandle<'scope, T>
+#[cfg(feature = "multi-threaded")]
+impl<T> ResultSlot<T> {
+    fn new() -> Self {
+        Self {
+            value: Mutex::new(None),
+            ready: Condvar::new(),
+        }
+    }
+
+    fn set(&self, value: T) {
+        let mut guard = self.value.lock().unwrap();
+        *guard = Some(value);
+        self.ready.notify_one();
+    }
+
+    fn wait(&self) -> T {
+        let mut guard = self.value.lock().unwrap();
+        loop {
+            if let Some(value) = guard.take() {
+                return value;
+            }
+            guard = self.ready.wait(guard).unwrap();
+        }
+    }
+}
+
+
+/// Handle for a result that will be produced by a pool worker.
+#[cfg(feature = "multi-threaded")]
+pub(crate) struct PoolHandle<T> {
+    slot: Arc<ResultSlot<T>>,
+}
+
+#[cfg(feature = "multi-threaded")]
+impl<T> Handle<T> for PoolHandle<T> {
+    #[inline]
+    fn get(self) -> T {
+        self.slot.wait()
+    }
+}
+
+
+pub(crate) struct ThreadPoolScheduler;
+
+#[cfg(feature = "multi-threaded")]
+impl Scheduler for ThreadPoolScheduler {
+    type Scope<'scope, 'env: 'scope> = ScopedPool<'scope, 'env>;
+    type Handle<'scope, T> = PoolHandle<T>
     where
         T: 'scope;
 
@@ -115,9 +296,28 @@ impl Scheduler for DumbThreadedScheduler {
         F: FnOnce() -> T + Send + 'scope,
         T: Send + 'scope,
     {
-        scope.spawn(f)
+        let slot = Arc::new(ResultSlot::new());
+        let slot_clone = Arc::clone(&slot);
+
+        // Wrap the closure: run f(), store result in slot.
+        let wrapper: Box<dyn FnOnce() + Send + 'scope> = Box::new(move || {
+            let result = f();
+            slot_clone.set(result);
+        });
+
+        // SAFETY: The ScopedPool guarantees all jobs complete before
+        // the pool is dropped (Drop waits for all workers). The pool
+        // lives inside a `thread::scope` which joins all threads
+        // before returning. Therefore, all borrowed data in 'scope
+        // remains valid for the entire duration of job execution.
+        let wrapper: Box<dyn FnOnce() + Send + 'static> =
+            unsafe { std::mem::transmute(wrapper) };
+
+        scope.push_job(Job { func: wrapper });
+        PoolHandle { slot }
     }
 }
+
 
 enum HandleOrResolved<H, R> {
     Handle(Option<H>),
@@ -193,7 +393,6 @@ mod tests {
         let slice = data.as_slice();
 
         with_scope(move |scope| {
-        //thread::scope(move |scope| {
             let mut future1 = Future::new(scope, || {
                 println!("PARSING ON THREAD: {}", thread_name());
                 parse(slice).split_at(5).0
