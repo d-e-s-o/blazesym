@@ -2112,3 +2112,30 @@ fn create_elf_resolver_from_non_existing_path() {
 
     assert_eq!(err.kind(), ErrorKind::NotFound);
 }
+
+/// Make sure that [`ElfResolver::open_with_debug_dirs`] can be created and
+/// registered successfully.
+#[test]
+fn create_elf_resolver_with_debug_dirs() {
+    let bin_name = Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("test-stable-addrs.bin");
+
+    let debug_dirs = vec![PathBuf::from("/usr/lib/debug")];
+    let resolver = ElfResolver::open_with_debug_dirs(&bin_name, &debug_dirs).unwrap();
+    let mut symbolizer = Symbolizer::new();
+    let () = symbolizer
+        .register_elf_resolver(&bin_name, Rc::new(resolver))
+        .unwrap();
+}
+
+/// Make sure that [`ElfResolver::open_with_debug_dirs`] fails for a
+/// non-existing file.
+#[test]
+fn create_elf_resolver_with_debug_dirs_non_existing_path() {
+    let path = Path::new("/This/Path/Does.Not/Exist");
+    let debug_dirs = vec![PathBuf::from("/usr/lib/debug")];
+    let err = ElfResolver::open_with_debug_dirs(path, &debug_dirs).unwrap_err();
+
+    assert_eq!(err.kind(), ErrorKind::NotFound);
+}

@@ -174,6 +174,24 @@ impl ElfResolver {
         Self::from_parser(parser, Some(&debug_dirs), elf_cache)
     }
 
+    /// Create an `ElfResolver` that loads data from the provided file,
+    /// using the given directories to search for split debug
+    /// information.
+    pub fn open_with_debug_dirs<P, D, DP>(path: P, debug_dirs: D) -> Result<Self>
+    where
+        P: AsRef<Path>,
+        D: IntoIterator<Item = DP>,
+        DP: AsRef<Path>,
+    {
+        let path = path.as_ref();
+        let parser = Rc::new(ElfParser::open(path)?);
+        let debug_dirs = debug_dirs
+            .into_iter()
+            .map(|p| p.as_ref().to_path_buf())
+            .collect::<Vec<_>>();
+        Self::from_parser(parser, Some(&debug_dirs), None)
+    }
+
     /// Create a new [`ElfResolver`] using `parser`.
     ///
     /// If `debug_dirs` is `Some`, interpret DWARF debug information. If it is
