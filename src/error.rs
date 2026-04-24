@@ -778,6 +778,11 @@ mod tests {
         assert_eq!(format!("{err}"), "some invalid data");
         // The original error kind won't be preserved, unfortunately.
         assert_eq!(err.kind(), ErrorKind::Other);
+
+        // Bare `io::Error` does not carry a source.
+        assert!(err.source().is_none());
+        assert!(format!("{err:?}").starts_with("Error: some invalid data"));
+        assert_ne!(format!("{err:#?}"), "");
     }
 
     /// Check `Error::kind` reports the expected value.
@@ -801,6 +806,15 @@ mod tests {
 
         let err = Error::from(io::Error::new(io::ErrorKind::OutOfMemory, "oom"));
         assert_eq!(err.kind(), ErrorKind::OutOfMemory);
+
+        let err = Error::from(io::Error::new(io::ErrorKind::BrokenPipe, "broken"));
+        assert_eq!(err.kind(), ErrorKind::Other);
+
+        #[cfg(feature = "dwarf")]
+        {
+            let err = Error::from(gimli::Error::Io);
+            assert_eq!(err.kind(), ErrorKind::InvalidDwarf);
+        }
     }
 
     /// Check that we can format errors as expected.
@@ -923,5 +937,25 @@ Caused by:
         let debug = format!("{err:?}");
 
         assert_eq!(debug.find("Stack backtrace"), None);
+    }
+
+    /// Check that we can format a `gimli::Error` based [`Error`].
+    #[cfg(feature = "dwarf")]
+    #[tag(miri)]
+    #[test]
+    fn dwarf_error_formatting() {
+        let err = Error::from(gimli::Error::Io);
+        assert!(format!("{err:?}").starts_with("Error: "));
+        assert_ne!(format!("{err:#?}"), "");
+    }
+
+    /// Check that we can attach context to an [`io::Error`] via [`ErrorExt`].
+    #[tag(miri)]
+    #[test]
+    fn io_error_context() {
+        let err = io::Error::new(io::ErrorKind::InvalidData, "bad data");
+        let err = err.context("operation failed");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert_eq!(format!("{err}"), "operation failed");
     }
 }
