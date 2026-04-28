@@ -1,5 +1,7 @@
 Unreleased
 ----------
+- Added `blaze_symbolizer_opts::process_dispatch` providing process
+  dispatch functionality
 - Bumped minimum supported Rust version to `1.88`
 
 
