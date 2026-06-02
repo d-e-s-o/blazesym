@@ -2013,6 +2013,81 @@ fn symbolize_kernel_system_vmlinux() {
     }
 }
 
+/// Test that the system KASLR offset can still be derived even when the
+/// `/proc/kcore`-based query is unavailable, via the `_stext` fallback
+/// (kallsyms vs. vmlinux). Running this test as a non-root user makes the
+/// `/proc/kcore` read fail with EPERM, which exercises the fallback path
+/// in production code. As root the test still passes — `/proc/kcore`
+/// succeeds first — but only exercises the kcore path.
+#[test]
+#[ignore = "test requires a discoverable system vmlinux and /proc/kallsyms with unhidden addresses"]
+fn symbolize_kernel_kaslr_offset_stext_fallback() {
+    fn read_kallsyms_addr(name: &str) -> Option<Addr> {
+        let content = fs::read_to_string("/proc/kallsyms").unwrap();
+        content.lines().find_map(|line| {
+            let mut fields = line.split_ascii_whitespace();
+            let addr = fields.next()?;
+            let _ty = fields.next()?;
+            let sym = fields.next()?;
+            // Skip module-scoped entries.
+            if fields.next().is_some() {
+                return None
+            }
+            if sym != name {
+                return None
+            }
+            Addr::from_str_radix(addr, 16).ok()
+        })
+    }
+
+    let stext_kallsyms = read_kallsyms_addr("_stext").unwrap_or_else(|| {
+        panic!(
+            "`_stext` not present in /proc/kallsyms; addresses likely hidden \
+             (kptr_restrict). Re-run as root or relax kptr_restrict."
+        )
+    });
+    // If kallsyms addresses look zeroed (kptr_restrict=2), the derived
+    // offset would be meaningless. Bail rather than asserting nonsense.
+    assert_ne!(
+        stext_kallsyms, 0,
+        "/proc/kallsyms addresses are hidden; cannot validate KASLR fallback"
+    );
+
+    // Symbolize `_stext` through the kernel resolver with no caller-supplied
+    // KASLR offset. The resolver must derive it (via `/proc/kcore` if
+    // accessible, otherwise via the new `_stext` fallback) and resolve the
+    // address through the vmlinux backend.
+    let kernel = Kernel {
+        kallsyms: MaybeDefault::Default,
+        vmlinux: MaybeDefault::Default,
+        kaslr_offset: None,
+        ..Default::default()
+    };
+    let src = Source::Kernel(kernel);
+    let symbolizer = Symbolizer::new();
+    let symbolized = symbolizer
+        .symbolize_single(&src, Input::AbsAddr(stext_kallsyms))
+        .unwrap();
+    let sym = symbolized.into_sym().unwrap();
+    // `_stext` and `_text` are aliased at the same address on most
+    // configurations; accept either.
+    assert!(
+        sym.name == "_stext" || sym.name == "_text",
+        "expected _stext/_text, got {:?}",
+        sym.name
+    );
+    assert_eq!(sym.offset, 0);
+    // `KsymResolver` sets `module: None`; the ELF parser threads through
+    // the file path. A `Some(_)` here confirms the resolution went through
+    // the vmlinux backend (and therefore through the KASLR offset
+    // computation under test), not the kallsyms fallback in
+    // `KernelResolver::find_sym`.
+    assert!(
+        sym.module.is_some(),
+        "symbolization went via kallsyms fallback rather than vmlinux; KASLR offset path was not exercised: {sym:?}"
+    );
+}
+
 /// Test symbolization of a kernel address inside a BPF program.
 #[cfg(linux)]
 #[test]

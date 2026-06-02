@@ -7,10 +7,13 @@ use crate::elf;
 use crate::elf::types::ElfN_Nhdr;
 use crate::elf::BackendImpl;
 use crate::elf::ElfParser;
+use crate::inspect::FindAddrOpts;
+use crate::inspect::Inspect;
 use crate::log;
 use crate::util::align_up_u32;
 use crate::util::from_radix_16;
 use crate::util::split_bytes;
+use crate::Addr;
 use crate::ErrorExt as _;
 use crate::ErrorKind;
 use crate::IntoError as _;
@@ -95,7 +98,7 @@ fn read_kcore_kaslr_offset(parser: &ElfParser<File>) -> Result<Option<u64>> {
     Ok(None)
 }
 
-fn find_kcore_kaslr_offset() -> Result<Option<u64>> {
+fn find_kcore_kaslr_offset_io() -> Result<Option<u64>> {
     // Note that we cannot use the regular mmap based ELF parser
     // backend for this file, as it cannot be mmap'ed. We have to
     // fall back to using regular I/O instead.
@@ -108,16 +111,42 @@ fn find_kcore_kaslr_offset() -> Result<Option<u64>> {
     Ok(offset)
 }
 
-pub(crate) fn find_kalsr_offset() -> Result<Option<u64>> {
-    // TODO: Try other methods of determining KASLR offset, including
-    //       comparisons between `/proc/kallsyms` values to
-    //       `System.map-*` contents or parsing `dmesg` (no, really...)
-
-    if let offset @ Some(o) = find_kcore_kaslr_offset()? {
-        log::debug!("determined KASLR offset to be {o:#x} based on {PROC_KCORE} contents");
-        return Ok(offset)
+/// Read the KASLR offset from `/proc/kcore`'s `VMCOREINFO` note. Returns
+/// `None` if kcore is unavailable, lacks the note, or cannot be read; the
+/// `Err` path is swallowed (logged at debug) because the caller has another
+/// way to determine the offset and re-reading kcore won't change the answer.
+pub(crate) fn find_kcore_kaslr_offset() -> Result<Option<u64>> {
+    match find_kcore_kaslr_offset_io() {
+        Ok(offset) => Ok(offset),
+        Err(err) => {
+            log::debug!("failed to read KASLR offset from {PROC_KCORE}: {err}");
+            Ok(None)
+        }
     }
-    Ok(None)
+}
+
+/// Look up the address of an exact-named symbol through an [`Inspect`]
+/// resolver, returning the first match.
+fn inspect_sym_addr(resolver: &dyn Inspect, name: &str) -> Option<Addr> {
+    let syms = resolver.find_addr(name, &FindAddrOpts::default()).ok()?;
+    // `KsymResolver::find_addr` reports symbols from a lower bound onward
+    // rather than exact matches, so filter to the exact name.
+    syms.into_iter()
+        .find(|sym| sym.name.as_ref() == name)
+        .map(|sym| sym.addr)
+}
+
+/// Derive the KASLR offset by comparing the address of `_stext` as reported
+/// by `kallsyms` (already KASLR-relocated) against its address in the
+/// `vmlinux` image (link-time addresses). Returns [`None`] if `_stext` is
+/// missing from either source.
+pub(crate) fn derive_stext_kaslr_offset(
+    ksym_resolver: &dyn Inspect,
+    vmlinux_resolver: &dyn Inspect,
+) -> Option<u64> {
+    let kallsyms_stext = inspect_sym_addr(ksym_resolver, "_stext")?;
+    let vmlinux_stext = inspect_sym_addr(vmlinux_resolver, "_stext")?;
+    kallsyms_stext.checked_sub(vmlinux_stext)
 }
 
 

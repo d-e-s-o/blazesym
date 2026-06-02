@@ -14,6 +14,7 @@ use tempfile::NamedTempFile;
 
 use crate::elf::ElfResolver;
 use crate::error::ErrorExt as _;
+use crate::inspect::Inspect;
 use crate::log;
 use crate::symbolize::FindSymOpts;
 use crate::symbolize::Reason;
@@ -117,32 +118,32 @@ impl<'cache> KernelResolver<'cache> {
         debug_syms: bool,
         cache: &'cache KernelCache,
     ) -> Result<Self> {
-        let ksym_resolver = match kallsyms {
+        let (ksym_resolver, ksym_path) = match kallsyms {
             MaybeDefault::Some(kallsyms) => {
                 let ksym_resolver = cache.ksym_resolver(kallsyms)?;
-                Some(ksym_resolver)
+                (Some(ksym_resolver), Some(kallsyms.clone()))
             }
             MaybeDefault::Default => {
                 let kallsyms = Path::new(KALLSYMS);
                 let result = cache.ksym_resolver(kallsyms);
                 match result {
-                    Ok(resolver) => Some(resolver),
+                    Ok(resolver) => (Some(resolver), Some(kallsyms.to_path_buf())),
                     Err(err) => {
                         log::warn!(
                             "failed to load kallsyms from {}: {err}; ignoring...",
                             kallsyms.display()
                         );
-                        None
+                        (None, None)
                     }
                 }
             }
-            MaybeDefault::None => None,
+            MaybeDefault::None => (None, None),
         };
 
-        let vmlinux_resolver = match vmlinux {
+        let (vmlinux_resolver, vmlinux_path) = match vmlinux {
             MaybeDefault::Some(vmlinux) => {
                 let resolver = cache.elf_resolver(vmlinux, debug_syms)?;
-                Some(resolver)
+                (Some(resolver), Some(vmlinux.clone()))
             }
             MaybeDefault::Default => {
                 let release = uname_release()?;
@@ -161,21 +162,21 @@ impl<'cache> KernelResolver<'cache> {
                     match result {
                         Ok(resolver) => {
                             log::debug!("found suitable vmlinux file `{}`", vmlinux.display());
-                            Some(resolver)
+                            (Some(resolver), Some(vmlinux))
                         }
                         Err(err) => {
                             log::warn!(
                                 "failed to load vmlinux `{}`: {err}; ignoring...",
                                 vmlinux.display()
                             );
-                            None
+                            (None, None)
                         }
                     }
                 } else {
-                    None
+                    (None, None)
                 }
             }
-            MaybeDefault::None => None,
+            MaybeDefault::None => (None, None),
         };
 
         let ksym_resolver = ksym_resolver.map(Rc::clone);
@@ -193,7 +194,12 @@ impl<'cache> KernelResolver<'cache> {
         // unless we actually have a vmlinux resolver.
         let kaslr_offset = match kaslr_offset {
             Some(offset) => offset,
-            None if vmlinux_resolver.is_some() => cache.kaslr_offset()?,
+            None if vmlinux_resolver.is_some() => cache.kaslr_offset(
+                ksym_path.as_deref(),
+                vmlinux_path.as_deref(),
+                ksym_resolver.as_deref().map(|r| r as &dyn Inspect),
+                vmlinux_resolver.as_deref().map(|r| r as &dyn Inspect),
+            )?,
             None => 0,
         };
 
