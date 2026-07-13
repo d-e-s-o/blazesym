@@ -93,6 +93,36 @@ impl<K, V> InsertMap<K, V> {
         }
     }
 
+    /// Remove the value mapping to a key, if any.
+    ///
+    /// Removal requires exclusive access to the map, which statically
+    /// guarantees that no references to values handed out earlier are
+    /// still alive.
+    pub(crate) fn remove<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Eq + Hash + Borrow<Q>,
+        Q: Eq + Hash + ?Sized,
+    {
+        self.map.get_mut().remove(key).map(|boxed| *boxed)
+    }
+
+    /// Retain only the entries for which `f` returns `true`.
+    ///
+    /// Removal requires exclusive access to the map, which statically
+    /// guarantees that no references to values handed out earlier are
+    /// still alive.
+    pub(crate) fn retain<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&K, &V) -> bool,
+    {
+        self.map.get_mut().retain(|key, value| f(key, &**value))
+    }
+
+    /// Retrieve an iterator over all values.
+    pub(crate) fn values(&mut self) -> impl Iterator<Item = &V> {
+        self.map.get_mut().values().map(Box::deref)
+    }
+
     /// Retrieve the number of elements in the map.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
@@ -121,6 +151,28 @@ mod tests {
     use crate::Error;
     use crate::ErrorKind;
 
+
+    /// Check that value removal works as it should.
+    #[tag(miri)]
+    #[test]
+    fn removal() {
+        let mut map = InsertMap::<usize, &'static str>::new();
+        assert_eq!(map.remove(&42), None);
+
+        let _s = map.get_or_insert(42, || "you win the price");
+        let _s = map.get_or_insert(43, || "you win nothing");
+        assert_eq!(map.len(), 2);
+
+        assert_eq!(map.remove(&42), Some("you win the price"));
+        assert_eq!(map.get(&42), None);
+        assert_eq!(map.len(), 1);
+
+        let () = map.retain(|_key, value| *value != "you win nothing");
+        assert_eq!(map.len(), 0);
+
+        let _s = map.get_or_insert(44, || "44 wins");
+        assert_eq!(map.values().collect::<Vec<_>>(), vec![&"44 wins"]);
+    }
 
     /// Check that value insertion works as it should.
     #[tag(miri)]
