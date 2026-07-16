@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::cell::OnceCell;
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::fs::File;
 use std::marker::PhantomData;
 use std::path::Path;
@@ -47,6 +46,11 @@ impl From<&libc::stat> for FileMeta {
 struct Entry<T> {
     file: File,
     value: OnceCell<T>,
+    /// The number of paths referencing this entry.
+    ///
+    /// The entry is removed once the last referencing path is evicted
+    /// and the count reaches zero.
+    ref_count: Cell<usize>,
 }
 
 impl<T> Entry<T> {
@@ -54,6 +58,7 @@ impl<T> Entry<T> {
         Self {
             file,
             value: OnceCell::new(),
+            ref_count: Cell::new(0),
         }
     }
 }
@@ -178,14 +183,28 @@ impl<T> FileCache<T> {
             let entry = Entry::new(file);
             Ok(entry)
         })?;
-        if let Some((_pin_state, previous_meta)) = path_entry.current.get() {
-            if previous_meta != meta.1 {
-                let mut previous = path_entry.previous.borrow_mut();
-                if !previous.contains(&previous_meta) {
-                    let () = previous.push(previous_meta);
-                }
+
+        let mut previous = path_entry.previous.borrow_mut();
+        let current = path_entry.current.get();
+
+        // Only bump the reference count if this path does not already
+        // reference `meta` (as its current or as a stale generation).
+        let referenced =
+            matches!(current, Some((_, m)) if m == meta.1) || previous.contains(&meta.1);
+        if !referenced {
+            let () = entry.ref_count.set(entry.ref_count.get() + 1);
+        }
+
+        // Retire the previously current generation into `previous`,
+        // making sure `meta` itself does not end up recorded there too.
+        if let Some((_pin_state, previous_meta)) = current {
+            if previous_meta != meta.1 && !previous.contains(&previous_meta) {
+                let () = previous.push(previous_meta);
             }
         }
+        let () = previous.retain(|m| *m != meta.1);
+        drop(previous);
+
         let () = path_entry.current.set(Some(meta));
 
         Ok(entry)
@@ -243,23 +262,26 @@ impl<T> FileCache<T> {
         let Some(path_entry) = self.cache.remove(path) else {
             return false
         };
-        let metas = path_entry.metas();
-        if metas.is_empty() {
-            return false
-        }
 
-        // Collect the meta data of all entries still referenced by
-        // remaining paths, to make sure that we don't evict entries
-        // shared with any of them.
-        let referenced = self
-            .cache
-            .values()
-            .flat_map(PathEntry::metas)
-            .collect::<HashSet<_>>();
-
+        // Drop this path's reference on each of its generations,
+        // removing an entry once its last referencing path is gone.
+        // `metas()` is duplicate free, so each entry is decremented at
+        // most once for the evicted path.
         let mut evicted = false;
-        for meta in metas {
-            if !referenced.contains(&meta) {
+        for meta in path_entry.metas() {
+            let drop_entry = if let Some(entry) = self.entries.get(&meta) {
+                let ref_count = entry.ref_count.get();
+                // SANITY: Every generation recorded for a path holds a
+                //         reference on the corresponding entry, so the
+                //         count has to be positive at this point.
+                debug_assert!(ref_count >= 1, "reference count underflow on eviction");
+                let ref_count = ref_count.saturating_sub(1);
+                let () = entry.ref_count.set(ref_count);
+                ref_count == 0
+            } else {
+                false
+            };
+            if drop_entry {
                 evicted |= self.entries.remove(&meta).is_some();
             }
         }
@@ -435,6 +457,73 @@ mod tests {
         }
 
         // Evicting the last referencing path removes the entry.
+        assert!(cache.evict(&link));
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    /// Check that eviction reference-counts a shared entry correctly
+    /// even when one path cycles through generations back to a
+    /// previously seen one (`M1 -> M2 -> M1`), which must not corrupt
+    /// the reference held by another path.
+    #[cfg(linux)]
+    #[test]
+    fn evict_shared_entry_reload_cycle() {
+        let tmpfile = NamedTempFile::new().unwrap();
+        let path = tmpfile.path().to_path_buf();
+        let tmpdir = tempdir().unwrap();
+        let link = tmpdir.path().join("symlink");
+        let () = symlink(&path, &link).unwrap();
+
+        let mut cache = FileCache::<usize>::default();
+
+        // Establish generation `M1`, shared by `path` and `link`.
+        let m1_mtime = {
+            let (file, cell) = cache.entry(&path).unwrap();
+            let () = cell.set(42).unwrap();
+            file.metadata().unwrap().modified().unwrap()
+        };
+        {
+            let (_file, cell) = cache.entry(&link).unwrap();
+            assert_eq!(cell.get(), Some(&42));
+        }
+        assert_eq!(cache.entry_count(), 1);
+
+        // Reload `path` to a new generation `M2`...
+        let () = File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(m1_mtime + Duration::from_secs(10))
+            .unwrap();
+        {
+            let (_file, cell) = cache.entry(&path).unwrap();
+            assert_eq!(cell.get(), None);
+        }
+        assert_eq!(cache.entry_count(), 2);
+
+        // ...and then back to `M1`.
+        let () = File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(m1_mtime)
+            .unwrap();
+        {
+            let (_file, cell) = cache.entry(&path).unwrap();
+            // `M1` is still cached (shared with `link`).
+            assert_eq!(cell.get(), Some(&42));
+        }
+
+        // Evicting `path` drops only the now-unreferenced `M2`
+        // generation; `M1` survives courtesy of `link`.
+        assert!(cache.evict(&path));
+        assert_eq!(cache.entry_count(), 1);
+        {
+            let (_file, cell) = cache.entry(&link).unwrap();
+            assert_eq!(cell.get(), Some(&42));
+        }
+
+        // Evicting the last referencing path finally removes `M1`.
         assert!(cache.evict(&link));
         assert_eq!(cache.entry_count(), 0);
     }

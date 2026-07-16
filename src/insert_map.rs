@@ -118,11 +118,6 @@ impl<K, V> InsertMap<K, V> {
         self.map.get_mut().retain(|key, value| f(key, &**value))
     }
 
-    /// Retrieve an iterator over all values.
-    pub(crate) fn values(&mut self) -> impl Iterator<Item = &V> {
-        self.map.get_mut().values().map(Box::deref)
-    }
-
     /// Retrieve the number of elements in the map.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
@@ -171,7 +166,8 @@ mod tests {
         assert_eq!(map.len(), 0);
 
         let _s = map.get_or_insert(44, || "44 wins");
-        assert_eq!(map.values().collect::<Vec<_>>(), vec![&"44 wins"]);
+        assert_eq!(map.get(&44), Some(&"44 wins"));
+        assert_eq!(map.len(), 1);
     }
 
     /// Check that value insertion works as it should.
