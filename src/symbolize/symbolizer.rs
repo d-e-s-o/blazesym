@@ -1535,6 +1535,84 @@ mod tests {
         assert_eq!(size_of::<Symbolizer>(), 1144);
     }
 
+    /// Check that evicting an ELF file releases all data cached for it,
+    /// leaving the ELF cache empty.
+    #[test]
+    fn elf_cache_eviction() {
+        let path = Path::new(&env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .join("test-stable-addrs-no-dwarf.bin");
+
+        let mut symbolizer = Symbolizer::new();
+        let mut elf = Elf::new(&path);
+        // Symbolize with `debug_syms` disabled: the binary carries no
+        // DWARF anyway, so the result is identical, but we avoid the
+        // spurious `<path>.dwp` performed otherwise, which leaves
+        // behind a dangling path entry.
+        elf.debug_syms = false;
+        let src = Source::Elf(elf);
+
+        let sym = symbolizer
+            .symbolize_single(&src, Input::VirtOffset(0x2000200))
+            .unwrap()
+            .into_sym()
+            .unwrap();
+        assert_eq!(sym.name, "factorial");
+        assert_eq!(symbolizer.elf_cache.entry_count(), 1);
+        assert_eq!(symbolizer.elf_cache.path_count(), 1);
+
+        let () = symbolizer
+            .evict(&Evict::from(evict::Elf::new(&path)))
+            .unwrap();
+        assert_eq!(symbolizer.elf_cache.entry_count(), 0);
+        assert_eq!(symbolizer.elf_cache.path_count(), 0);
+    }
+
+    /// Check what [`Evict::Process`] reclaims after process
+    /// symbolization.
+    #[cfg(linux)]
+    #[test]
+    fn evict_process_leaves_elf_data() {
+        let addr = evict_process_leaves_elf_data as *const () as usize as Addr;
+
+        let mut process = Process::new(Pid::Slf);
+        // Consult symbolic paths from `/proc/<pid>/maps` rather than
+        // `/proc/<pid>/map_files/` entries.
+        process.map_files = false;
+        let src = Source::Process(process);
+
+        let mut symbolizer = Symbolizer::new();
+        let () = symbolizer
+            .cache(&Cache::from(cache::Process::new(Pid::Slf)))
+            .unwrap();
+        assert!(symbolizer
+            .process_vma_cache
+            .borrow()
+            .contains_key(&Pid::Slf));
+
+        // Symbolizing an address in the process caches the ELF data (and
+        // an open file descriptor) for the backing file (this
+        // executable).
+        let symbolized = symbolizer
+            .symbolize_single(&src, Input::AbsAddr(addr))
+            .unwrap();
+        assert!(symbolized.as_sym().is_some());
+        assert_eq!(symbolizer.elf_cache.entry_count(), 1);
+
+        let () = symbolizer
+            .evict(&Evict::from(evict::Process::new(Pid::Slf)))
+            .unwrap();
+
+        assert!(!symbolizer
+            .process_vma_cache
+            .borrow()
+            .contains_key(&Pid::Slf));
+        // TODO: We eventually may want to make sure to release
+        //       associated ELF data. Right now eviction with
+        //       `Evict::Elf` is necessary.
+        assert_eq!(symbolizer.elf_cache.entry_count(), 1);
+    }
+
     /// Check that we can correctly construct the source code path to a symbol.
     #[test]
     fn symbol_source_code_path() {

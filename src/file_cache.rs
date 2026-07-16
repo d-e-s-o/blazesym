@@ -271,6 +271,12 @@ impl<T> FileCache<T> {
     pub(crate) fn entry_count(&self) -> usize {
         self.entries.len()
     }
+
+    /// Retrieve the total number of paths tracked by the cache.
+    #[cfg(test)]
+    pub(crate) fn path_count(&self) -> usize {
+        self.cache.len()
+    }
 }
 
 impl<T> Default for FileCache<T> {
