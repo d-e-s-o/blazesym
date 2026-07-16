@@ -1105,15 +1105,16 @@ impl Symbolizer {
     /// generally cached for the lifetime of the `Symbolizer` instance.
     /// Long-lived instances symbolizing across a churning set of files
     /// or processes may want to release data (as well as the file
-    /// descriptor associated with each cached file) once it is known to
-    /// no longer be needed, which is what this method provides.
+    /// descriptor associated with each cached file) once no longer
+    /// needed, which is what this method provides.
     ///
-    /// Eviction requires exclusive access to the `Symbolizer`, which
-    /// statically ensures that no symbolization results borrowing
-    /// cached data are still alive. Evicted data will be re-created
-    /// transparently should a future symbolization request require it.
-    /// It is not an error if no cached data exists for the given
-    /// target.
+    /// This method operates on a best-effort basis, meaning that not
+    /// all data associated with a request may be released, if book
+    /// keeping/discovery is expensive.
+    ///
+    /// Evicted data will be re-created transparently should a future
+    /// symbolization request require it. It is not an error if no
+    /// cached data exists for the given target.
     #[cfg_attr(feature = "tracing", crate::log::instrument(skip_all, fields(evict = ?evict), err))]
     pub fn evict(&mut self, evict: &Evict) -> Result<()> {
         match evict {
