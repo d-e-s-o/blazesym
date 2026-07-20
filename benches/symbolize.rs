@@ -188,6 +188,61 @@ where
     });
 }
 
+/// A spread of kernel-text virtual addresses used to exercise the
+/// by-address symbol search over a warm resolver.
+fn kernel_text_addrs() -> Vec<Addr> {
+    // The kernel `.text` section starts around here; stepping in ~1 KiB
+    // increments keeps most probes landing inside a function while
+    // forcing a full descent of the by-address index per lookup.
+    let base = 0xffffffff81000000;
+    let mut addrs = (0..8192).map(|i| base + i * 0x400).collect::<Vec<Addr>>();
+
+    // Shuffle so that consecutive lookups do not follow near-identical
+    // probe paths (as sorted input would), mirroring the scattered
+    // addresses a profiler actually symbolizes. A tiny deterministic
+    // xorshift keeps the benchmark reproducible without a dependency.
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut rng = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for i in (1..addrs.len()).rev() {
+        let j = (rng() % (i as u64 + 1)) as usize;
+        addrs.swap(i, j);
+    }
+    addrs
+}
+
+/// Symbolize many addresses in an ELF file against an already-warm
+/// resolver, isolating the by-address symbol search cost.
+fn symbolize_elf_many_no_setup<M>(b: &mut Bencher<'_, M>)
+where
+    M: Measurement,
+{
+    let elf_vmlinux = Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("vmlinux-5.17.12-100.fc34.x86_64.elf");
+    let mut elf = Elf::new(elf_vmlinux);
+    elf.debug_syms = false;
+    let src = Source::Elf(elf);
+    let symbolizer = Symbolizer::builder().enable_code_info(false).build();
+    let addrs = kernel_text_addrs();
+
+    // Warm up the caches (symbol table parse + index construction).
+    let _result = symbolizer
+        .symbolize(&src, Input::VirtOffset(&addrs))
+        .unwrap();
+
+    let () = b.iter(|| {
+        let result = symbolizer
+            .symbolize(black_box(&src), black_box(Input::VirtOffset(&addrs)))
+            .unwrap();
+        let _result = black_box(result);
+    });
+}
+
 /// Benchmark the symbolization of BPF program kernel addresses.
 #[cfg(linux)]
 fn symbolize_kernel_bpf_uncached<M>(b: &mut Bencher<'_, M>)
@@ -242,6 +297,7 @@ where
     bench_fn!(group, symbolize_dwarf_zlib);
     bench_fn!(group, symbolize_gsym);
     bench_sub_fn!(group, symbolize_gsym_multi_no_setup);
+    bench_sub_fn!(group, symbolize_elf_many_no_setup);
     #[cfg(linux)]
     bench_sub_fn!(group, symbolize_kernel_bpf_uncached);
     #[cfg(linux)]
