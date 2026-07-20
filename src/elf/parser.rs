@@ -27,6 +27,7 @@ use crate::inspect::ForEachFn;
 use crate::inspect::SymInfo;
 use crate::mmap::Mmap;
 use crate::pathlike::PathLike;
+use crate::search_tree::SearchTree;
 use crate::symbolize::FindSymOpts;
 use crate::symbolize::Reason;
 use crate::symbolize::ResolvedSym;
@@ -154,20 +155,31 @@ enum SymTab {
     Dynsym,
 }
 
+// `by_addr_idx` and its `by_addr_tree` accelerator travel together but
+// are kept as separate arguments to avoid an otherwise pointless wrapper type.
+#[allow(clippy::too_many_arguments)]
 fn find_sym<'elf>(
     syms: &ElfN_Syms<'_>,
     module: Option<&'elf OsStr>,
     by_addr_idx: &[usize],
+    by_addr_tree: Option<&SearchTree>,
     strtab: &'elf [u8],
     table: SymTab,
     addr: Addr,
     type_: SymType,
 ) -> Result<Option<ResolvedSym<'elf>>> {
-    let idx = find_match_or_lower_bound_by_key(by_addr_idx, addr, |&idx| {
-        // SANITY: The index originates in our code and is known to be
-        //         in bounds.
-        syms.get(idx).unwrap().value()
-    });
+    // Use the cache-efficient search tree for the descent when it is
+    // available, falling back to a plain binary search over `by_addr_idx`
+    // otherwise. Both yield the same index into `by_addr_idx`.
+    //
+    // SANITY: All indexes originate in our code and are known to be in bounds.
+    let idx = match by_addr_tree {
+        Some(tree) => tree
+            .find_match_or_lower_bound_by_key(addr, |i| syms.get(by_addr_idx[i]).unwrap().value()),
+        None => {
+            find_match_or_lower_bound_by_key(by_addr_idx, addr, |&i| syms.get(i).unwrap().value())
+        }
+    };
 
     match idx {
         None => Ok(None),
@@ -386,6 +398,12 @@ struct SymbolTableCache<'elf> {
     /// An index over `syms` that is sorted by address and that only
     /// contains a relevant subset of symbols.
     by_addr_idx: OnceCell<Box<[usize]>>,
+    /// A cache-efficient search tree (S+ tree) over the `by_addr_idx`
+    /// symbol addresses, used to accelerate by-address lookups.
+    ///
+    /// `None` once initialized means the table is too small or too large
+    /// to benefit, in which case lookups fall back to `by_addr_idx`.
+    by_addr_tree: OnceCell<Option<SearchTree>>,
     /// The string table.
     strs: Cow<'elf, [u8]>,
     /// The cached name to symbol index table (in dictionary order).
@@ -397,6 +415,7 @@ impl<'elf> SymbolTableCache<'elf> {
         Self {
             syms,
             by_addr_idx: OnceCell::new(),
+            by_addr_tree: OnceCell::new(),
             strs,
             str2sym: OnceCell::new(),
         }
@@ -430,6 +449,31 @@ impl<'elf> SymbolTableCache<'elf> {
 
     fn ensure_by_addr_idx(&self) -> &[usize] {
         self.by_addr_idx.get_or_init(|| self.create_by_addr_idx())
+    }
+
+    /// Retrieve (building it on first access) the search tree over the
+    /// symbol addresses, or `None` if the table does not benefit from one.
+    fn ensure_by_addr_tree(&self) -> Option<&SearchTree> {
+        self.by_addr_tree
+            .get_or_init(|| {
+                let by_addr_idx = self.ensure_by_addr_idx();
+                // Dispatch on the symbol width once, up front, so that
+                // extracting each address while building the index is a
+                // plain field access rather than the per-element enum
+                // dispatch that `ElfN_Syms::get(..).value()` would incur.
+                //
+                // SANITY: All indexes originate in our code and are known
+                //         to be in bounds.
+                match &self.syms {
+                    ElfNSlice::B64(syms) => {
+                        SearchTree::build(by_addr_idx.len(), |i| syms[by_addr_idx[i]].st_value)
+                    }
+                    ElfNSlice::B32(syms) => SearchTree::build(by_addr_idx.len(), |i| {
+                        u64::from(syms[by_addr_idx[i]].st_value)
+                    }),
+                }
+            })
+            .as_ref()
     }
 
     fn create_str2sym<F>(&self, mut filter: F) -> Result<Box<[(SymName, usize)]>>
@@ -966,6 +1010,7 @@ where
     fn ensure_str2dynsym(&self) -> Result<&[(SymName, usize)]> {
         let symtab = self.ensure_symtab_cache()?;
         let symtab_by_addr_idx = symtab.ensure_by_addr_idx();
+        let symtab_by_addr_tree = symtab.ensure_by_addr_tree();
 
         let dynsym = self.ensure_dynsym_cache()?;
         let str2sym = dynsym.ensure_str2sym(|sym| {
@@ -979,6 +1024,7 @@ where
                 &symtab.syms,
                 module,
                 symtab_by_addr_idx,
+                symtab_by_addr_tree,
                 &symtab.strs,
                 SymTab::Symtab,
                 sym.value(),
@@ -1516,11 +1562,13 @@ where
 
         let symtab_cache = self.cache.ensure_symtab_cache()?;
         let symtab_by_addr_idx = symtab_cache.ensure_by_addr_idx();
+        let symtab_by_addr_tree = symtab_cache.ensure_by_addr_tree();
 
         if let Some(sym) = find_sym(
             &symtab_cache.syms,
             self.module.as_deref(),
             symtab_by_addr_idx,
+            symtab_by_addr_tree,
             &symtab_cache.strs,
             SymTab::Symtab,
             addr,
@@ -1531,10 +1579,12 @@ where
 
         let dynsym_cache = self.cache.ensure_dynsym_cache()?;
         let dynsym_by_addr_idx = dynsym_cache.ensure_by_addr_idx();
+        let dynsym_by_addr_tree = dynsym_cache.ensure_by_addr_tree();
         if let Some(sym) = find_sym(
             &dynsym_cache.syms,
             self.module.as_deref(),
             dynsym_by_addr_idx,
+            dynsym_by_addr_tree,
             &dynsym_cache.strs,
             SymTab::Dynsym,
             addr,
@@ -2083,6 +2133,7 @@ mod tests {
                 &syms,
                 None,
                 &by_addr_idx,
+                None,
                 strs,
                 table,
                 0x10d20,
@@ -2104,6 +2155,7 @@ mod tests {
                     syms,
                     None,
                     by_addr_idx,
+                    None,
                     strs,
                     table,
                     0x29d00,
@@ -2124,6 +2176,7 @@ mod tests {
                 syms,
                 None,
                 by_addr_idx,
+                None,
                 strs,
                 SymTab::Symtab,
                 0x29d90,
@@ -2143,6 +2196,7 @@ mod tests {
                 syms,
                 None,
                 by_addr_idx,
+                None,
                 strs,
                 SymTab::Dynsym,
                 0x29d90,
@@ -2155,8 +2209,17 @@ mod tests {
             // by default and reserved by ELF), is not being reported here
             // because it has an `st_shndx` value of `SHN_UNDEF`.
             for table in [SymTab::Symtab, SymTab::Dynsym] {
-                let result =
-                    find_sym(syms, None, by_addr_idx, strs, table, 0x1, SymType::Function).unwrap();
+                let result = find_sym(
+                    syms,
+                    None,
+                    by_addr_idx,
+                    None,
+                    strs,
+                    table,
+                    0x1,
+                    SymType::Function,
+                )
+                .unwrap();
                 assert_eq!(result, None);
             }
         }
@@ -2191,6 +2254,93 @@ mod tests {
 
         test(&syms, &by_addr_idx);
         test(&syms, &by_addr_idx[0..2]);
+    }
+
+    /// Check that by-address lookups yield identical results whether the
+    /// cache-efficient search tree or the plain binary search is used.
+    #[test]
+    fn find_sym_search_tree_matches_plain() {
+        // Offsets: first=1, second=7, third=14, fourth=21.
+        let strs = b"\x00first\x00second\x00third\x00fourth\x00";
+        let syms = ElfN_Syms::B64(Cow::Borrowed(&[
+            // The reserved, undefined entry present in every table.
+            Elf64_Sym {
+                st_name: 0,
+                st_info: 0,
+                st_other: 0,
+                st_shndx: 0,
+                st_value: 0,
+                st_size: 0,
+            },
+            Elf64_Sym {
+                st_name: 1,
+                st_info: 0x12,
+                st_other: 0x0,
+                st_shndx: 0xf,
+                st_value: 0x1000,
+                st_size: 0x100,
+            },
+            // Same address as the previous symbol, but a smaller size.
+            Elf64_Sym {
+                st_name: 7,
+                st_info: 0x12,
+                st_other: 0x0,
+                st_shndx: 0xf,
+                st_value: 0x1000,
+                st_size: 0x40,
+            },
+            // A sizeless symbol.
+            Elf64_Sym {
+                st_name: 14,
+                st_info: 0x12,
+                st_other: 0x0,
+                st_shndx: 0xf,
+                st_value: 0x1200,
+                st_size: 0x0,
+            },
+            Elf64_Sym {
+                st_name: 21,
+                st_info: 0x12,
+                st_other: 0x0,
+                st_shndx: 0xf,
+                st_value: 0x1400,
+                st_size: 0x200,
+            },
+        ]));
+
+        let cache = SymbolTableCache::new(syms, Cow::Borrowed(strs));
+        let by_addr_idx = cache.ensure_by_addr_idx();
+        let tree = cache.ensure_by_addr_tree();
+        // The tree must actually be built for this test to be meaningful.
+        assert!(tree.is_some());
+
+        for table in [SymTab::Symtab, SymTab::Dynsym] {
+            for addr in (0..0x1800).step_by(0x8) {
+                let plain = find_sym(
+                    &cache.syms,
+                    None,
+                    by_addr_idx,
+                    None,
+                    &cache.strs,
+                    table,
+                    addr,
+                    SymType::Undefined,
+                )
+                .unwrap();
+                let via_tree = find_sym(
+                    &cache.syms,
+                    None,
+                    by_addr_idx,
+                    tree,
+                    &cache.strs,
+                    table,
+                    addr,
+                    SymType::Undefined,
+                )
+                .unwrap();
+                assert_eq!(plain, via_tree, "addr={addr:#x}");
+            }
+        }
     }
 
     /// Check that we can properly read empty symbol tables, even if not
