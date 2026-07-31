@@ -422,6 +422,45 @@ unsafe impl Pod for u64 {}
 unsafe impl Pod for i128 {}
 unsafe impl Pod for u128 {}
 
+/// The high bit (bit 7) of every byte lane in a little-endian `u64`.
+const LANE_HI: u64 = 0x8080_8080_8080_8080;
+/// The low bit (bit 0) of every byte lane in a little-endian `u64`.
+const LANE_LO: u64 = 0x0101_0101_0101_0101;
+
+/// Return the index of the first byte equal to `needle`, if any.
+///
+/// Uses a SWAR scan that inspects eight bytes at a time via the classic
+/// "haszero" bit trick (`(x - 0x01..01) & !x & 0x80..80`) applied after
+/// XOR-ing in a broadcast of `needle`; the lowest set bit of that expression
+/// pinpoints the first match. This is meaningfully faster than a byte-at-a-time
+/// scan for the longer strings encountered when bulk-reading symbol names.
+fn find_byte(bytes: &[u8], needle: u8) -> Option<usize> {
+    let broadcast = u64::from(needle) * LANE_LO;
+
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    for (c, chunk) in chunks.iter().enumerate() {
+        let x = u64::from_le_bytes(*chunk) ^ broadcast;
+        let hits = x.wrapping_sub(LANE_LO) & !x & LANE_HI;
+        if hits != 0 {
+            return Some(c * 8 + (hits.trailing_zeros() / 8) as usize)
+        }
+    }
+
+    let base = chunks.len() * 8;
+    for (i, &byte) in remainder.iter().enumerate() {
+        if byte == needle {
+            return Some(base + i)
+        }
+    }
+    None
+}
+
+/// Return the index of the first NUL byte in `bytes`, if any.
+fn find_nul(bytes: &[u8]) -> Option<usize> {
+    find_byte(bytes, 0)
+}
+
+
 /// An trait providing utility functions for reading data from a byte buffer.
 pub trait ReadRaw<'data> {
     /// Ensure that `len` bytes are available for consumption.
@@ -629,7 +668,8 @@ impl<'data> ReadRaw<'data> for &'data [u8] {
 
     #[inline]
     fn read_cstr(&mut self) -> Option<&'data CStr> {
-        let idx = self.iter().position(|byte| *byte == b'\0')?;
+        let haystack = *self;
+        let idx = find_nul(haystack)?;
         CStr::from_bytes_with_nul(self.read_slice(idx + 1)?).ok()
     }
 }
@@ -972,6 +1012,32 @@ mod tests {
 
         let v = data.as_slice().read_i64_leb128().unwrap();
         assert_eq!(v, -165388);
+    }
+
+    /// The SWAR byte scan must locate the first match at any offset (including
+    /// across the 8-byte chunk boundary) and agree with a naive search.
+    #[tag(miri)]
+    #[test]
+    fn find_byte_scan() {
+        for len in 0..40 {
+            let mut buf = vec![b'x'; len];
+            let () = buf.push(b'\0');
+            let () = buf.extend([b'y'; 5]);
+            assert_eq!(find_nul(&buf), Some(len), "len {len}");
+            assert_eq!(find_byte(&buf, b'\0'), Some(len), "len {len}");
+
+            // An earlier match must win.
+            if len >= 3 {
+                buf[2] = b'\0';
+                assert_eq!(find_nul(&buf), Some(2), "len {len} early");
+            }
+        }
+
+        assert_eq!(find_nul(b""), None);
+        assert_eq!(find_byte(b"no match here at all", b'\0'), None);
+        // A match past the first 8-byte chunk.
+        let hay = b"needle after chunk boundary ->!";
+        assert_eq!(find_byte(hay, b'!'), hay.iter().position(|&b| b == b'!'));
     }
 
     /// Check that we can read a NUL terminated string from a slice.
