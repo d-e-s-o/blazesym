@@ -1,5 +1,6 @@
 Unreleased
 ----------
+- Added `cache_perf_map` attribute to `symbolize::cache::Process`
 - Fixed discovery of `zstd` compressed kernel modules (expecting
   extension `.zst` instead of `.zstd`)
 

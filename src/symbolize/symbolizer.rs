@@ -1087,11 +1087,26 @@ impl Symbolizer {
             Cache::Process(cache::Process {
                 pid,
                 cache_vmas,
+                cache_perf_map,
                 _non_exhaustive: (),
             }) => {
                 if *cache_vmas {
                     let parsed = maps::parse_filtered(*pid)?.collect::<Result<Box<_>>>()?;
                     let _prev = self.process_vma_cache.borrow_mut().insert(*pid, parsed);
+                }
+
+                if *cache_perf_map {
+                    let path = PerfMap::path(*pid);
+                    let _unpinned = self.perf_map_cache.unpin(&path);
+                    // Note that this retrieval also causes the perf map
+                    // to be parsed in its entirety, meaning no further
+                    // file access is necessary afterwards.
+                    let result = self.perf_map_resolver(&path);
+                    // Make sure to always pin the entry, even if bailing
+                    // due to a retrieval error; see the `Cache::Elf` case
+                    // above.
+                    let _pinned = self.perf_map_cache.pin(&path);
+                    let _perf_map = result?;
                 }
             }
         }
