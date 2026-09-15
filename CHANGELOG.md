@@ -4,6 +4,7 @@ Unreleased
   DWARF supplementary files
 - Adjusted build ID based split debug information lookup to consider the
   `.build-id` sub-directory of every configured debug directory
+- Added `cache_perf_map` attribute to `symbolize::cache::Process`
 - Fixed discovery of `zstd` compressed kernel modules (expecting
   extension `.zst` instead of `.zstd`)
 
