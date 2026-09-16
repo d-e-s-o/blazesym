@@ -5,6 +5,8 @@ Unreleased
   extension `.zst` instead of `.zstd`)
 - Fixed perf map lookup for processes using a different root directory
   or mount namespace
+- Fixed perf map lookup for processes running inside a descendant PID
+  namespace
 
 
 0.2.6

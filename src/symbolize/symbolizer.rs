@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Debug;
@@ -454,6 +455,7 @@ impl Builder {
             #[cfg(feature = "gsym")]
             gsym_cache: FileCache::builder().enable_auto_reload(auto_reload).build(),
             perf_map_cache: FileCache::builder().enable_auto_reload(auto_reload).build(),
+            perf_map_ns_tgids: RefCell::new(HashMap::new()),
             process_vma_cache: RefCell::new(HashMap::new()),
             process_cache: InsertMap::new(),
             #[cfg(feature = "dwarf")]
@@ -562,8 +564,12 @@ impl SymbolizeHandler<'_> {
     }
 
     fn handle_perf_map_addr(&mut self, addr: Addr) -> Result<()> {
-        let path = PerfMap::path(self.pid);
-        if let Some(perf_map) = self.symbolizer.perf_map_resolver(&path)? {
+        let perf_map = match self.symbolizer.perf_map_path(self.pid)? {
+            Some(path) => self.symbolizer.perf_map_resolver(&path)?,
+            None => None,
+        };
+
+        if let Some(perf_map) = perf_map {
             let symbolized = self
                 .symbolizer
                 .symbolize_with_resolver(addr, &Resolver::Cached(perf_map))?;
@@ -752,6 +758,13 @@ pub struct Symbolizer {
     #[cfg(feature = "gsym")]
     gsym_cache: FileCache<GsymResolver<'static>>,
     perf_map_cache: FileCache<PerfMap>,
+    /// Cache of the IDs that processes see themselves as, i.e., their
+    /// IDs inside the PID namespaces they run in.
+    ///
+    /// We need this information to find a process' perf map, but it can
+    /// only be retrieved for as long as the process is alive. Remember
+    /// it, so that we can still address cached data afterwards.
+    perf_map_ns_tgids: RefCell<HashMap<Pid, u32>>,
     /// Cache of VMA data on per-process basis.
     ///
     /// This member is only populated by explicit requests for caching
@@ -922,6 +935,29 @@ impl Symbolizer {
     fn create_perf_map_resolver(&self, path: &Path, file: &File) -> Result<PerfMap> {
         let perf_map = PerfMap::from_file(path, file)?;
         Ok(perf_map)
+    }
+
+    /// Retrieve the path to the perf map of the process with the given
+    /// `pid`, if it can still be determined.
+    ///
+    /// The path contains the ID that the process sees itself as, which
+    /// is only discoverable while it is alive. Remember it, both to keep
+    /// the lookup cheap and to stay able to address data cached for a
+    /// process that has since exited.
+    fn perf_map_path(&self, pid: Pid) -> Result<Option<PathBuf>> {
+        let mut ns_tgids = self.perf_map_ns_tgids.borrow_mut();
+        let ns_tgid = match ns_tgids.entry(pid) {
+            Entry::Occupied(occupied) => *occupied.get(),
+            Entry::Vacant(vacant) => match PerfMap::ns_tgid(pid) {
+                Ok(ns_tgid) => *vacant.insert(ns_tgid),
+                // With the process gone we cannot determine the path.
+                // Neither could we open the file it refers to, so report
+                // the absence in the same way that we would then.
+                Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+                Err(err) => return Err(err),
+            },
+        };
+        Ok(Some(PerfMap::path(pid, ns_tgid)))
     }
 
     fn perf_map_resolver(&self, path: &Path) -> Result<Option<&PerfMap>> {
@@ -1096,17 +1132,18 @@ impl Symbolizer {
                 }
 
                 if *cache_perf_map {
-                    let path = PerfMap::path(*pid);
-                    let _unpinned = self.perf_map_cache.unpin(&path);
-                    // Note that this retrieval also causes the perf map
-                    // to be parsed in its entirety, meaning no further
-                    // file access is necessary afterwards.
-                    let result = self.perf_map_resolver(&path);
-                    // Make sure to always pin the entry, even if bailing
-                    // due to a retrieval error; see the `Cache::Elf` case
-                    // above.
-                    let _pinned = self.perf_map_cache.pin(&path);
-                    let _perf_map = result?;
+                    if let Some(path) = self.perf_map_path(*pid)? {
+                        let _unpinned = self.perf_map_cache.unpin(&path);
+                        // Note that this retrieval also causes the perf map
+                        // to be parsed in its entirety, meaning no further
+                        // file access is necessary afterwards.
+                        let result = self.perf_map_resolver(&path);
+                        // Make sure to always pin the entry, even if bailing
+                        // due to a retrieval error; see the `Cache::Elf` case
+                        // above.
+                        let _pinned = self.perf_map_cache.pin(&path);
+                        let _perf_map = result?;
+                    }
                 }
             }
         }
@@ -1151,7 +1188,12 @@ impl Symbolizer {
                 _non_exhaustive: (),
             }) => {
                 let _prev = self.process_vma_cache.get_mut().remove(pid);
-                let _evicted = self.perf_map_cache.evict(&PerfMap::path(*pid));
+                // The perf map path can only be derived from data that we
+                // remembered while the process was still alive. If we have
+                // none, we never looked at a perf map for it either.
+                if let Some(ns_tgid) = self.perf_map_ns_tgids.get_mut().remove(pid) {
+                    let _evicted = self.perf_map_cache.evict(&PerfMap::path(*pid, ns_tgid));
+                }
             }
         }
         Ok(())
@@ -1547,7 +1589,7 @@ mod tests {
     fn symbolizer_size() {
         // TODO: This size is rather large and we should look into
         //       minimizing it.
-        assert_eq!(size_of::<Symbolizer>(), 1144);
+        assert_eq!(size_of::<Symbolizer>(), 1200);
     }
 
     /// Check that we can correctly construct the source code path to a symbol.
