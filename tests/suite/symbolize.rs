@@ -2008,6 +2008,115 @@ fn symbolize_process_perf_map_in_mount_namespace() {
         });
 }
 
+/// Check that we find a perf map named after the ID that the target
+/// process sees itself as, as opposed to the one we address it by.
+#[cfg(linux)]
+#[test]
+fn symbolize_process_perf_map_in_pid_namespace() {
+    // The ID that the target sees itself as: being the first process in
+    // a new PID namespace makes it PID 1 in there.
+    const NS_TGID: u32 = 1;
+
+    let test_so = Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("libtest-so.so");
+    let wait = Path::new(&env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("test-wait.bin");
+
+    let tmp_dir = tempdir().unwrap();
+    let tmp_path = tmp_dir.path().to_path_buf();
+
+    let () = RemoteProcess::default()
+        .arg(&test_so)
+        .pre_exec(move || {
+            let () = unshare_with_private_tmp(libc::CLONE_NEWPID, &tmp_path)?;
+
+            // Unsharing a PID namespace only moves *children* into it, so
+            // fork to get the process that we are after in there.
+            let pid = unsafe { libc::fork() };
+            match pid {
+                -1 => return Err(io::Error::last_os_error()),
+                0 => {
+                    // The child is PID 1 in the new namespace. Keep it
+                    // from writing its own PID to stdout, where it would
+                    // race with what we report below.
+                    let dev_null = CStr::from_bytes_with_nul(b"/dev/null\0").unwrap();
+                    let fd = unsafe { libc::open(dev_null.as_ptr(), libc::O_WRONLY) };
+                    if fd < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    if unsafe { libc::dup2(fd, libc::STDOUT_FILENO) } < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    // Carry on and let the binary be executed.
+                    return Ok(())
+                }
+                _ => (),
+            }
+
+            // `Command` hands the spawned child to the caller only once
+            // the pipe used for reporting exec failures is closed, which
+            // normally happens implicitly on exec. We inherited a copy of
+            // it but are not going to exec, so close it (along with
+            // everything else we do not need) to unblock the spawn.
+            let rc = unsafe { libc::syscall(libc::SYS_close_range, 3, libc::c_uint::MAX, 0) };
+            if rc != 0 {
+                return Err(io::Error::last_os_error());
+            }
+
+            // Report the child's PID as seen by *us*, which is what the
+            // library will be addressing it by, along with a dummy
+            // address, as that is what the test harness expects.
+            let mut report = [0u8; size_of::<u32>() + size_of::<Addr>()];
+            let () = report[..size_of::<u32>()].copy_from_slice(&(pid as u32).to_ne_bytes());
+            let rc = unsafe {
+                libc::write(
+                    libc::STDOUT_FILENO,
+                    report.as_ptr().cast(),
+                    size_of_val(&report),
+                )
+            };
+            if rc != isize::try_from(size_of_val(&report)).unwrap() {
+                return Err(io::Error::last_os_error());
+            }
+
+            // Stick around until the child is done, so that the harness
+            // sees the exit status it expects.
+            let mut status = 0;
+            if unsafe { libc::waitpid(pid, &mut status, 0) } < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let code = if libc::WIFEXITED(status) {
+                libc::WEXITSTATUS(status)
+            } else {
+                1
+            };
+            unsafe { libc::_exit(code) }
+        })
+        .exec(&wait, |pid, _addr| {
+            let addr = unnamed_vma_addr(pid);
+            // The target created its perf map using the ID it sees itself
+            // as, which is not the one we know it by.
+            assert_ne!(pid, Pid::from(NS_TGID));
+            let () = fs::write(
+                tmp_dir.path().join(format!("perf-{NS_TGID}.map")),
+                format!("{addr:x} 1 jitted_function\n"),
+            )
+            .unwrap();
+
+            let src = Source::Process(Process::new(pid));
+            let symbolizer = Symbolizer::new();
+            let result = symbolizer
+                .symbolize_single(&src, Input::AbsAddr(addr))
+                .unwrap()
+                .into_sym()
+                .unwrap();
+            assert_eq!(result.name, "jitted_function");
+            assert_eq!(result.addr, addr);
+        });
+}
+
 fn symbolize_permissionless_impl(pid: Pid, addr: Addr, _test_lib: &Path) {
     let process = Process::new(pid);
     assert!(process.map_files);
