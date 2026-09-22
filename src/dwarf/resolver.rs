@@ -769,6 +769,7 @@ mod tests {
 
     /// Check that we can discover debug altlink as expected.
     #[test]
+    #[cfg_attr(not(has_all_test_files), ignore)]
     fn debug_altlink_discovery() {
         let debug_dirs = Vec::new();
 
@@ -824,6 +825,7 @@ mod tests {
 
     /// Check that we resolve debug altlinks correctly.
     #[test]
+    #[cfg_attr(not(has_all_test_files), ignore)]
     fn debug_altlink_resolution() {
         let path = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

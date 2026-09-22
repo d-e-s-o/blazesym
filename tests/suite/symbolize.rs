@@ -866,6 +866,7 @@ fn symbolize_dwarf_self_referential_debug_link() {
 /// symbolizing.
 #[tag(other_os)]
 #[test]
+#[cfg_attr(not(has_all_test_files), ignore)]
 fn symbolize_dwarf_debug_altlink() {
     fn test(file: &str, name: &str) {
         let path = Path::new(&env!("CARGO_MANIFEST_DIR"))

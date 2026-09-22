@@ -128,6 +128,7 @@ mod tests {
 
     /// Check that we can successfully read an ELF file's debug altlink.
     #[test]
+    #[cfg_attr(not(has_all_test_files), ignore)]
     fn debug_link_reading() {
         let elf = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")

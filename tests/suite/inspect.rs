@@ -386,6 +386,7 @@ fn inspect_elf_all_symbols_without_duplicates() {
 /// Check that we correctly incorporate debug altlink files in the
 /// inspection process.
 #[test]
+#[cfg_attr(not(has_all_test_files), ignore)]
 fn inspect_debug_altlink_honoring() {
     fn symbol_names(file: &str) -> Vec<String> {
         let path = Path::new(&env!("CARGO_MANIFEST_DIR"))
