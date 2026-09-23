@@ -114,8 +114,9 @@ fn try_canonicalize(path: &Path) -> io::Result<Cow<'_, Path>> {
 /// Find a debug file in a list of directories.
 ///
 /// `linker` is the path to the file containing the debug link. This function
-/// searches a couple of "well-known" locations and then others constructed
-/// based on the canonicalized path of `linker`.
+/// searches the location based on `linker`'s build ID first, followed by a
+/// couple of "well-known" ones and then others constructed based on the
+/// canonicalized path of `linker`.
 ///
 /// # Notes
 /// This function ignores any errors encountered.
@@ -201,7 +202,7 @@ fn try_deref_debug_link(
 /// # Notes
 /// This function ignores any errors encountered.
 fn find_altdebug_file(
-    path: &Path,
+    linkee: &Path,
     linker: Option<&Path>,
     debug_dirs: &[PathBuf],
     build_id: &[u8],
@@ -210,7 +211,7 @@ fn find_altdebug_file(
     let it = DebugFileIter::new(
         debug_dirs,
         canonical_linker.as_deref(),
-        path.as_os_str(),
+        linkee.as_os_str(),
         Some(Cow::Borrowed(build_id)),
     );
     for path in it {
@@ -221,7 +222,7 @@ fn find_altdebug_file(
     }
     warn!(
         "debug altlink references destination `{}` which was not found in any known location",
-        Path::new(path).display(),
+        linkee.display(),
     );
     None
 }
