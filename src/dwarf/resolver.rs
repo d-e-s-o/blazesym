@@ -188,11 +188,15 @@ fn try_deref_debug_link(
 }
 
 
-/// Find a debug file in a list of directories.
+/// Find a debug altlink destination file in a list of directories.
 ///
-/// `linker` is the path to the file containing the debug altlink. This function
-/// searches a couple of "well-known" locations and then others constructed
-/// based on the canonicalized path of `linker`.
+/// `linker` is the path to the file containing the debug altlink and
+/// `build_id` the build ID of the destination, as recorded in the
+/// `.gnu_debugaltlink` section. Contrary to [`find_debug_file`], which has to
+/// infer the build ID from `linker` itself, the destination's build ID is known
+/// up-front here. This function searches the `build_id` based location first,
+/// followed by a couple of "well-known" ones and then others constructed based
+/// on the canonicalized path of `linker`.
 ///
 /// # Notes
 /// This function ignores any errors encountered.
@@ -200,13 +204,14 @@ fn find_altdebug_file(
     path: &Path,
     linker: Option<&Path>,
     debug_dirs: &[PathBuf],
+    build_id: &[u8],
 ) -> Option<PathBuf> {
     let canonical_linker = linker.and_then(|linker| try_canonicalize(linker).ok());
     let it = DebugFileIter::new(
         debug_dirs,
         canonical_linker.as_deref(),
         path.as_os_str(),
-        None,
+        Some(Cow::Borrowed(build_id)),
     );
     for path in it {
         if path.exists() {
@@ -232,7 +237,7 @@ fn try_deref_debug_altlink(
         //       actual path is not necessarily correct. Consider if the
         //       `ElfParser` references a map_files file.
         let linker = parser.module().map(OsStr::as_ref);
-        match find_altdebug_file(path, linker, debug_dirs) {
+        match find_altdebug_file(path, linker, debug_dirs, &build_id) {
             Some(path) => {
                 let tmp_parser;
                 let dst_parser = if let Some(elf_cache) = elf_cache {
@@ -682,9 +687,12 @@ mod tests {
 
     use std::env::current_exe;
     use std::ffi::OsStr;
+    use std::fs::copy;
+    use std::fs::create_dir_all;
     use std::ops::ControlFlow;
     use std::path::PathBuf;
 
+    use tempfile::tempdir;
     use tempfile::NamedTempFile;
 
     use test_log::test;
@@ -797,12 +805,73 @@ mod tests {
         let path = Path::new(&env!("CARGO_MANIFEST_DIR"))
             .join("data")
             .join("nonexistent_file");
-        let debug_altlink_file = find_altdebug_file(&path, linker, &debug_dirs);
+        let debug_altlink_file = find_altdebug_file(&path, linker, &debug_dirs, &[]);
         assert!(debug_altlink_file.is_none());
 
         let linker = parser.module().map(OsStr::as_ref);
-        let debug_altlink_file = find_altdebug_file(linker.unwrap(), linker, &debug_dirs);
+        let debug_altlink_file = find_altdebug_file(linker.unwrap(), linker, &debug_dirs, &[]);
         assert!(debug_altlink_file.is_none());
+    }
+
+    /// Check that we discover a debug altlink destination based on the
+    /// build ID recorded in the `.gnu_debugaltlink` section, even if the
+    /// path recorded alongside it no longer resolves.
+    #[test]
+    fn debug_altlink_build_id_discovery() {
+        let data_dir = Path::new(&env!("CARGO_MANIFEST_DIR")).join("data");
+        let dwz = data_dir.join("test-stable-addrs.dwz");
+
+        // Install the "multifile" in a debug directory keyed by its
+        // build ID, i.e., as `.build-id/<first-byte>/<rest>.debug`. The
+        // layout is spelled out literally and not assembled from
+        // `BUILD_ID_DEBUG_SUBDIR` & `BUILD_ID_DEBUG_EXTENSION`, because
+        // it is a convention shared with `gdb` and distributions and not
+        // merely an implementation detail of ours.
+        let build_id = read_elf_build_id(&dwz).unwrap().unwrap();
+        // SANITY: `dwz` always records a SHA-1 build ID, so it cannot be
+        //         empty.
+        let (first, rest) = build_id.split_first().unwrap();
+        let debug_dir = tempdir().unwrap();
+        let linkee = debug_dir
+            .path()
+            .join(".build-id")
+            .join(format!("{first:02x}"))
+            .join(format!(
+                "{}.debug",
+                rest.iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            ));
+        let () = create_dir_all(linkee.parent().unwrap()).unwrap();
+        let _count = copy(&dwz, &linkee).unwrap();
+        let debug_dirs = [debug_dir.path().to_path_buf()];
+
+        // Relocate the file containing the altlink, so that the
+        // destination is no longer present next to it and the recorded
+        // path is a dead end.
+        let dir = tempdir().unwrap();
+        let linker = dir.path().join("test-stable-addrs-dwarf-only-altlink.dbg");
+        let _count = copy(
+            data_dir.join("test-stable-addrs-dwarf-only-altlink.dbg"),
+            &linker,
+        )
+        .unwrap();
+
+        let parser = ElfParser::open(&linker).unwrap();
+        let altlinkee = try_deref_debug_altlink(&parser, &debug_dirs, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(altlinkee.module(), Some(linkee.as_os_str()));
+
+        // An unrelated file at the recorded path does not get in the
+        // way, because build ID based candidates are searched first.
+        let decoy = dir.path().join("test-stable-addrs.dwz");
+        let _count = copy(data_dir.join("libtest-so.so"), &decoy).unwrap();
+
+        let altlinkee = try_deref_debug_altlink(&parser, &debug_dirs, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(altlinkee.module(), Some(linkee.as_os_str()));
     }
 
     /// Check that we report an error instead of panicking when a debug
